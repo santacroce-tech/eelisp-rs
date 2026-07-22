@@ -194,12 +194,47 @@ fn eval_if_cond_let_do() {
     assert_eq!(s(&i, "(if true 1 2)"), "1");
     assert_eq!(s(&i, "(if false 1 2)"), "2");
     assert_eq!(s(&i, "(if nil 1 2)"), "2");
+    // EELisp flat cond: (cond test1 expr1 test2 expr2 … [true default])
     assert_eq!(
-        s(&i, "(cond ((= 1 2) \"nope\") ((= 1 1) \"yes\") (else \"default\"))"),
+        s(&i, "(cond (= 1 2) \"nope\" (= 1 1) \"yes\" true \"default\")"),
         "yes"
     );
-    assert_eq!(s(&i, "(let ((x 1) (y 2)) (+ x y))"), "3");
+    assert_eq!(s(&i, "(cond false 1 false 2 true 99)"), "99");
+    // both let binding forms
+    assert_eq!(s(&i, "(let ((x 1) (y 2)) (+ x y))"), "3"); // nested (Scheme)
+    assert_eq!(s(&i, "(let (x 1 y 2) (+ x y))"), "3"); // flat (EELisp)
     assert_eq!(s(&i, "(do 1 2 3)"), "3");
+}
+
+#[test]
+fn eval_loop_recur_and_dialect_builtins() {
+    let i = Interpreter::new();
+    // Clojure-style loop/recur (sum 1..=5)
+    assert_eq!(
+        s(&i, "(loop (n 5 acc 0) (if (= n 0) acc (recur (- n 1) (+ acc n))))"),
+        "15"
+    );
+    // recur nested inside flat cond
+    assert_eq!(
+        s(&i, "(loop (n 4 f 1) (cond (= n 0) f true (recur (- n 1) (* f n))))"),
+        "24"
+    );
+    // dialect builtins that zzeelisp relies on
+    assert_eq!(s(&i, "(str-replace \"a-b-c\" \"-\" \"+\")"), "a+b+c");
+    assert_eq!(s(&i, "(substr \"hello\" 1 3)"), "el");
+    assert_eq!(s(&i, "(str-starts-with \"hello\" \"he\")"), "true");
+    assert_eq!(s(&i, "(str-join (list \"a\" \"b\" \"c\") \",\")"), "a,b,c"); // list-first
+    assert_eq!(s(&i, "(str-join \",\" (list \"a\" \"b\"))"), "a,b"); // sep-first
+    assert_eq!(s(&i, "(->number \"42\")"), "42");
+    assert_eq!(s(&i, "(->string 42)"), "42");
+    assert_eq!(s(&i, "(sort-by (fn (x) (- x)) (list 1 3 2))"), "(3 2 1)");
+    assert_eq!(s(&i, "(zip (list 1 2) (list 3 4 5))"), "((1 3) (2 4))");
+    // string keys on dicts (json-parsed dicts use them)
+    assert_eq!(s(&i, "(dict-get (json-parse \"{\\\"a\\\":7}\") \"a\")"), "7");
+    // dates
+    assert_eq!(s(&i, "(date-add \"2026-07-23\" -47 :days)"), "2026-06-06");
+    assert_eq!(s(&i, "(date-diff \"2026-08-02\" \"2026-07-23\")"), "10");
+    assert_eq!(s(&i, "(date-format \"2026-07-23\" \"EEEE\")"), "Thursday");
 }
 
 #[test]

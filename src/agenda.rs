@@ -361,7 +361,8 @@ fn query_items_display(
 ) -> Result<Value, LispError> {
     let q = Query { table: "_items".into(), where_, params, order, ascending, limit: None, select: None };
     let rows = db.query_rows(&q)?;
-    let columns = vec!["text".to_string(), "when".into(), "priority".into(), "categories".into()];
+    let columns =
+        vec!["text".to_string(), "when".into(), "priority".into(), "categories".into(), "recurrence".into()];
     let records = rows
         .iter()
         .map(|r| {
@@ -371,6 +372,7 @@ fn query_items_display(
             data.insert("when".into(), Value::Str(sval(&item.properties, "when")));
             data.insert("priority".into(), Value::Str(sval(&item.properties, "priority")));
             data.insert("categories".into(), Value::Str(item.categories.join(", ")));
+            data.insert("recurrence".into(), Value::Str(sval(&item.properties, "recurrence")));
             Record { table: "_items".into(), id: item.id, data, deleted: false }
         })
         .collect();

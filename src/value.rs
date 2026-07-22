@@ -279,6 +279,9 @@ pub enum LispError {
     Parse(String),
     Database(String),
     Runtime(String),
+    /// Control signal for `recur` → carries the next iteration's values up to the enclosing `loop`.
+    /// Not a user-visible error; only surfaces as one if `recur` is used outside a `loop`.
+    Recur(Vec<Value>),
 }
 
 impl fmt::Display for LispError {
@@ -299,6 +302,7 @@ impl fmt::Display for LispError {
             LispError::Parse(s) => write!(f, "Parse error: {}", s),
             LispError::Database(s) => write!(f, "Database error: {}", s),
             LispError::Runtime(s) => write!(f, "Error: {}", s),
+            LispError::Recur(_) => write!(f, "recur used outside of a loop"),
         }
     }
 }

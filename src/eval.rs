@@ -69,11 +69,25 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                         "let" => {
                             let scope = env::child(&env);
                             if let Value::List(binds) = &items[1] {
-                                for b in binds.iter() {
-                                    if let Value::List(pair) = b {
-                                        if let Value::Symbol(name) = &pair[0] {
-                                            let v = eval(pair[1].clone(), scope.clone())?;
+                                // Two accepted binding forms, both sequential (let*-style):
+                                //   flat (EELisp):  (let (a 1 b 2) …)
+                                //   nested (Scheme): (let ((a 1) (b 2)) …)
+                                if matches!(binds.first(), Some(Value::Symbol(_))) {
+                                    let mut i = 0;
+                                    while i + 1 < binds.len() {
+                                        if let Value::Symbol(name) = &binds[i] {
+                                            let v = eval(binds[i + 1].clone(), scope.clone())?;
                                             env::define(&scope, name, v);
+                                        }
+                                        i += 2;
+                                    }
+                                } else {
+                                    for b in binds.iter() {
+                                        if let Value::List(pair) = b {
+                                            if let Value::Symbol(name) = &pair[0] {
+                                                let v = eval(pair[1].clone(), scope.clone())?;
+                                                env::define(&scope, name, v);
+                                            }
                                         }
                                     }
                                 }
@@ -89,38 +103,64 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             continue;
                         }
                         "cond" => {
+                            // EELisp flat form: (cond test1 expr1 test2 expr2 … [true default])
                             let mut chosen: Option<Value> = None;
-                            for clause in &items[1..] {
-                                if let Value::List(cl) = clause {
-                                    if cl.is_empty() {
-                                        continue;
-                                    }
-                                    let is_else =
-                                        matches!(&cl[0], Value::Symbol(s) if s == "else");
-                                    let test = if is_else {
-                                        Value::Bool(true)
-                                    } else {
-                                        eval(cl[0].clone(), env.clone())?
-                                    };
-                                    if is_truthy(&test) {
-                                        if cl.len() == 1 {
-                                            return Ok(test);
-                                        }
-                                        for e in &cl[1..cl.len() - 1] {
-                                            eval(e.clone(), env.clone())?;
-                                        }
-                                        chosen = Some(cl[cl.len() - 1].clone());
-                                        break;
-                                    }
+                            let mut i = 1;
+                            while i + 1 < items.len() {
+                                let is_catch_all = matches!(&items[i], Value::Symbol(s) if s == "true" || s == "else" || s == "otherwise");
+                                let test = if is_catch_all {
+                                    Value::Bool(true)
+                                } else {
+                                    eval(items[i].clone(), env.clone())?
+                                };
+                                if is_truthy(&test) {
+                                    chosen = Some(items[i + 1].clone());
+                                    break;
                                 }
+                                i += 2;
                             }
                             match chosen {
                                 Some(e) => {
-                                    expr = e;
+                                    expr = e; // tail position
                                     continue;
                                 }
                                 None => return Ok(Value::Null),
                             }
+                        }
+                        "loop" => {
+                            // Clojure-style: (loop (v1 i1 v2 i2 …) body). `recur` re-enters with new values.
+                            let scope = env::child(&env);
+                            let mut names: Vec<String> = Vec::new();
+                            if let Value::List(binds) = &items[1] {
+                                let mut j = 0;
+                                while j + 1 < binds.len() {
+                                    if let Value::Symbol(name) = &binds[j] {
+                                        let v = eval(binds[j + 1].clone(), scope.clone())?;
+                                        env::define(&scope, name, v);
+                                        names.push(name.clone());
+                                    }
+                                    j += 2;
+                                }
+                            }
+                            let body = items.get(2).cloned().unwrap_or(Value::Null);
+                            loop {
+                                match eval(body.clone(), scope.clone()) {
+                                    Ok(v) => return Ok(v),
+                                    Err(LispError::Recur(vals)) => {
+                                        for (n, v) in names.iter().zip(vals.into_iter()) {
+                                            env::define(&scope, n, v);
+                                        }
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                        }
+                        "recur" => {
+                            let mut vals = Vec::with_capacity(items.len().saturating_sub(1));
+                            for a in &items[1..] {
+                                vals.push(eval(a.clone(), env.clone())?);
+                            }
+                            return Err(LispError::Recur(vals));
                         }
                         "and" => {
                             if items.len() == 1 {

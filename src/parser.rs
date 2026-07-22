@@ -82,11 +82,16 @@ impl Parser {
             match self.next() {
                 None => return Err(LispError::Parse("unclosed dict".into())),
                 Some(Token::RBrace) => break,
+                // keys may be keywords ({:a 1}) or strings ({"a" 1}, e.g. JSON-shaped literals)
                 Some(Token::Kw(k)) => {
                     let v = self.parse_expr()?;
                     d.insert(k, v);
                 }
-                Some(_) => return Err(LispError::Parse("dict keys must be keywords".into())),
+                Some(Token::Str(s)) => {
+                    let v = self.parse_expr()?;
+                    d.insert(s, v);
+                }
+                Some(_) => return Err(LispError::Parse("dict keys must be keywords or strings".into())),
             }
         }
         Ok(Value::Dict(Rc::new(d)))
@@ -98,6 +103,13 @@ pub fn parse(src: &str) -> Result<Vec<Value>, LispError> {
     let mut p = Parser { toks, pos: 0 };
     let mut out = Vec::new();
     while p.pos < p.toks.len() {
+        // Lenient top level: skip a stray closing delimiter instead of failing the whole parse.
+        // Some library files (e.g. parts of the zzeelisp bundle) ship a hair unbalanced; recovering
+        // here lets the rest of the file's definitions load rather than dropping the entire module.
+        if matches!(p.peek(), Some(Token::RParen) | Some(Token::RBracket) | Some(Token::RBrace)) {
+            p.pos += 1;
+            continue;
+        }
         out.push(p.parse_expr()?);
     }
     Ok(out)

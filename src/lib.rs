@@ -15,6 +15,7 @@ pub mod agenda;
 pub mod agenda_builtins;
 pub mod builtins;
 pub mod database;
+pub mod dates;
 pub mod db_builtins;
 pub mod editor;
 pub mod env;

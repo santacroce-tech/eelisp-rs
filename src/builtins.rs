@@ -54,6 +54,10 @@ pub fn register(env: &Env) {
     b!("str-contains", str_contains);
     b!("str-matches", str_matches);
     b!("str-trim", str_trim);
+    b!("str-replace", str_replace);
+    b!("substr", substr);
+    b!("str-starts-with", str_starts_with);
+    b!("str-ends-with", str_ends_with);
     // lists
     b!("list", listf);
     b!("cons", cons);
@@ -70,6 +74,8 @@ pub fn register(env: &Env) {
     b!("filter", filterf);
     b!("reduce", reducef);
     b!("empty?", emptyf);
+    b!("zip", zipf);
+    b!("sort-by", sort_by);
     // dicts
     b!("dict", dictf);
     b!("dict-get", dict_get);
@@ -97,6 +103,162 @@ pub fn register(env: &Env) {
     b!("json-stringify", json_stringify);
     b!("http-get", http_get);
     b!("http-post", http_post);
+    // conversions
+    b!("->string", to_string_f);
+    b!("->number", to_number_f);
+    b!("->bool", to_bool_f);
+    b!("parse", parse_f);
+    // dates
+    b!("now", now_f);
+    b!("today", today_f);
+    b!("date-format", date_format_f);
+    b!("date-add", date_add_f);
+    b!("date-diff", date_diff_f);
+}
+
+// ---- strings (extended) ----
+
+fn as_str<'a>(v: &'a Value, who: &str) -> Result<&'a str, LispError> {
+    match v {
+        Value::Str(s) => Ok(s.as_str()),
+        other => Err(LispError::TypeMismatch { expected: format!("string (in {})", who), got: type_name(other) }),
+    }
+}
+
+fn str_replace(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(&args[0], "str-replace")?;
+    let target = as_str(args.get(1).unwrap_or(&Value::Null), "str-replace")?;
+    let repl = as_str(args.get(2).unwrap_or(&Value::Null), "str-replace")?;
+    if target.is_empty() {
+        return Ok(Value::Str(s.to_string()));
+    }
+    Ok(Value::Str(s.replace(target, repl)))
+}
+
+fn substr(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(&args[0], "substr")?;
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let start = (as_num(&args[1])? as i64).max(0) as usize;
+    let end = match args.get(2) {
+        Some(v) => (as_num(v)? as i64).max(0) as usize,
+        None => len,
+    };
+    let start = start.min(len);
+    let end = end.min(len).max(start);
+    Ok(Value::Str(chars[start..end].iter().collect()))
+}
+
+fn str_starts_with(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(&args[0], "str-starts-with")?;
+    let p = as_str(args.get(1).unwrap_or(&Value::Null), "str-starts-with")?;
+    Ok(Value::Bool(s.starts_with(p)))
+}
+
+fn str_ends_with(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(&args[0], "str-ends-with")?;
+    let p = as_str(args.get(1).unwrap_or(&Value::Null), "str-ends-with")?;
+    Ok(Value::Bool(s.ends_with(p)))
+}
+
+// ---- lists (extended) ----
+
+fn zipf(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let a = as_list(&args[0])?;
+    let b = as_list(&args[1])?;
+    let n = a.len().min(b.len());
+    let out = (0..n).map(|i| list_val(vec![a[i].clone(), b[i].clone()])).collect();
+    Ok(list_val(out))
+}
+
+fn sort_by(args: &[Value], env: &Env) -> Result<Value, LispError> {
+    let keyfn = &args[0];
+    let l = as_list(&args[1])?;
+    // stable ascending sort by the numeric key (keyfn item)
+    let mut keyed: Vec<(f64, Value)> = Vec::with_capacity(l.len());
+    for item in l.iter() {
+        let k = as_num(&apply_value(keyfn, &[item.clone()], env)?)?;
+        keyed.push((k, item.clone()));
+    }
+    keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(list_val(keyed.into_iter().map(|(_, v)| v).collect()))
+}
+
+// ---- conversions ----
+
+fn to_string_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Str(display(args.first().unwrap_or(&Value::Null))))
+}
+
+fn to_number_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    match args.first().unwrap_or(&Value::Null) {
+        Value::Number(n) => Ok(Value::Number(*n)),
+        Value::Bool(b) => Ok(Value::Number(if *b { 1.0 } else { 0.0 })),
+        Value::Str(s) => s
+            .trim()
+            .parse::<f64>()
+            .map(Value::Number)
+            .map_err(|_| LispError::Runtime(format!("->number: cannot parse {:?}", s))),
+        other => Err(LispError::TypeMismatch { expected: "number|string|bool".into(), got: type_name(other) }),
+    }
+}
+
+fn to_bool_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Bool(is_truthy(args.first().unwrap_or(&Value::Null))))
+}
+
+fn parse_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(&args[0], "parse")?;
+    let exprs = crate::parser::parse(s)?;
+    match exprs.len() {
+        1 => Ok(exprs.into_iter().next().unwrap()),
+        _ => Ok(list_val(exprs)),
+    }
+}
+
+// ---- dates ----
+
+fn now_f(_: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Number(crate::dates::now_epoch()))
+}
+
+fn today_f(_: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Number(crate::dates::today_epoch()))
+}
+
+fn date_format_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let dt = match args.first() {
+        Some(Value::Number(n)) => crate::dates::from_epoch(*n),
+        Some(Value::Str(s)) => crate::dates::from_str(s)
+            .ok_or_else(|| LispError::Runtime(format!("date-format: bad date {:?}", s)))?,
+        _ => return Err(LispError::InvalidSyntax("date-format expects a date string or epoch number".into())),
+    };
+    let fmt = match args.get(1) {
+        Some(Value::Str(f)) => f.as_str(),
+        _ => "yyyy-MM-dd HH:mm",
+    };
+    Ok(Value::Str(crate::dates::format(fmt, &dt)))
+}
+
+fn date_add_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let date = as_str(&args[0], "date-add")?;
+    let amount = as_num(&args[1])? as i64;
+    let unit = match args.get(2) {
+        Some(Value::Keyword(k)) | Some(Value::Symbol(k)) => k.as_str(),
+        Some(Value::Str(s)) => s.as_str(),
+        _ => "days",
+    };
+    crate::dates::date_add(date, amount, unit)
+        .map(Value::Str)
+        .ok_or_else(|| LispError::Runtime(format!("date-add: bad date {:?}", date)))
+}
+
+fn date_diff_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let d1 = as_str(&args[0], "date-diff")?;
+    let d2 = as_str(&args[1], "date-diff")?;
+    crate::dates::date_diff(d1, d2)
+        .map(|d| Value::Number(d as f64))
+        .ok_or_else(|| LispError::Runtime("date-diff: bad date".into()))
 }
 
 // ---- helpers ----
@@ -307,13 +469,15 @@ fn str_split(args: &[Value], _: &Env) -> Result<Value, LispError> {
     }
 }
 fn str_join(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    // (str-join sep list) — separator first, matching EELisp
-    if let (Value::Str(sep), Value::List(l)) = (&args[0], &args[1]) {
-        let parts: Vec<String> = l.iter().map(display).collect();
-        Ok(Value::Str(parts.join(sep)))
-    } else {
-        Err(LispError::InvalidSyntax("str-join expects (string list)".into()))
-    }
+    // Accept either order: (str-join sep list) [EELisp core] or (str-join list sep) [zzeelisp].
+    let (sep, list): (String, Rc<Vec<Value>>) = match (args.first(), args.get(1)) {
+        (Some(Value::Str(sep)), Some(Value::List(l))) => (sep.clone(), l.clone()),
+        (Some(Value::List(l)), Some(Value::Str(sep))) => (sep.clone(), l.clone()),
+        (Some(Value::List(l)), None) => (String::new(), l.clone()),
+        _ => return Err(LispError::InvalidSyntax("str-join expects a list and a separator".into())),
+    };
+    let parts: Vec<String> = list.iter().map(display).collect();
+    Ok(Value::Str(parts.join(&sep)))
 }
 fn str_contains(args: &[Value], _: &Env) -> Result<Value, LispError> {
     if let (Value::Str(s), Value::Str(sub)) = (&args[0], &args[1]) {
@@ -483,20 +647,28 @@ fn dictf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     }
     Ok(Value::Dict(Rc::new(d)))
 }
+/// Key of a dict access — accepts either a keyword or a plain string (json dicts use string keys).
+fn dict_key(v: &Value) -> Option<&str> {
+    match v {
+        Value::Keyword(k) | Value::Str(k) | Value::Symbol(k) => Some(k.as_str()),
+        _ => None,
+    }
+}
+
 fn dict_get(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    if let (Value::Dict(d), Value::Keyword(k)) = (&args[0], &args[1]) {
+    if let (Value::Dict(d), Some(k)) = (&args[0], dict_key(&args[1])) {
         Ok(d.get(k).cloned().unwrap_or_else(|| args.get(2).cloned().unwrap_or(Value::Null)))
     } else {
-        Err(LispError::InvalidSyntax("dict-get expects (dict keyword)".into()))
+        Err(LispError::InvalidSyntax("dict-get expects (dict key)".into()))
     }
 }
 fn dict_set(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    if let (Value::Dict(d), Value::Keyword(k)) = (&args[0], &args[1]) {
+    if let (Value::Dict(d), Some(k)) = (&args[0], dict_key(&args[1])) {
         let mut nd = (**d).clone();
-        nd.insert(k.clone(), args[2].clone());
+        nd.insert(k.to_string(), args[2].clone());
         Ok(Value::Dict(Rc::new(nd)))
     } else {
-        Err(LispError::InvalidSyntax("dict-set expects (dict keyword value)".into()))
+        Err(LispError::InvalidSyntax("dict-set expects (dict key value)".into()))
     }
 }
 fn dict_keys(args: &[Value], _: &Env) -> Result<Value, LispError> {
@@ -520,10 +692,10 @@ fn dict_values(args: &[Value], _: &Env) -> Result<Value, LispError> {
     }
 }
 fn dict_has(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    if let (Value::Dict(d), Value::Keyword(k)) = (&args[0], &args[1]) {
+    if let (Value::Dict(d), Some(k)) = (&args[0], dict_key(&args[1])) {
         Ok(Value::Bool(d.get(k).is_some()))
     } else {
-        Err(LispError::InvalidSyntax("dict-has expects (dict keyword)".into()))
+        Err(LispError::InvalidSyntax("dict-has expects (dict key)".into()))
     }
 }
 fn dict_merge(args: &[Value], _: &Env) -> Result<Value, LispError> {
