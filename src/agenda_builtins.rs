@@ -288,8 +288,11 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
     // ── smart input ──
     {
         let db = db.clone();
-        defb(env, "add", ArgMode::Eval, move |args, _| {
-            agenda::add_smart(&db.borrow(), &str_arg(args.first(), "add")?)
+        let reg = reg.clone();
+        defb(env, "add", ArgMode::Eval, move |args, ev| {
+            let result = agenda::add_smart(&db.borrow(), &str_arg(args.first(), "add")?)?;
+            maybe_auto_categorize(&db, &reg, ev, &result)?;
+            Ok(result)
         });
     }
     defb(env, "smart-parse", ArgMode::Eval, |args, _| {

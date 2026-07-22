@@ -112,3 +112,16 @@ fn smart_add_creates_item() {
     assert_eq!(s(&it, "(item-count)"), "1");
     assert_eq!(s(&it, "(length (records (items :priority 1)))"), "1");
 }
+
+#[test]
+fn smart_add_honors_auto_categorize() {
+    // the smart `add` (agenda quick-add) must run rules when auto-categorize is on,
+    // just like add-item does — the frontend agenda input relies on this.
+    let it = Interpreter::new();
+    it.eval_str("(defrule callrule :when (str-contains (str-lower text) \"call\") :assign \"phone\")").unwrap();
+    it.eval_str("(auto-categorize true)").unwrap();
+    it.eval_str("(add \"Call the dentist\")").unwrap();
+    it.eval_str("(add \"buy milk\")").unwrap();
+    // only the "call" item is auto-tagged phone
+    assert_eq!(s(&it, "(length (records (items :category \"phone\")))"), "1");
+}
