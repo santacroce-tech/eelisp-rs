@@ -1,0 +1,23 @@
+[package]
+name = "eelisp"
+version = "0.2.0"
+edition = "2021"
+description = "A Lisp for personal data management — engine core (Rust rewrite of EELisp)"
+license = "MIT"
+
+# The core is dependency-free and WASM-friendly on purpose: no threads, no I/O in the
+# library, no platform types in `Value`. Native/web bindings live in separate crates later.
+
+[lib]
+name = "eelisp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "eelisp"
+path = "src/bin/eelisp.rs"
+
+[dependencies]
+regex = "1.13.1"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde_json = "1.0.151"
+ureq = "^2"
