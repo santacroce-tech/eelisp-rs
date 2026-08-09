@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EELisp function reference</title>
+<meta name="description" content="Every EELisp special form and function: language core, prelude, database and agenda.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="lam">λ</span> EELisp</a>
+    <div class="nav-links">
+      <a href="guide.html">Guide</a>
+      <a href="reference.html" aria-current="page">Reference</a>
+      <a href="embed.html">Embedding</a>
+      <a href="https://github.com/santacroce-tech/eelisp-rs">Source</a>
+      <a href="https://eeditor.app">EEditor</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" style="padding:56px 0 28px">
+  <div class="wrap">
+    <h1>Reference</h1>
+    <p class="lede">
+      16 special forms and 154 functions — the language core, the prelude written in EELisp itself,
+      the database, and the agenda.
+    </p>
+  </div>
+</header>
+
+<section style="padding-top:0;border:0">
+  <div class="wrap">
+    <div class="toc">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#forms">Special forms</a></li>
+        <li><a href="#math">Arithmetic &amp; logic</a></li>
+        <li><a href="#strings">Strings</a></li>
+        <li><a href="#lists">Lists</a></li>
+        <li><a href="#dicts">Dicts</a></li>
+        <li><a href="#types">Types &amp; conversion</a></li>
+        <li><a href="#dates">Dates</a></li>
+        <li><a href="#io">Evaluation, JSON, network</a></li>
+        <li><a href="#prelude">Prelude</a></li>
+        <li><a href="#db">Database</a></li>
+        <li><a href="#agenda">Agenda</a></li>
+        <li><a href="#editor">Editor RPC</a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="doc">
+
+<section id="forms">
+  <div class="wrap"><div class="prose">
+    <h2>Special forms</h2>
+    <p>Evaluated by the interpreter itself, so they don't follow the usual argument rules.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Form</th><th>Meaning</th></tr>
+      <tr><td><code>(def name value)</code></td><td>define a global binding</td></tr>
+      <tr><td><code>(defn name (params) body…)</code></td><td>define a function</td></tr>
+      <tr><td><code>(fn (params) body…)</code><br><code>(lambda (params) body…)</code></td><td>an anonymous function</td></tr>
+      <tr><td><code>(let (a 1 b 2) body…)</code></td><td>local bindings, given as one flat list</td></tr>
+      <tr><td><code>(set! name value)</code></td><td>reassign an existing binding</td></tr>
+      <tr><td><code>(if test then else)</code></td><td>two-way branch</td></tr>
+      <tr><td><code>(cond test result …)</code></td><td>flat multi-way branch</td></tr>
+      <tr><td><code>(and a b …)</code> · <code>(or a b …)</code></td><td>short-circuiting logic</td></tr>
+      <tr><td><code>(begin e…)</code></td><td>evaluate in order, return the last</td></tr>
+      <tr><td><code>(for-each var list body…)</code></td><td>loop over a list</td></tr>
+      <tr><td><code>(loop (a 0 b 1) body…)</code></td><td>tail-recursive loop with bindings</td></tr>
+      <tr><td><code>(recur v…)</code></td><td>jump back to the enclosing <code>loop</code></td></tr>
+      <tr><td><code>(quote x)</code> · <code>'x</code></td><td>don't evaluate</td></tr>
+      <tr><td><code>(quasiquote x)</code> · <code>` , ,@</code></td><td>template, unquote, unquote-splicing</td></tr>
+      <tr><td><code>(defmacro name (params) body…)</code></td><td>define a macro; rest parameters allowed</td></tr>
+    </table></div>
+    <p class="muted"><small>A parameter list may end with <code>. rest</code> to collect the remaining arguments.</small></p>
+  </div></div>
+</section>
+
+<section id="math" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Arithmetic &amp; logic</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>+ - * /</code></td><td>variadic arithmetic</td></tr>
+      <tr><td><code>mod</code></td><td>remainder</td></tr>
+      <tr><td><code>abs · min · max</code></td><td></td></tr>
+      <tr><td><code>floor · ceil · round</code></td><td></td></tr>
+      <tr><td><code>pow</code></td><td><code>(pow base exp)</code></td></tr>
+      <tr><td><code>= · !=</code></td><td>equality</td></tr>
+      <tr><td><code>&lt; · &gt; · &lt;= · &gt;=</code></td><td>ordering</td></tr>
+      <tr><td><code>not</code></td><td>logical negation</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="strings">
+  <div class="wrap"><div class="prose">
+    <h2>Strings</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(str a b …)</code></td><td>concatenate anything, converting as needed</td></tr>
+      <tr><td><code>(str-len s)</code></td><td></td></tr>
+      <tr><td><code>(str-upper s)</code> · <code>(str-lower s)</code></td><td></td></tr>
+      <tr><td><code>(str-trim s)</code></td><td></td></tr>
+      <tr><td><code>(str-split s sep)</code></td><td>→ a list</td></tr>
+      <tr><td><code>(str-join sep parts)</code></td><td>accepts either argument order</td></tr>
+      <tr><td><code>(str-contains s needle)</code></td><td></td></tr>
+      <tr><td><code>(str-matches s pattern)</code></td><td>regular expression test</td></tr>
+      <tr><td><code>(str-replace s target repl)</code></td><td>replaces every occurrence</td></tr>
+      <tr><td><code>(substr s start end)</code></td><td></td></tr>
+      <tr><td><code>(str-starts-with s p)</code> · <code>(str-ends-with s p)</code></td><td></td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="lists" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Lists</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(list a b …)</code></td><td></td></tr>
+      <tr><td><code>(cons x lst)</code></td><td>prepend</td></tr>
+      <tr><td><code>(head lst)</code> · <code>(car lst)</code></td><td>first element</td></tr>
+      <tr><td><code>(tail lst)</code> · <code>(cdr lst)</code></td><td>everything after the first</td></tr>
+      <tr><td><code>(nth lst i)</code></td><td>0-based</td></tr>
+      <tr><td><code>(length lst)</code></td><td></td></tr>
+      <tr><td><code>(append a b)</code> · <code>(reverse lst)</code></td><td></td></tr>
+      <tr><td><code>(range from to)</code></td><td>end-exclusive</td></tr>
+      <tr><td><code>(map f lst)</code></td><td></td></tr>
+      <tr><td><code>(filter f lst)</code></td><td></td></tr>
+      <tr><td><code>(reduce f init lst)</code></td><td></td></tr>
+      <tr><td><code>(sort-by f lst)</code></td><td>sort by a computed key</td></tr>
+      <tr><td><code>(zip a b)</code></td><td>pairs</td></tr>
+      <tr><td><code>(empty? lst)</code></td><td></td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="dicts">
+  <div class="wrap"><div class="prose">
+    <h2>Dicts</h2>
+    <p>Literal syntax is <code>{:key value …}</code>. Every operation returns a new dict.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(dict :k v …)</code></td><td>construct</td></tr>
+      <tr><td><code>(dict-get d :k)</code></td><td></td></tr>
+      <tr><td><code>(dict-set d :k v)</code></td><td>→ a new dict</td></tr>
+      <tr><td><code>(dict-keys d)</code> · <code>(dict-values d)</code></td><td></td></tr>
+      <tr><td><code>(dict-has d :k)</code></td><td></td></tr>
+      <tr><td><code>(dict-merge a b)</code></td><td>later keys win</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="types" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Types &amp; conversion</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(type x)</code></td><td>the type as a string</td></tr>
+      <tr><td><code>number? · string? · bool? · list? · nil? · symbol? · keyword? · fn?</code></td><td>predicates</td></tr>
+      <tr><td><code>-&gt;string · -&gt;number · -&gt;bool</code></td><td>coercion</td></tr>
+      <tr><td><code>(parse s)</code></td><td>read EELisp source into a value</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="dates">
+  <div class="wrap"><div class="prose">
+    <h2>Dates</h2>
+    <p>Times are epoch seconds; functions that take a date also accept a <code>"YYYY-MM-DD"</code> string.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(now)</code></td><td>current time</td></tr>
+      <tr><td><code>(today)</code></td><td>midnight today</td></tr>
+      <tr><td><code>(date-format d pattern)</code></td><td>e.g. <code>"EEEE"</code>, <code>"yyyy-MM-dd"</code></td></tr>
+      <tr><td><code>(date-add d n :days)</code></td><td>also <code>:weeks</code>, <code>:months</code></td></tr>
+      <tr><td><code>(date-diff a b :days)</code></td><td></td></tr>
+    </table></div>
+    <p class="muted"><small>Date arithmetic is implemented in the engine — there is no external date dependency.</small></p>
+  </div></div>
+</section>
+
+<section id="io" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Evaluation, JSON, network</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(print x)</code> · <code>(println x)</code></td><td>captured by the host, not written to a terminal</td></tr>
+      <tr><td><code>(eval form)</code></td><td>evaluate a value as code</td></tr>
+      <tr><td><code>(apply f args)</code></td><td>call with a list of arguments</td></tr>
+      <tr><td><code>(json-parse s)</code> · <code>(json-stringify v)</code></td><td></td></tr>
+      <tr><td><code>(http-get url)</code> · <code>(http-post url body)</code></td><td>synchronous; the only network access in the language</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="prelude">
+  <div class="wrap"><div class="prose">
+    <h2>Prelude</h2>
+    <p>Written in EELisp and loaded at startup — read it as worked examples of the language.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>id · inc · dec</code></td><td></td></tr>
+      <tr><td><code>even? · odd? · zero? · pos? · neg?</code></td><td>number predicates</td></tr>
+      <tr><td><code>first · second · third · last</code></td><td>list access by position</td></tr>
+      <tr><td><code>take · drop · count</code></td><td></td></tr>
+      <tr><td><code>some? · every?</code></td><td>does any / do all satisfy a predicate</td></tr>
+      <tr><td><code>compose</code></td><td>combine two functions</td></tr>
+      <tr><td><code>when · unless</code></td><td>macros with rest parameters</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="db" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Database</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(deftable name (fields))</code></td><td><code>name:type</code> short form, or <code>(name :type … :required … :default … :choices …)</code></td></tr>
+      <tr><td><code>(insert table {dict})</code></td><td>→ the stored record, with its id</td></tr>
+      <tr><td><code>(query table :where :params :order :asc :desc :limit :select)</code></td><td>→ a result-set</td></tr>
+      <tr><td><code>(records rs)</code></td><td>rows of a result-set, as a list</td></tr>
+      <tr><td><code>(update table id {dict})</code></td><td></td></tr>
+      <tr><td><code>(delete table id)</code></td><td>soft delete</td></tr>
+      <tr><td><code>(pack table)</code></td><td>physically remove deleted rows</td></tr>
+      <tr><td><code>(count-records table)</code></td><td></td></tr>
+      <tr><td><code>(tables)</code> · <code>(describe table)</code> · <code>(drop-table table)</code></td><td></td></tr>
+      <tr><td><code>(browse table)</code></td><td>a table view</td></tr>
+      <tr><td><code>(edit table id)</code></td><td>a form view for one record</td></tr>
+      <tr><td><code>(defform name table (field)…)</code></td><td>a named form, computed fields allowed</td></tr>
+      <tr><td><code>(field-get r "name")</code> · <code>(field-set r "name" v)</code></td><td></td></tr>
+      <tr><td><code>(record-id r)</code></td><td></td></tr>
+    </table></div>
+    <p class="muted"><small>Field types: <code>string</code>, <code>number</code>, <code>bool</code>, <code>date</code>.</small></p>
+  </div></div>
+</section>
+
+<section id="agenda">
+  <div class="wrap"><div class="prose">
+    <h2>Agenda</h2>
+
+    <h3>Items</h3>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(add-item text :when :priority :category :notes)</code></td><td></td></tr>
+      <tr><td><code>(add-item-today text)</code></td><td></td></tr>
+      <tr><td><code>(add "call Bob tomorrow !!")</code></td><td>natural language; parses date, priority, people</td></tr>
+      <tr><td><code>(smart-parse text)</code></td><td>the parse, without storing anything</td></tr>
+      <tr><td><code>(items :search :category :priority :when-before :when-after)</code></td><td></td></tr>
+      <tr><td><code>(items-on date)</code> · <code>(items-between a b)</code></td><td></td></tr>
+      <tr><td><code>(item-get id)</code> · <code>(item-set id :k v)</code> · <code>(item-done id)</code></td><td></td></tr>
+      <tr><td><code>(item-count)</code></td><td></td></tr>
+      <tr><td><code>(every n :weeks)</code></td><td>recurrence — <code>:days</code>, <code>:weeks</code>, <code>:months</code></td></tr>
+    </table></div>
+
+    <h3>Categories &amp; rules</h3>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(defcategory work/calls)</code></td><td>hierarchical; parents implied</td></tr>
+      <tr><td><code>(assign id "path")</code> · <code>(unassign id "path")</code></td><td></td></tr>
+      <tr><td><code>(categories)</code></td><td></td></tr>
+      <tr><td><code>(defrule name :when … :assign … :action …)</code></td><td><code>:assign</code> and <code>:action</code> may repeat</td></tr>
+      <tr><td><code>(apply-rules)</code> · <code>(apply-rules id)</code></td><td>runs in a transaction; → number changed</td></tr>
+      <tr><td><code>(auto-categorize true)</code></td><td>apply rules as items arrive</td></tr>
+      <tr><td><code>(rules)</code> · <code>(drop-rule "name")</code></td><td></td></tr>
+    </table></div>
+    <p>Bound inside a rule condition: <code>text</code>, <code>notes</code>, <code>id</code>, <code>categories</code>, <code>props</code>, <code>(get "f")</code>, <code>(has-category "c")</code>, <code>(overdue?)</code>, <code>(match n)</code>.</p>
+
+    <h3>Views, templates, files</h3>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(defview name (:category … ))</code> · <code>(show name)</code></td><td>filtered, optionally grouped</td></tr>
+      <tr><td><code>(views)</code> · <code>(drop-view "name")</code></td><td></td></tr>
+      <tr><td><code>(deftemplate name (…))</code> · <code>(from-template name)</code></td><td></td></tr>
+      <tr><td><code>(templates)</code> · <code>(drop-template name)</code></td><td></td></tr>
+      <tr><td><code>(open-agenda "file.db")</code> · <code>(use-agenda name)</code> · <code>(close-agenda name)</code></td><td>isolated databases</td></tr>
+      <tr><td><code>(agendas)</code></td><td></td></tr>
+      <tr><td><code>(export-agenda "f.json")</code> · <code>(import-agenda "f.json")</code></td><td>import runs in a transaction</td></tr>
+    </table></div>
+  </div></div>
+</section>
+
+<section id="editor" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Editor RPC</h2>
+    <p>
+      Installed by the host, so these exist when the engine runs inside an editor and not on the
+      bare command line. They let a script read and change the document it is running in.
+    </p>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(buffer-text)</code></td><td>the whole document</td></tr>
+      <tr><td><code>(current-file)</code></td><td>path of the open note</td></tr>
+      <tr><td><code>(cursor-pos)</code> · <code>(set-cursor n)</code></td><td></td></tr>
+      <tr><td><code>(selection)</code></td><td>the selected text</td></tr>
+      <tr><td><code>(insert-at pos text)</code></td><td></td></tr>
+      <tr><td><code>(replace-range from to text)</code></td><td></td></tr>
+    </table></div>
+    <p>
+      In <a href="https://eeditor.app">EEditor</a>, keybindings use a higher-level set of commands
+      on top of these — see
+      <a href="https://eeditor.app/manual.html#keybindings">the keybinding reference</a>.
+    </p>
+  </div></div>
+</section>
+
+</div>
+
+<footer>
+  <div class="wrap foot-cols">
+    <div><p><strong>EELisp</strong><br><span class="muted">A Lisp for personal data.</span></p></div>
+    <div><p><a href="index.html">Home</a><br><a href="guide.html">Guide</a><br><a href="embed.html">Embedding</a></p></div>
+    <div><p><a href="https://eeditor.app">EEditor — the app</a><br><a href="https://github.com/santacroce-tech/eelisp-rs">Source (MIT)</a></p></div>
+  </div>
+</footer>
+
+</body>
+</html>

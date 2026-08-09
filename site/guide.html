@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The EELisp guide</title>
+<meta name="description" content="Learn EELisp: values, functions, macros, the database, and the agenda — with runnable examples.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="lam">λ</span> EELisp</a>
+    <div class="nav-links">
+      <a href="guide.html" aria-current="page">Guide</a>
+      <a href="reference.html">Reference</a>
+      <a href="embed.html">Embedding</a>
+      <a href="https://github.com/santacroce-tech/eelisp-rs">Source</a>
+      <a href="https://eeditor.app">EEditor</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" style="padding:56px 0 32px">
+  <div class="wrap">
+    <h1>The guide</h1>
+    <p class="lede">
+      The whole language, in order. Every example here runs as written — paste them into the REPL.
+    </p>
+  </div>
+</header>
+
+<section style="padding-top:0;border:0">
+  <div class="wrap">
+    <div class="toc">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#running">1. Running it</a></li>
+        <li><a href="#values">2. Values</a></li>
+        <li><a href="#defining">3. Defining things</a></li>
+        <li><a href="#control">4. Control flow</a></li>
+        <li><a href="#functions">5. Functions</a></li>
+        <li><a href="#macros">6. Macros</a></li>
+        <li><a href="#collections">7. Lists and dicts</a></li>
+        <li><a href="#strings">8. Strings and dates</a></li>
+        <li><a href="#database">9. The database</a></li>
+        <li><a href="#agenda">10. The agenda</a></li>
+        <li><a href="#outside">11. JSON and the network</a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="doc">
+
+<section id="running">
+  <div class="wrap"><div class="prose">
+    <h2>1. Running it</h2>
+<pre><code>eelisp                  <span class="cm"># interactive REPL</span>
+eelisp script.eelisp    <span class="cm"># run a file</span>
+eelisp --serve          <span class="cm"># JSON-line RPC over stdin/stdout</span></code></pre>
+    <p>
+      Or open the REPL inside <a href="https://eeditor.app">EEditor</a> with <kbd>⌘J</kbd>, which is
+      the friendlier way to meet the database and the agenda, since results render as tables and
+      forms rather than text.
+    </p>
+  </div></div>
+</section>
+
+<section id="values" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>2. Values</h2>
+<pre><code>42        -3.5              <span class="cm">; numbers — one numeric type</span>
+<span class="st">"hello"</span>                     <span class="cm">; strings</span>
+true      false             <span class="cm">; booleans</span>
+nil                         <span class="cm">; nothing</span>
+foo                         <span class="cm">; a symbol — a name</span>
+:name                       <span class="cm">; a keyword — a name that stands for itself</span>
+(list 1 2 3)                <span class="cm">; a list</span>
+{:name <span class="st">"Ada"</span> :born 1815}   <span class="cm">; a dict</span></code></pre>
+    <p>
+      Keywords are the workhorse: they name dict fields, they name arguments
+      (<code>:where</code>, <code>:order</code>), and they never need quoting.
+    </p>
+    <p>
+      Quoting stops evaluation, as in any Lisp: <code>'(1 2 3)</code> is a list of three numbers,
+      not a call to the function <code>1</code>.
+    </p>
+  </div></div>
+</section>
+
+<section id="defining">
+  <div class="wrap"><div class="prose">
+    <h2>3. Defining things</h2>
+<pre><code>(def pi 3.14159)              <span class="cm">; a value</span>
+(defn area (r) (* pi r r))    <span class="cm">; a function</span>
+(area 2)                      <span class="cm">; → 12.56636</span>
+
+(fn (x) (* x x))              <span class="cm">; an anonymous function</span>
+((fn (x) (* x x)) 5)          <span class="cm">; → 25</span>
+
+(let (a 1 b 2) (+ a b))       <span class="cm">; local bindings — a flat list of pairs</span>
+
+(def counter 0)
+(set! counter (+ counter 1))  <span class="cm">; reassign an existing binding</span></code></pre>
+    <p>
+      <code>let</code> takes its bindings as one flat list — <code>(let (a 1 b 2) …)</code>, not
+      nested pairs. Bindings are visible to the body only.
+    </p>
+  </div></div>
+</section>
+
+<section id="control" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>4. Control flow</h2>
+<pre><code>(if (&gt; x 10) <span class="st">"big"</span> <span class="st">"small"</span>)
+
+(cond
+  (&lt; x 5)   <span class="st">"small"</span>
+  (&lt; x 20)  <span class="st">"medium"</span>
+  true      <span class="st">"large"</span>)          <span class="cm">; cond is flat: test, result, test, result…</span>
+
+(and a b)   (or a b)   (not a)
+
+(begin (println <span class="st">"first"</span>) (println <span class="st">"second"</span>))   <span class="cm">; several expressions, last one wins</span>
+
+(when  ready (println <span class="st">"go"</span>))
+(unless ready (println <span class="st">"wait"</span>))
+
+(for-each n (list 1 2 3) (println n))    <span class="cm">; a loop, not a function</span></code></pre>
+
+    <h3>Recursion without a stack</h3>
+    <p>
+      <code>loop</code> and <code>recur</code> give you iteration with proper tail calls, so this
+      runs in constant stack space no matter how large <code>n</code> is:
+    </p>
+<pre><code>(defn fact (n)
+  (loop (i n acc 1)
+    (if (&lt;= i 1)
+        acc
+        (recur (- i 1) (* acc i)))))
+
+(fact 10)   <span class="cm">; → 3628800</span></code></pre>
+    <p>
+      <code>recur</code> jumps back to the enclosing <code>loop</code> with new values for its
+      bindings. Tail calls in ordinary functions are optimised too, so mutual recursion won't blow
+      up either.
+    </p>
+  </div></div>
+</section>
+
+<section id="functions">
+  <div class="wrap"><div class="prose">
+    <h2>5. Functions</h2>
+<pre><code>(defn greet (name) (str <span class="st">"Hello, "</span> name))
+
+<span class="cm">;; rest parameters, with a dot</span>
+(defn total (first . others)
+  (+ first (reduce (fn (a b) (+ a b)) 0 others)))
+
+(total 1 2 3 4)   <span class="cm">; → 10</span>
+
+<span class="cm">;; functions are values</span>
+(map (fn (x) (* x x)) (range 1 6))    <span class="cm">; → (1 4 9 16 25)</span>
+(apply + (list 1 2 3))                <span class="cm">; → 6</span>
+((compose inc inc) 5)                 <span class="cm">; → 7</span></code></pre>
+    <p>
+      A parameter list of <code>(a b . rest)</code> binds <code>rest</code> to a list of whatever is
+      left. Macros take rest parameters too — the fix that makes <code>when</code> and
+      <code>unless</code> possible.
+    </p>
+  </div></div>
+</section>
+
+<section id="macros" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>6. Macros</h2>
+    <p>
+      A macro runs at expansion time and returns code. Quasiquote (<code>`</code>) builds that code,
+      <code>,</code> drops a value into it, and <code>,@</code> splices a list in.
+    </p>
+<pre><code>(defmacro unless (c body)
+  `(if ,c nil ,body))
+
+(unless false <span class="st">"ran"</span>)   <span class="cm">; → "ran"</span>
+
+(defmacro my-when (c . body)
+  `(if ,c (begin ,@body) nil))</code></pre>
+    <p>
+      <code>when</code>, <code>unless</code> and <code>compose</code> in the standard prelude are
+      written this way, in EELisp, not in Rust.
+    </p>
+  </div></div>
+</section>
+
+<section id="collections">
+  <div class="wrap"><div class="prose">
+    <h2>7. Lists and dicts</h2>
+<pre><code>(list 1 2 3)              (cons 0 (list 1 2))       <span class="cm">; → (0 1 2)</span>
+(head lst)   (tail lst)   (nth lst 1)   (length lst)
+(append a b) (reverse l)  (range 1 10)
+(first l) (second l) (third l) (last l) (take 2 l) (drop 2 l)
+
+(map    (fn (x) (* 2 x)) (range 1 5))
+(filter (fn (n) (even? n)) (range 1 10))    <span class="cm">; → (2 4 6 8)</span>
+(reduce (fn (a b) (+ a b)) 0 (range 1 5))   <span class="cm">; → 10</span>
+(sort-by (fn (p) (nth p 1)) pairs)
+(zip a b)   (some? f l)   (every? f l)   (count l)</code></pre>
+
+<pre><code>(def d {:name <span class="st">"Ada"</span> :born 1815})
+
+(dict-get d :name)          <span class="cm">; → "Ada"</span>
+(dict-set d :born 1816)     <span class="cm">; → a new dict; the original is untouched</span>
+(dict-keys d)               <span class="cm">; → (:name :born)</span>
+(dict-has d :name)          <span class="cm">; → true</span>
+(dict-merge a b)</code></pre>
+    <p>Dict operations return new dicts rather than mutating the one you passed in.</p>
+  </div></div>
+</section>
+
+<section id="strings" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>8. Strings and dates</h2>
+<pre><code>(str <span class="st">"a"</span> 1 <span class="st">"b"</span>)                  <span class="cm">; → "a1b" — str takes anything</span>
+(str-len s)   (str-upper s)   (str-lower s)   (str-trim s)
+(str-split <span class="st">"a,b,c"</span> <span class="st">","</span>)          <span class="cm">; → (a b c)</span>
+(str-join <span class="st">", "</span> parts)
+(str-contains s <span class="st">"needle"</span>)
+(str-matches s <span class="st">"^[0-9]+$"</span>)        <span class="cm">; regular expression</span>
+(str-replace <span class="st">"14:30"</span> <span class="st">":"</span> <span class="st">""</span>)      <span class="cm">; → "1430"</span>
+(substr s 0 4)  (str-starts-with s <span class="st">"a"</span>)  (str-ends-with s <span class="st">"z"</span>)</code></pre>
+
+<pre><code>(now)                         <span class="cm">; current epoch seconds</span>
+(today)                       <span class="cm">; midnight today, as epoch seconds</span>
+(date-format (today) <span class="st">"EEEE"</span>)   <span class="cm">; → "Sunday"</span>
+(date-format <span class="st">"2026-08-09"</span> <span class="st">"EEEE"</span>) <span class="cm">; date strings work too</span>
+(date-add (today) 7 :days)
+(date-diff a b :days)</code></pre>
+  </div></div>
+</section>
+
+<section id="database">
+  <div class="wrap"><div class="prose">
+    <h2>9. The database</h2>
+    <p>
+      Tables are SQLite tables. The schema is stored as JSON alongside them, so field types,
+      defaults, required flags and choice lists survive a reload.
+    </p>
+<pre><code><span class="cm">;; short form — name:type, all in one list</span>
+(deftable books (title:string author:string year:number))
+
+<span class="cm">;; long form, when you want constraints</span>
+(deftable tasks
+  ((title  :type string :required true)
+   (status :type string :default <span class="st">"open"</span> :choices (<span class="st">"open"</span> <span class="st">"done"</span>))
+   (due    :type date)))</code></pre>
+    <p>Types are <code>string</code>, <code>number</code>, <code>bool</code> and <code>date</code>.</p>
+
+<pre><code>(insert books {:title <span class="st">"Thinking Forth"</span> :author <span class="st">"Brodie"</span> :year 1984})
+
+(query books)                                  <span class="cm">; everything</span>
+(query books :where <span class="st">"year &lt; ?"</span> :params (list 1980)
+             :order <span class="st">"year"</span> :desc true :limit 10
+             :select (list <span class="st">"title"</span> <span class="st">"year"</span>))
+
+(records (query books))    <span class="cm">; the rows as a list</span>
+(length (records (query books)))
+
+(update books 1 {:year 1985})
+(delete books 1)           <span class="cm">; soft delete</span>
+(pack books)               <span class="cm">; really remove the deleted rows</span>
+
+(tables)                   (describe books)
+(count-records books)      (drop-table books)</code></pre>
+
+    <h3>Grids and forms</h3>
+<pre><code>(browse books)      <span class="cm">; a table widget — a grid you can move around in</span>
+(edit books 1)      <span class="cm">; a form for one record</span>
+
+(defform book-form books
+  (title) (author) (year))</code></pre>
+    <p>
+      In a plain terminal these print as ASCII grids. Inside EEditor they become real interactive
+      widgets, which is the point of the host boundary described in
+      <a href="embed.html">embedding</a>.
+    </p>
+    <p>
+      Field access on a record: <code>(field-get r "title")</code>,
+      <code>(field-set r "title" "New")</code>, <code>(record-id r)</code>.
+    </p>
+  </div></div>
+</section>
+
+<section id="agenda" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>10. The agenda</h2>
+
+    <h3>Items</h3>
+<pre><code>(add-item <span class="st">"call Bob"</span> :when <span class="st">"2026-08-10"</span> :priority 1)
+(add-item-today <span class="st">"stand-up"</span>)
+(add <span class="st">"call Bob tomorrow !!"</span>)     <span class="cm">; parses date, priority and people out of the text</span>
+(smart-parse <span class="st">"call Bob tomorrow !!"</span>)
+<span class="cm">;; → {:text "call Bob" :when "2026-08-10" :priority 2 :who ("Bob")}</span>
+
+(items)                                <span class="cm">; everything</span>
+(items :category <span class="st">"work"</span> :priority 1)
+(items :search <span class="st">"budget"</span> :when-before (today))
+(items-on <span class="st">"2026-08-10"</span>)   (items-between a b)
+
+(item-get 1)   (item-set 1 :priority 3)   (item-done 1)   (item-count)</code></pre>
+
+    <h3>Categories</h3>
+<pre><code>(defcategory work/calls)      <span class="cm">; hierarchical: work/calls belongs to work</span>
+(assign 1 <span class="st">"work/calls"</span>)
+(unassign 1 <span class="st">"work/calls"</span>)
+(categories)</code></pre>
+    <p>
+      Assigning a child implies its parents. A parent marked exclusive permits only one of its
+      children per item, which is how you model states that can't overlap.
+    </p>
+
+    <h3>Rules</h3>
+<pre><code>(defrule calls
+  :when   (str-matches text <span class="st">"call|phone|ring"</span>)
+  :assign <span class="st">"work/calls"</span>)
+
+(apply-rules)         <span class="cm">; → how many items changed</span>
+(apply-rules 7)       <span class="cm">; just item 7</span>
+(auto-categorize true)
+(rules)   (drop-rule <span class="st">"calls"</span>)</code></pre>
+    <p>Inside <code>:when</code>, the item is in scope:</p>
+    <div class="table-wrap"><table>
+      <tr><th>Bound</th><th>Is</th></tr>
+      <tr><td><code>text</code>, <code>notes</code>, <code>id</code></td><td>the item's own fields</td></tr>
+      <tr><td><code>categories</code></td><td>a list of category paths</td></tr>
+      <tr><td><code>props</code></td><td>everything else, as a dict</td></tr>
+      <tr><td><code>(get "field")</code></td><td>one property by name</td></tr>
+      <tr><td><code>(has-category "work")</code></td><td>membership test</td></tr>
+      <tr><td><code>(overdue?)</code></td><td>due before today</td></tr>
+      <tr><td><code>(match n)</code></td><td>capture group <em>n</em> of the last regular expression</td></tr>
+    </table></div>
+    <p>
+      <code>:assign</code> may be repeated, and <code>:action</code> takes arbitrary EELisp to run
+      against a matching item.
+    </p>
+
+    <h3>Views, templates, recurrence</h3>
+<pre><code>(defview overdue-work (:category <span class="st">"work"</span>))
+(show overdue-work)   (views)   (drop-view <span class="st">"overdue-work"</span>)
+
+(deftemplate weekly-review (:text <span class="st">"weekly review"</span> :priority 2))
+(from-template weekly-review)   (templates)
+
+(every 2 :weeks)      <span class="cm">; recurrence, used as an item's :recurrence</span></code></pre>
+
+    <h3>Several agendas at once</h3>
+<pre><code>(open-agenda <span class="st">"work.db"</span>)   (use-agenda work)   (close-agenda work)
+(agendas)
+(export-agenda <span class="st">"backup.json"</span>)   (import-agenda <span class="st">"backup.json"</span>)</code></pre>
+    <p>Each agenda is its own database file, fully isolated. Imports run in a transaction.</p>
+  </div></div>
+</section>
+
+<section id="outside">
+  <div class="wrap"><div class="prose">
+    <h2>11. JSON and the network</h2>
+<pre><code>(json-parse <span class="st">"{\"a\":1}"</span>)      <span class="cm">; → {:a 1}</span>
+(json-stringify {:a 1})       <span class="cm">; → "{\"a\":1}"</span>
+
+(http-get <span class="st">"https://example.com/api"</span>)
+(http-post <span class="st">"https://example.com/api"</span> body)</code></pre>
+    <p>
+      These are the only functions that touch the network, and they are synchronous. Nothing else in
+      the language opens a socket.
+    </p>
+    <h2>Where next</h2>
+    <ul>
+      <li><a href="reference.html">The function reference</a> — everything, grouped and in one page.</li>
+      <li><a href="embed.html">Embedding</a> — using the engine from Rust, or over JSON.</li>
+      <li><a href="https://eeditor.app">EEditor</a> — the editor built on this engine.</li>
+    </ul>
+  </div></div>
+</section>
+
+</div>
+
+<footer>
+  <div class="wrap foot-cols">
+    <div><p><strong>EELisp</strong><br><span class="muted">A Lisp for personal data.</span></p></div>
+    <div><p><a href="index.html">Home</a><br><a href="reference.html">Reference</a><br><a href="embed.html">Embedding</a></p></div>
+    <div><p><a href="https://eeditor.app">EEditor — the app</a><br><a href="https://github.com/santacroce-tech/eelisp-rs">Source (MIT)</a></p></div>
+  </div>
+</footer>
+
+</body>
+</html>

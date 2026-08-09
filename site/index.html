@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EELisp — a Lisp for personal data</title>
+<meta name="description" content="EELisp is a small Lisp with an SQLite database and a Lotus Agenda-style organizer built into the language. Written in Rust, embeddable, MIT licensed.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+<meta property="og:title" content="EELisp — a Lisp for personal data">
+<meta property="og:description" content="A small Lisp with a database and an organizer built into the language.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://eelisp.app/">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="lam">λ</span> EELisp</a>
+    <div class="nav-links">
+      <a href="guide.html">Guide</a>
+      <a href="reference.html">Reference</a>
+      <a href="embed.html">Embedding</a>
+      <a href="https://github.com/santacroce-tech/eelisp-rs">Source</a>
+      <a href="https://eeditor.app">EEditor</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">A small language with a long memory</p>
+    <h1>Lisp, with a database in it.</h1>
+    <p class="lede">
+      EELisp is a compact Lisp where tables, records, forms and an agenda are part of the language
+      rather than a library you bolt on. Define a table, insert a record, ask a question, get a
+      table back. It runs anywhere Rust runs, and it fits in one binary.
+    </p>
+    <div class="cta">
+      <a class="btn" href="guide.html">Learn the language</a>
+      <a class="btn btn-ghost" href="reference.html">Function reference</a>
+    </div>
+  </div>
+</header>
+
+<section class="alt">
+  <div class="wrap">
+<pre><code><span class="cm">;; A table is a form, not a schema file</span>
+(deftable books (title:string author:string year:number))
+
+(insert books {:title <span class="st">"The Mythical Man-Month"</span> :author <span class="st">"Brooks"</span> :year 1975})
+(insert books {:title <span class="st">"Thinking Forth"</span>         :author <span class="st">"Brodie"</span> :year 1984})
+
+(query books :where <span class="st">"year &lt; ?"</span> :params (list 1980) :order <span class="st">"year"</span>)</code></pre>
+<pre style="margin-top:-6px"><code class="cm">┌────┬────────────────────────┬────────┬──────┐
+│ id │ title                  │ author │ year │
+├────┼────────────────────────┼────────┼──────┤
+│ 1  │ The Mythical Man-Month │ Brooks │ 1975 │
+└────┴────────────────────────┴────────┴──────┘</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="prose"><h2>Three ideas, one language</h2></div>
+    <div class="grid" style="margin-top:30px">
+
+      <div class="card">
+        <span class="ico">λ</span>
+        <h3>The Lisp</h3>
+        <p>
+          Lexer, reader, environments and a tail-call-optimising evaluator, with macros and
+          quasiquote. Around 95 builtins, plus a prelude written in EELisp itself. Proper tail calls
+          mean <code>loop</code>/<code>recur</code> runs forever without growing the stack.
+        </p>
+      </div>
+
+      <div class="card">
+        <span class="ico">▤</span>
+        <h3>The database — dBASE III, revisited</h3>
+        <p>
+          <code>deftable</code>, <code>insert</code>, <code>query</code>, <code>update</code>,
+          <code>delete</code>, on real SQLite. Field types, defaults, required fields and choices
+          are stored with the schema, so a table survives a reload intact. <code>browse</code> and
+          <code>defform</code> give you a grid and a form, not a printout.
+        </p>
+      </div>
+
+      <div class="card">
+        <span class="ico">◷</span>
+        <h3>The agenda — Lotus Agenda, reborn</h3>
+        <p>
+          Items with dates, priorities and notes; hierarchical categories; templates; views; and a
+          rules engine whose conditions are ordinary EELisp, stored as source and evaluated against
+          each item. Type in your own words and let the rules do the filing.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <div class="prose">
+      <h2>The rules engine is the point</h2>
+      <p>
+        Most organisers make you file things. Lotus Agenda, in 1988, inverted it: you write in plain
+        language, and rules decide where it belongs. EELisp keeps that, and because a rule's
+        condition is just EELisp held as source and re-evaluated, the whole language is available
+        inside it.
+      </p>
+    </div>
+<pre><code>(defcategory work/calls)
+
+(add <span class="st">"call Bob tomorrow !!"</span>)          <span class="cm">; date and priority parsed out of the sentence</span>
+
+(defrule calls
+  :when   (str-matches text <span class="st">"call|phone|ring"</span>)
+  :assign <span class="st">"work/calls"</span>)
+
+(apply-rules)                        <span class="cm">; → 1</span>
+(items :category <span class="st">"work/calls"</span>)</code></pre>
+    <div class="prose">
+      <p>
+        Inside a condition the item is in scope — <code>text</code>, <code>notes</code>,
+        <code>categories</code>, <code>props</code> — along with <code>get</code>,
+        <code>has-category</code>, <code>overdue?</code> and <code>match</code> for regex captures.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="prose">
+      <h2>Get it</h2>
+      <p>EELisp is one Rust crate that builds a library and a CLI. You need a Rust toolchain:</p>
+<pre><code>git clone https://github.com/santacroce-tech/eelisp-rs
+cd eelisp-rs
+cargo build --release --bin eelisp
+
+./target/release/eelisp             <span class="cm"># a REPL</span>
+./target/release/eelisp script.eelisp   <span class="cm"># run a file</span>
+./target/release/eelisp --serve     <span class="cm"># JSON-line RPC on stdin/stdout</span></code></pre>
+      <p>
+        Or use it inside an application: <a href="https://eeditor.app">EEditor</a> is a notes editor
+        built on this engine, and the whole language is available from its REPL and from its
+        keybindings.
+      </p>
+      <p>
+        Embedding it in your own Rust program takes about five lines — see
+        <a href="embed.html">embedding</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <div class="prose">
+      <h2>Where it came from</h2>
+      <p>
+        EELisp began as the scripting layer of a Mac editor written in Swift. This is a clean-break
+        rewrite in Rust, done to fix the things that were wrong in the original — no tail calls,
+        broken macro rest-parameters, no transactions, order-dependent behaviour — and to make the
+        engine reusable rather than welded to one app.
+      </p>
+      <p>
+        The result is deliberately portable: no threads and no I/O in the library itself, no
+        platform types in the value representation. One engine backs a desktop app, a phone app and
+        a command line, and the same code is meant to reach WebAssembly.
+      </p>
+      <p class="muted">
+        MIT licensed. 74 tests. Source at
+        <a href="https://github.com/santacroce-tech/eelisp-rs">github.com/santacroce-tech/eelisp-rs</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-cols">
+    <div><p><strong>EELisp</strong><br><span class="muted">A Lisp for personal data.</span></p></div>
+    <div><p><a href="guide.html">Guide</a><br><a href="reference.html">Reference</a><br><a href="embed.html">Embedding</a></p></div>
+    <div><p><a href="https://eeditor.app">EEditor — the app</a><br><a href="https://github.com/santacroce-tech/eelisp-rs">Source (MIT)</a></p></div>
+  </div>
+</footer>
+
+</body>
+</html>

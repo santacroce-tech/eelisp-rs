@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding EELisp</title>
+<meta name="description" content="Use the EELisp engine from Rust, or over a JSON-line protocol from any language.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="lam">λ</span> EELisp</a>
+    <div class="nav-links">
+      <a href="guide.html">Guide</a>
+      <a href="reference.html">Reference</a>
+      <a href="embed.html" aria-current="page">Embedding</a>
+      <a href="https://github.com/santacroce-tech/eelisp-rs">Source</a>
+      <a href="https://eeditor.app">EEditor</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" style="padding:56px 0 32px">
+  <div class="wrap">
+    <h1>Embedding</h1>
+    <p class="lede">
+      The engine is a library first and a binary second. Hold it in your Rust program, or talk to it
+      over stdin and stdout from anything else.
+    </p>
+  </div>
+</header>
+
+<div class="doc">
+
+<section style="padding-top:24px">
+  <div class="wrap"><div class="prose">
+    <h2>From Rust</h2>
+<pre><code>[dependencies]
+eelisp = { git = <span class="st">"https://github.com/santacroce-tech/eelisp-rs"</span> }</code></pre>
+
+<pre><code><span class="kw">use</span> eelisp::Interpreter;
+
+<span class="kw">let</span> it = Interpreter::new();                      <span class="cm">// in-memory database</span>
+<span class="kw">let</span> it = Interpreter::with_database(<span class="st">"notes.db"</span>);   <span class="cm">// or on disk</span>
+
+<span class="kw">let</span> v = it.eval_str(<span class="st">"(+ 1 2)"</span>)?;                 <span class="cm">// → Value</span>
+<span class="kw">let</span> all = it.eval_all(<span class="st">"(def x 1) (* x 41)"</span>)?;    <span class="cm">// → Vec&lt;Value&gt;</span>
+<span class="kw">let</span> out = it.take_output();                      <span class="cm">// whatever print/println produced</span></code></pre>
+
+    <h3>The JSON boundary</h3>
+    <p>
+      An application usually wants JSON rather than <code>Value</code>. Two methods give it to you:
+    </p>
+<pre><code><span class="kw">let</span> json = it.eval_json(<span class="st">"(browse books)"</span>)?;   <span class="cm">// tagged JSON for one expression</span>
+<span class="kw">let</span> env  = it.eval_host(<span class="st">"(browse books)"</span>);     <span class="cm">// {ok, result, output} envelope — never panics</span></code></pre>
+    <p>
+      <code>eval_host</code> is the one to build a UI on: it always returns a well-formed envelope,
+      putting the error message in the same shape rather than raising.
+    </p>
+<pre><code>{ <span class="st">"ok"</span>: true,
+  <span class="st">"result"</span>: { <span class="st">"$tableView"</span>: { <span class="st">"table"</span>: <span class="st">"books"</span>, <span class="st">"columns"</span>: [...], <span class="st">"rows"</span>: [...] } },
+  <span class="st">"output"</span>: <span class="st">""</span> }</code></pre>
+    <p>
+      Values that have no JSON equivalent are tagged so a client can discriminate them:
+      <code>$tableView</code>, <code>$formView</code>, <code>$record</code>, <code>$resultSet</code>,
+      <code>$dict</code>, <code>$item</code>, <code>$sym</code> and <code>$kw</code>. That is how
+      EEditor turns <code>(browse books)</code> into a real grid instead of a string.
+    </p>
+
+    <h3>Holding it across threads</h3>
+    <p>
+      <code>Interpreter</code> is single-threaded by design. <code>EngineHandle</code> wraps it:
+      the interpreter lives on its own thread, and the handle you keep is <code>Send + Sync</code>,
+      which is what lets a Tauri application store it in application state.
+    </p>
+<pre><code><span class="kw">use</span> eelisp::server::EngineHandle;
+
+<span class="kw">let</span> engine = EngineHandle::spawn(<span class="st">":memory:"</span>.to_string());
+<span class="kw">let</span> envelope: String = engine.eval(<span class="st">"(+ 1 2)"</span>);   <span class="cm">// the {ok,result,output} JSON</span></code></pre>
+  </div></div>
+</section>
+
+<section class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>From any other language</h2>
+    <p>
+      <code>eelisp --serve</code> speaks one JSON object per line on stdin, and answers with one
+      JSON envelope per line on stdout. No sockets, no ports, no protocol library.
+    </p>
+<pre><code>$ eelisp --serve
+{"src": "(+ 1 2)"}
+{"ok":true,"result":3,"output":""}</code></pre>
+    <p>Driving it from Node is about ten lines:</p>
+<pre><code><span class="kw">import</span> { spawn } <span class="kw">from</span> <span class="st">"node:child_process"</span>;
+<span class="kw">import</span> readline <span class="kw">from</span> <span class="st">"node:readline"</span>;
+
+<span class="kw">const</span> child = spawn(<span class="st">"eelisp"</span>, [<span class="st">"--serve"</span>], { stdio: [<span class="st">"pipe"</span>, <span class="st">"pipe"</span>, <span class="st">"inherit"</span>] });
+<span class="kw">const</span> rl = readline.createInterface({ input: child.stdout });
+<span class="kw">const</span> queue = [];
+rl.on(<span class="st">"line"</span>, (l) => queue.shift()?.(JSON.parse(l)));
+
+<span class="kw">const</span> ev = (src) =>
+  <span class="kw">new</span> Promise((res) => (queue.push(res), child.stdin.write(JSON.stringify({ src }) + <span class="st">"\n"</span>)));
+
+<span class="kw">await</span> ev(<span class="st">"(deftable books (title:string))"</span>);</code></pre>
+    <p class="muted">
+      This is exactly how EEditor's browser development mode works, while the packaged app calls the
+      library directly.
+    </p>
+  </div></div>
+</section>
+
+<section>
+  <div class="wrap"><div class="prose">
+    <h2>Giving the language new powers</h2>
+    <p>
+      The editor functions — <code>buffer-text</code>, <code>cursor-pos</code>,
+      <code>replace-range</code> and the rest — are not built into the language. They are installed
+      by the host through callbacks, which is the intended way to extend EELisp: the engine stays
+      free of I/O and platform types, and the embedder decides what the language can reach.
+    </p>
+    <p>
+      That constraint is deliberate. The library has no threads and no I/O of its own, and no
+      platform types leak into the value representation, so the same engine can back a desktop app,
+      a phone app, a command line — and, with no change to this design, WebAssembly.
+    </p>
+  </div></div>
+</section>
+
+<section class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Building it</h2>
+<pre><code>git clone https://github.com/santacroce-tech/eelisp-rs
+cd eelisp-rs
+cargo test                          <span class="cm"># 74 tests</span>
+cargo build --release --bin eelisp</code></pre>
+    <p>
+      SQLite is compiled in (<code>rusqlite</code> with the bundled feature), so the binary has no
+      system database dependency. MIT licensed.
+    </p>
+  </div></div>
+</section>
+
+</div>
+
+<footer>
+  <div class="wrap foot-cols">
+    <div><p><strong>EELisp</strong><br><span class="muted">A Lisp for personal data.</span></p></div>
+    <div><p><a href="index.html">Home</a><br><a href="guide.html">Guide</a><br><a href="reference.html">Reference</a></p></div>
+    <div><p><a href="https://eeditor.app">EEditor — the app</a><br><a href="https://github.com/santacroce-tech/eelisp-rs">Source (MIT)</a></p></div>
+  </div>
+</footer>
+
+</body>
+</html>
