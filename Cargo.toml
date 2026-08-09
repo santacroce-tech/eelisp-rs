@@ -3,6 +3,8 @@ name = "eelisp"
 version = "0.2.0"
 edition = "2021"
 description = "A Lisp for personal data management — engine core (Rust rewrite of EELisp)"
+authors = ["Roberto Santacroce Martins <roberto@santacroce.xyz>"]
+repository = "https://github.com/santacroce-tech/eelisp-rs"
 license = "MIT"
 
 # The core is dependency-free and WASM-friendly on purpose: no threads, no I/O in the
