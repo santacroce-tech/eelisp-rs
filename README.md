@@ -33,8 +33,8 @@ match` bound; **views** (`defview/show/views/drop-view`, filtered + grouped, `ov
 `edit`/`defform`→`.formView`, with computed fields); a JSON serialization bridge — `eval_host(src)`
 returns a `{ok,result,output}` envelope and `eval_json(src)` returns the tagged JSON a TypeScript
 client discriminates (`$tableView`, `$formView`, `$record`, `$dict`, …); `print`/`println` output
-capture; the editor RPC (`buffer-text`, `current-file`, `cursor-pos`, `insert-at`, `replace-range`,
-`selection`, `set-cursor`) backed by host-installed callbacks; and `json-parse`/`json-stringify`.
+capture; the editor RPC (`buffer-text`, `current-file`, `current-dir`, `cursor-pos`, `insert-at`,
+`replace-range`, `selection`, `set-cursor`) backed by host-installed callbacks; and `json-parse`/`json-stringify`.
 _HTTP builtins (the one network dependency) are the small remaining piece._
 
 **Engine complete + native binding (roadmap step 5).** HTTP builtins (`http-get`/`http-post`, sync,

@@ -84,11 +84,22 @@ fn editor_read_callbacks() {
     let it = Interpreter::new();
     it.editor.borrow_mut().buffer_text = Some(Box::new(|| "the quick brown fox".to_string()));
     it.editor.borrow_mut().current_file = Some(Box::new(|| "/notes/todo.md".to_string()));
+    it.editor.borrow_mut().current_dir = Some(Box::new(|| "/notes".to_string()));
 
     assert_eq!(s(&it, "(buffer-text)"), "the quick brown fox");
     assert_eq!(s(&it, "(current-file)"), "/notes/todo.md");
+    assert_eq!(s(&it, "(current-dir)"), "/notes");
     // a script can process the buffer
     assert_eq!(s(&it, "(length (str-split (buffer-text) \" \"))"), "4");
+}
+
+/// Headless — no host, no filesystem. The reads answer with an empty string rather than blowing
+/// up, so a snippet written for the editor still runs in the CLI.
+#[test]
+fn editor_reads_are_inert_without_a_host() {
+    let it = Interpreter::new();
+    assert_eq!(s(&it, "(current-dir)"), "");
+    assert_eq!(s(&it, "(current-file)"), "");
 }
 
 #[test]

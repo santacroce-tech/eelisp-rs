@@ -74,6 +74,13 @@ fn main() {
 
     if !args.is_empty() {
         if args[0] == "--serve" {
+            // `--serve --workspace <dir>`: the dev bridge serves a folder, so tell the engine which
+            // one. Without it `(current-dir)` is empty here while the desktop app answers properly,
+            // and the same snippet would behave differently in the browser.
+            if let Some(dir) = args.iter().position(|a| a == "--workspace").and_then(|i| args.get(i + 1)) {
+                let dir = dir.clone();
+                it.editor.borrow_mut().current_dir = Some(Box::new(move || dir.clone()));
+            }
             run_serve(&it);
             return;
         }

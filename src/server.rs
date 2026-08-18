@@ -23,10 +23,19 @@ pub struct EngineHandle {
 impl EngineHandle {
     /// Spawn an interpreter thread backed by `db_path` (`:memory:` or a file).
     pub fn spawn(db_path: String) -> EngineHandle {
+        Self::spawn_with(db_path, |_| {})
+    }
+
+    /// Spawn an interpreter thread and let the host install its editor callbacks before the first
+    /// job runs. `setup` runs *on* the interpreter thread — the only place the `Rc`-based
+    /// `Interpreter` exists — so what it captures must be `Send`: an `Arc<Mutex<…>>` the host also
+    /// holds is the usual shape, and it keeps reading current rather than freezing a value here.
+    pub fn spawn_with(db_path: String, setup: impl FnOnce(&Interpreter) + Send + 'static) -> EngineHandle {
         let (tx, rx) = mpsc::channel::<Job>();
         let thread = thread::spawn(move || {
             let it = Interpreter::with_database(&db_path);
             it.set_echo(false); // output is captured into the envelope, not stdout
+            setup(&it);
             while let Ok(job) = rx.recv() {
                 match job {
                     Job::Eval(src, reply) => {

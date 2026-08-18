@@ -13,6 +13,9 @@ use crate::value::*;
 pub struct EditorHost {
     pub buffer_text: Option<Box<dyn Fn() -> String>>,
     pub current_file: Option<Box<dyn Fn() -> String>>,
+    /// The workspace root — the folder the host is editing, not the process's cwd. The engine
+    /// has no filesystem of its own, so "where am I" is a question only the host can answer.
+    pub current_dir: Option<Box<dyn Fn() -> String>>,
     pub cursor_pos: Option<Box<dyn Fn() -> i64>>,
     pub selection: Option<Box<dyn Fn() -> (i64, i64)>>,
     pub set_cursor: Option<Box<dyn Fn(i64)>>,
@@ -37,6 +40,12 @@ pub fn register(env: &Env, host: Host) {
         let h = host.clone();
         b(env, "current-file", move |_, _| {
             Ok(Value::Str(h.borrow().current_file.as_ref().map(|f| f()).unwrap_or_default()))
+        });
+    }
+    {
+        let h = host.clone();
+        b(env, "current-dir", move |_, _| {
+            Ok(Value::Str(h.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default()))
         });
     }
     {
