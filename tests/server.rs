@@ -55,3 +55,20 @@ fn apply_rules_batch_still_works_transactionally() {
         "5"
     );
 }
+
+/// The host installs its editor callbacks on the interpreter thread and keeps reading through a
+/// shared handle, so (current-dir) tracks the workspace instead of freezing at spawn time.
+#[test]
+fn spawn_with_installs_host_callbacks_that_stay_live() {
+    use std::sync::{Arc, Mutex};
+
+    let root = Arc::new(Mutex::new("/notes".to_string()));
+    let shared = root.clone();
+    let engine = EngineHandle::spawn_with(":memory:".into(), move |it| {
+        it.editor.borrow_mut().current_dir = Some(Box::new(move || shared.lock().unwrap().clone()));
+    });
+
+    assert!(engine.eval("(current-dir)").contains("/notes"));
+    *root.lock().unwrap() = "/elsewhere".to_string();
+    assert!(engine.eval("(current-dir)").contains("/elsewhere"));
+}
