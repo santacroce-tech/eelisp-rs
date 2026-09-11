@@ -9,6 +9,7 @@ use crate::editor::EditorHost;
 use crate::env::{self, Env};
 use crate::output::OutputState;
 use crate::value::{LispError, Value};
+use crate::docs::{self, SourceIndex};
 use crate::{agenda_builtins, builtins, db_builtins, editor, eval, output, parser, prelude};
 
 pub struct Interpreter {
@@ -18,6 +19,8 @@ pub struct Interpreter {
     pub output: Rc<RefCell<OutputState>>,
     /// Host-installed editor callbacks (buffer-text / insert-at / …). Empty ⇒ headless.
     pub editor: Rc<RefCell<EditorHost>>,
+    /// How each top-level definition was written — what `(source f)` reads back.
+    pub sources: Rc<RefCell<SourceIndex>>,
 }
 
 impl Interpreter {
@@ -47,7 +50,12 @@ impl Interpreter {
         let ed = Rc::new(RefCell::new(EditorHost::default()));
         editor::register(&global, ed.clone());
 
-        let it = Interpreter { global, database: db, agendas: reg, output: out, editor: ed };
+        // (functions …) / (source …) — needs the output channel and the definition index
+        let sources = Rc::new(RefCell::new(SourceIndex::default()));
+        docs::register(&global, out.clone(), sources.clone());
+
+        let it =
+            Interpreter { global, database: db, agendas: reg, output: out, editor: ed, sources };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
             panic!("prelude failed to load: {}", e);
         }
@@ -56,20 +64,22 @@ impl Interpreter {
 
     /// Evaluate all top-level forms, return the last result.
     pub fn eval_str(&self, src: &str) -> Result<Value, LispError> {
-        let forms = parser::parse(src)?;
+        let forms = parser::top_forms(src)?;
         let mut result = Value::Null;
         for f in forms {
-            result = eval::eval(f, self.global.clone())?;
+            result = eval::eval(f.value.clone(), self.global.clone())?;
+            self.sources.borrow_mut().record(&f);
         }
         Ok(result)
     }
 
     /// Evaluate all top-level forms, return each result.
     pub fn eval_all(&self, src: &str) -> Result<Vec<Value>, LispError> {
-        let forms = parser::parse(src)?;
+        let forms = parser::top_forms(src)?;
         let mut out = Vec::with_capacity(forms.len());
         for f in forms {
-            out.push(eval::eval(f, self.global.clone())?);
+            out.push(eval::eval(f.value.clone(), self.global.clone())?);
+            self.sources.borrow_mut().record(&f);
         }
         Ok(out)
     }

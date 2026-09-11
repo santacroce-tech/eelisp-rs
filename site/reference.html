@@ -27,8 +27,9 @@
   <div class="wrap">
     <h1>Reference</h1>
     <p class="lede">
-      16 special forms and 154 functions — the language core, the prelude written in EELisp itself,
-      the database, and the agenda.
+      21 special forms and 165 functions — the language core, the prelude written in EELisp itself,
+      the database, and the agenda. Type <code>(functions)</code> in a REPL and the engine counts them
+      back for you.
     </p>
   </div>
 </header>
@@ -47,6 +48,7 @@
         <li><a href="#dates">Dates</a></li>
         <li><a href="#io">Evaluation, JSON, network</a></li>
         <li><a href="#prelude">Prelude</a></li>
+        <li><a href="#self">Finding your way around</a></li>
         <li><a href="#db">Database</a></li>
         <li><a href="#agenda">Agenda</a></li>
         <li><a href="#editor">Editor RPC</a></li>
@@ -64,7 +66,7 @@
     <div class="table-wrap"><table>
       <tr><th>Form</th><th>Meaning</th></tr>
       <tr><td><code>(def name value)</code></td><td>define a global binding</td></tr>
-      <tr><td><code>(defn name (params) body…)</code></td><td>define a function</td></tr>
+      <tr><td><code>(defn name (params) body…)</code><br><code>(defun name (params) body…)</code></td><td>define a function</td></tr>
       <tr><td><code>(fn (params) body…)</code><br><code>(lambda (params) body…)</code></td><td>an anonymous function</td></tr>
       <tr><td><code>(let (a 1 b 2) body…)</code></td><td>local bindings, given as one flat list</td></tr>
       <tr><td><code>(set! name value)</code></td><td>reassign an existing binding</td></tr>
@@ -92,7 +94,7 @@
       <tr><td><code>mod</code></td><td>remainder</td></tr>
       <tr><td><code>abs · min · max</code></td><td></td></tr>
       <tr><td><code>floor · ceil · round</code></td><td></td></tr>
-      <tr><td><code>pow</code></td><td><code>(pow base exp)</code></td></tr>
+      <tr><td><code>pow</code> · <code>expt</code></td><td><code>(pow base exp)</code> — <code>expt</code> is the same function</td></tr>
       <tr><td><code>= · !=</code></td><td>equality</td></tr>
       <tr><td><code>&lt; · &gt; · &lt;= · &gt;=</code></td><td>ordering</td></tr>
       <tr><td><code>not</code></td><td>logical negation</td></tr>
@@ -219,7 +221,55 @@
   </div></div>
 </section>
 
-<section id="db" class="alt">
+<section id="self" class="alt">
+  <div class="wrap"><div class="prose">
+    <h2>Finding your way around</h2>
+    <p>
+      The language carries its own manual. Two functions, both meant to be typed at a REPL:
+      they print what they find and return <code>nil</code>.
+    </p>
+    <div class="table-wrap"><table>
+      <tr><th>Function</th><th>Notes</th></tr>
+      <tr><td><code>(functions)</code></td><td>every function, macro and special form in scope, with its call shape</td></tr>
+      <tr><td><code>(functions "str")</code></td><td>only the names containing <code>str</code>; a symbol or keyword works too</td></tr>
+      <tr><td><code>(source map)</code></td><td>one definition — the name is not evaluated, so <code>'map</code> and <code>"map"</code> also work</td></tr>
+    </table></div>
+    <p>
+      For anything written in EELisp, <code>(source f)</code> echoes the definition back <em>as it was
+      written</em>: the comment block above it, the indentation, the comments inside it. That is why
+      a <code>;;</code> note directly above a <code>defn</code> is worth writing — it is the function's
+      documentation, and nothing has to be repeated anywhere else.
+    </p>
+<pre><code>&gt; (source take)
+take — function
+
+  ;; The first n elements.  (take 2 '(1 2 3)) → (1 2)
+  (defn take (n lst)
+    (if (or (= n 0) (empty? lst))
+      (list)
+      (cons (head lst) (take (- n 1) (tail lst)))))
+</code></pre>
+    <p>
+      Builtins have no EELisp source to show, so <code>source</code> gives their manual entry
+      instead — signature, one line of prose, and a worked example.
+    </p>
+<pre><code>&gt; (source str-join)
+str-join — builtin
+
+  (str-join sep parts) → string
+  Joins a list with a separator. Either argument order is accepted.
+
+  (str-join "-" '("a" "b"))   → "a-b"
+</code></pre>
+    <p class="muted"><small>
+      A blank line, or any line with code on it, ends a comment block — so a comment only ever
+      documents the definition directly beneath it. A comment written <em>after</em> a definition on
+      the same line belongs to it too, which is how a file of one-line helpers documents itself.
+    </small></p>
+  </div></div>
+</section>
+
+<section id="db">
   <div class="wrap"><div class="prose">
     <h2>Database</h2>
     <div class="table-wrap"><table>
@@ -243,7 +293,7 @@
   </div></div>
 </section>
 
-<section id="agenda">
+<section id="agenda" class="alt">
   <div class="wrap"><div class="prose">
     <h2>Agenda</h2>
 
@@ -288,7 +338,7 @@
   </div></div>
 </section>
 
-<section id="editor" class="alt">
+<section id="editor">
   <div class="wrap"><div class="prose">
     <h2>Editor RPC</h2>
     <p>

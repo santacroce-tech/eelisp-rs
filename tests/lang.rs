@@ -189,6 +189,32 @@ fn eval_def_defn_fn() {
 }
 
 #[test]
+fn eval_defun_and_expt_aliases() {
+    // Common Lisp spellings of forms EELisp already had — code pasted from a CL
+    // reference should run unchanged.
+    let i = Interpreter::new();
+    i.eval_str("(defun square (x) (* x x))").unwrap();
+    assert_eq!(s(&i, "(square 5)"), "25");
+    // a CL docstring is just a string in body position: ignored, not an error
+    i.eval_str("(defun cube (x) \"Return X cubed.\" (* x x x))").unwrap();
+    assert_eq!(s(&i, "(cube 3)"), "27");
+    assert_eq!(s(&i, "((lambda (x) (+ x 1)) 41)"), "42");
+    assert_eq!(s(&i, "(expt 2 10)"), "1024");
+}
+
+#[test]
+fn definition_forms_reject_short_forms() {
+    // These used to index past the end and panic, taking the engine thread with them.
+    let i = Interpreter::new();
+    for src in ["(def x)", "(defn f)", "(defun f)", "(fn)", "(lambda)", "(defmacro m)"] {
+        assert!(i.eval_str(src).is_err(), "{src} should be a syntax error, not a panic");
+    }
+    // the error names the spelling the user actually wrote
+    let err = format!("{:?}", i.eval_str("(defun f)").unwrap_err());
+    assert!(err.contains("defun"), "{err}");
+}
+
+#[test]
 fn eval_if_cond_let_do() {
     let i = Interpreter::new();
     assert_eq!(s(&i, "(if true 1 2)"), "1");

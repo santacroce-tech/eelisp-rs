@@ -36,6 +36,7 @@ pub fn register(env: &Env) {
     b!("ceil", ceilf);
     b!("round", roundf);
     b!("pow", powf);
+    b!("expt", powf); // Common Lisp / Scheme spelling of pow
     // comparison / logic
     b!("=", eqf);
     b!("!=", nef);

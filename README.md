@@ -42,8 +42,16 @@ _HTTP builtins (the one network dependency) are the small remaining piece._
 (`src/server.rs`) owns the interpreter on a thread and exposes a `Send + Sync` `eval(src) -> String`
 for a Tauri app to hold in state; `eelisp --serve` gives the same as a JSON-line stdin/stdout RPC.
 
-**Test suite: GREEN — 72 tests, 0 ignored.** `tests/lang.rs` (25) + `tests/db_agenda.rs` (27) +
-`tests/agenda_advanced.rs` (9) + `tests/host.rs` (7) + `tests/server.rs` (4).
+**Self-documenting (`src/docs.rs`).** `(functions)` lists every function, macro and special form in
+scope — `(functions "str")` filters by name — and `(source f)` shows one. For anything written in
+EELisp that is the definition *as written*: the parser keeps each top-level form's text and the `;;`
+comment block above it (`parser::top_forms` → `SourceIndex`), so a comment written over a `defn` is
+that function's documentation and lives nowhere else. Builtins have no EELisp source, so they get a
+hand-written manual entry instead — signature, one line, worked example — and a test asserts the
+manual and the environment name exactly the same set.
+
+**Test suite: GREEN — 106 tests, 0 ignored.** `tests/lang.rs` (28) + `tests/docs.rs` (28) +
+`tests/db_agenda.rs` (27) + `tests/agenda_advanced.rs` (10) + `tests/host.rs` (8) + `tests/server.rs` (5).
 
 **Remaining**: the WASM binding (`wasm-bindgen`) — deferred; it needs a non-C SQLite backend
 (wa-sqlite/OPFS) behind the `database` module's method surface. The editor RPC over the *threaded*
@@ -76,15 +84,17 @@ cargo run -- script.el                       # run a file
 src/
   value.rs        Value enum, OrderedDict, LispError
   lexer.rs        tokenizer
-  parser.rs       reader (quote/quasi/unquote, [..]=list, {..}=dict)
+  parser.rs       reader (quote/quasi/unquote, [..]=list, {..}=dict) + top_forms (text + comments)
   env.rs          lexical scope chain
   eval.rs         TCO evaluator: special forms, macros, quasiquote, application
   builtins.rs     arithmetic / comparison / string / list / dict / type / io / meta
   printer.rs      Value -> string
+  docs.rs         (functions …) / (source …) — the builtin manual + the definition index
   prelude.rs      standard library (EELisp source)
   interpreter.rs  high-level API (new / eval_str / eval_all)
   bin/eelisp.rs   REPL + file/-e runner
 tests/lang.rs     acceptance spec
+tests/docs.rs     (functions …) / (source …), and the manual vs. the environment
 ```
 
 ## Roadmap (from ANALYSIS §8)

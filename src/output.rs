@@ -16,7 +16,9 @@ pub struct OutputState {
 }
 
 impl OutputState {
-    fn emit(&mut self, s: &str) {
+    /// Send text to the host (and to stdout when echoing). `print`, `println` and the
+    /// documentation builtins all go through here.
+    pub fn emit(&mut self, s: &str) {
         if self.echo {
             print!("{}", s);
             std::io::stdout().flush().ok();

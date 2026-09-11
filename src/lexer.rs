@@ -2,6 +2,10 @@
 //! an atom is read whole and then classified. `-5` is a negative number; `-` (and `+ * /`,
 //! `<=` etc.) are symbols. There is NO operator-number splitting and NO positional `-`
 //! heuristic — write `(- 1 3)` for subtraction, `(+ 1 3)` for addition.
+//!
+//! Tokens carry their **char span** in the source. Nothing in evaluation needs it, but
+//! `(source f)` does: to echo a definition the way it was written — comments, indentation and
+//! all — something has to remember where in the text each top-level form began and ended.
 
 use crate::value::LispError;
 
@@ -23,15 +27,30 @@ pub enum Token {
     Sym(String),
 }
 
+/// A token plus the half-open char range `[start, end)` it occupies in the source.
+#[derive(Clone, Debug)]
+pub struct Spanned {
+    pub tok: Token,
+    pub start: usize,
+    pub end: usize,
+}
+
 fn is_delim(c: char) -> bool {
     c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | '\'' | '`' | ',')
 }
 
+/// Tokens only — the parser's fast path and every existing caller.
 pub fn lex(src: &str) -> Result<Vec<Token>, LispError> {
+    Ok(lex_spanned(src)?.into_iter().map(|s| s.tok).collect())
+}
+
+/// Tokens with their source spans. Comments and whitespace are skipped as usual; they are
+/// recovered later from the raw text between spans (see `parser::top_forms`).
+pub fn lex_spanned(src: &str) -> Result<Vec<Spanned>, LispError> {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
     let mut i = 0;
-    let mut toks = Vec::new();
+    let mut toks: Vec<Spanned> = Vec::new();
 
     while i < n {
         let c = chars[i];
@@ -45,46 +64,47 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LispError> {
             }
             continue;
         }
-        match c {
+        let start = i;
+        let tok = match c {
             '(' => {
-                toks.push(Token::LParen);
                 i += 1;
+                Token::LParen
             }
             ')' => {
-                toks.push(Token::RParen);
                 i += 1;
+                Token::RParen
             }
             '[' => {
-                toks.push(Token::LBracket);
                 i += 1;
+                Token::LBracket
             }
             ']' => {
-                toks.push(Token::RBracket);
                 i += 1;
+                Token::RBracket
             }
             '{' => {
-                toks.push(Token::LBrace);
                 i += 1;
+                Token::LBrace
             }
             '}' => {
-                toks.push(Token::RBrace);
                 i += 1;
+                Token::RBrace
             }
             '\'' => {
-                toks.push(Token::Quote);
                 i += 1;
+                Token::Quote
             }
             '`' => {
-                toks.push(Token::Quasi);
                 i += 1;
+                Token::Quasi
             }
             ',' => {
                 if i + 1 < n && chars[i + 1] == '@' {
-                    toks.push(Token::UnquoteSplice);
                     i += 2;
+                    Token::UnquoteSplice
                 } else {
-                    toks.push(Token::Unquote);
                     i += 1;
+                    Token::Unquote
                 }
             }
             '"' => {
@@ -114,23 +134,23 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LispError> {
                     return Err(LispError::Parse("unterminated string".into()));
                 }
                 i += 1; // closing quote
-                toks.push(Token::Str(s));
+                Token::Str(s)
             }
             _ => {
-                let start = i;
                 while i < n && !is_delim(chars[i]) {
                     i += 1;
                 }
                 let atom: String = chars[start..i].iter().collect();
                 if let Some(rest) = atom.strip_prefix(':') {
-                    toks.push(Token::Kw(rest.to_string()));
+                    Token::Kw(rest.to_string())
                 } else if let Ok(num) = atom.parse::<f64>() {
-                    toks.push(Token::Num(num));
+                    Token::Num(num)
                 } else {
-                    toks.push(Token::Sym(atom));
+                    Token::Sym(atom)
                 }
             }
-        }
+        };
+        toks.push(Spanned { tok, start, end: i });
     }
     Ok(toks)
 }

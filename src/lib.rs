@@ -17,6 +17,7 @@ pub mod builtins;
 pub mod database;
 pub mod dates;
 pub mod db_builtins;
+pub mod docs;
 pub mod editor;
 pub mod env;
 pub mod eval;
