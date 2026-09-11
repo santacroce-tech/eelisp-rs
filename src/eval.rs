@@ -53,7 +53,9 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             continue;
                         }
                         "def" => return eval_def(&items, &env),
-                        "defn" => return eval_defn(&items, &env),
+                        // `defun` is the Common Lisp spelling of the same form — accepted so
+                        // code pasted from a CL reference runs unchanged.
+                        "defn" | "defun" => return eval_defn(&items, &env),
                         "fn" | "lambda" => return eval_fn(&items, &env),
                         "defmacro" => return eval_defmacro(&items, &env),
                         "set!" => {
@@ -355,7 +357,19 @@ fn parse_params(spec: &[Value]) -> Result<(Vec<Symbol>, Option<Symbol>), LispErr
     Ok((params, rest))
 }
 
+/// The head symbol of a form, for error messages — a form reached through an alias
+/// (`defun` for `defn`, `lambda` for `fn`) should be named the way it was written.
+fn head_of<'a>(items: &'a [Value], fallback: &'a str) -> &'a str {
+    match items.first() {
+        Some(Value::Symbol(s)) => s.as_str(),
+        _ => fallback,
+    }
+}
+
 fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
+    if items.len() < 3 {
+        return Err(LispError::InvalidSyntax("def expects a name and a value".into()));
+    }
     match &items[1] {
         Value::Symbol(name) => {
             let v = eval(items[2].clone(), env.clone())?;
@@ -385,6 +399,10 @@ fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
 }
 
 fn eval_defn(items: &[Value], env: &Env) -> Result<Value, LispError> {
+    if items.len() < 3 {
+        let head = head_of(items, "defn");
+        return Err(LispError::InvalidSyntax(format!("{head} expects a name and a parameter list")));
+    }
     if let (Value::Symbol(name), Value::List(spec)) = (&items[1], &items[2]) {
         let (params, rest) = parse_params(spec)?;
         let f = Function {
@@ -398,11 +416,16 @@ fn eval_defn(items: &[Value], env: &Env) -> Result<Value, LispError> {
         env::define(env, name, val.clone());
         Ok(val)
     } else {
-        Err(LispError::InvalidSyntax("bad defn".into()))
+        // Name the form the user actually wrote (`defn` or `defun`).
+        Err(LispError::InvalidSyntax(format!("bad {}", head_of(items, "defn"))))
     }
 }
 
 fn eval_fn(items: &[Value], env: &Env) -> Result<Value, LispError> {
+    if items.len() < 2 {
+        let head = head_of(items, "fn");
+        return Err(LispError::InvalidSyntax(format!("{head} expects a parameter list")));
+    }
     if let Value::List(spec) = &items[1] {
         let (params, rest) = parse_params(spec)?;
         Ok(Value::Function(Rc::new(Function {
@@ -418,6 +441,9 @@ fn eval_fn(items: &[Value], env: &Env) -> Result<Value, LispError> {
 }
 
 fn eval_defmacro(items: &[Value], env: &Env) -> Result<Value, LispError> {
+    if items.len() < 3 {
+        return Err(LispError::InvalidSyntax("defmacro expects a name and a parameter list".into()));
+    }
     if let (Value::Symbol(name), Value::List(spec)) = (&items[1], &items[2]) {
         let (params, rest) = parse_params(spec)?;
         let m = Macro {
