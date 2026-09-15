@@ -98,6 +98,34 @@ fn item_json(it: &Item) -> J {
     })
 }
 
+/// The inverse of `to_json` for data: scalars, lists, `$sym`, `$kw` and `$dict` come back as the
+/// values they were. Anything else — an object without one of those tags — reads as plain JSON.
+/// Used where the engine stores values of its own (a sheet's computed cells).
+pub fn from_tagged_json(j: &J) -> Value {
+    match j {
+        J::Array(a) => Value::List(std::rc::Rc::new(a.iter().map(from_tagged_json).collect())),
+        J::Object(m) if m.len() == 1 => {
+            if let Some(s) = m.get("$sym").and_then(|v| v.as_str()) {
+                return Value::Symbol(s.to_string());
+            }
+            if let Some(k) = m.get("$kw").and_then(|v| v.as_str()) {
+                return Value::Keyword(k.to_string());
+            }
+            if let Some(pairs) = m.get("$dict").and_then(|v| v.as_array()) {
+                let mut d = OrderedDict::default();
+                for pair in pairs {
+                    if let (Some(k), Some(v)) = (pair.get(0).and_then(|k| k.as_str()), pair.get(1)) {
+                        d.insert(k.to_string(), from_tagged_json(v));
+                    }
+                }
+                return Value::Dict(std::rc::Rc::new(d));
+            }
+            from_json(j)
+        }
+        _ => from_json(j),
+    }
+}
+
 /// Parse plain JSON (e.g. an API payload) into a Value: objects→dicts (keys sorted, like EELisp),
 /// arrays→lists, with scalars mapped directly. Used by `json-parse`.
 pub fn from_json(j: &J) -> Value {

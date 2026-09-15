@@ -32,6 +32,8 @@ pub fn register(env: &Env) {
     b!("abs", absf);
     b!("min", minf);
     b!("max", maxf);
+    b!("sum", sumf);
+    b!("avg", avgf);
     b!("floor", floorf);
     b!("ceil", ceilf);
     b!("round", roundf);
@@ -352,19 +354,50 @@ fn modulo(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn absf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Number(as_num(&args[0])?.abs()))
 }
-fn minf(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    let mut m = as_num(&args[0])?;
-    for a in &args[1..] {
-        m = m.min(as_num(a)?);
+/// The numbers in a spreadsheet-style argument list. A list is searched — so `(sum B1:B9)` reads a
+/// range — and inside one, blanks (nil) and text are skipped, the way a spreadsheet skips them. An
+/// argument given directly must be a number, a list or nil: `(sum "3")` is a mistake, not a zero.
+fn numbers_in(args: &[Value], out: &mut Vec<f64>) -> Result<(), LispError> {
+    fn walk(v: &Value, out: &mut Vec<f64>) {
+        match v {
+            Value::Number(n) => out.push(*n),
+            Value::List(items) => items.iter().for_each(|i| walk(i, out)),
+            _ => {}
+        }
     }
-    Ok(Value::Number(m))
+    for a in args {
+        match a {
+            Value::Number(_) | Value::List(_) => walk(a, out),
+            Value::Null => {}
+            other => {
+                return Err(LispError::TypeMismatch { expected: "number or list".into(), got: type_name(other) })
+            }
+        }
+    }
+    Ok(())
+}
+fn some_numbers(args: &[Value], name: &str) -> Result<Vec<f64>, LispError> {
+    let mut ns = Vec::new();
+    numbers_in(args, &mut ns)?;
+    if ns.is_empty() {
+        return Err(LispError::Runtime(format!("{} needs at least one number", name)));
+    }
+    Ok(ns)
+}
+fn minf(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Number(some_numbers(args, "min")?.into_iter().fold(f64::INFINITY, f64::min)))
 }
 fn maxf(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    let mut m = as_num(&args[0])?;
-    for a in &args[1..] {
-        m = m.max(as_num(a)?);
-    }
-    Ok(Value::Number(m))
+    Ok(Value::Number(some_numbers(args, "max")?.into_iter().fold(f64::NEG_INFINITY, f64::max)))
+}
+fn sumf(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let mut ns = Vec::new();
+    numbers_in(args, &mut ns)?;
+    Ok(Value::Number(ns.iter().sum()))
+}
+fn avgf(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let ns = some_numbers(args, "avg")?;
+    Ok(Value::Number(ns.iter().sum::<f64>() / ns.len() as f64))
 }
 fn floorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Number(as_num(&args[0])?.floor()))
