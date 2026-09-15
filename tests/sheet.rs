@@ -368,6 +368,14 @@ fn formats_merge_and_clear() {
     ev(&it, r#"(sheet-format "Budget" "A1" nil)"#);
     assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(":cells ()"), "a blank, unformatted cell is gone");
     assert!(err(&it, r#"(sheet-format "Budget" "A1" {:bold '(1)})"#).contains("must be a string, number, bool or nil"));
+
+    // a block sets each cell's format exactly — how undo puts back formats that differed
+    ev(&it, r#"(sheet-format "Budget" "A1:B1" {:italic true})"#);
+    ev(&it, r#"(sheet-format "Budget" "A1" '(({:bold true} nil)))"#);
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#"(0 0 "" nil nil {:bold true})"#), "replaced, not merged: {payload}");
+    assert!(!payload.contains("(0 1 "), "nil cleared B1: {payload}");
+    assert!(err(&it, r#"(sheet-format "Budget" "A1" '((1)))"#).contains("a dict or nil"));
 }
 
 // ── inserting and deleting rows and columns ──────────────────────────

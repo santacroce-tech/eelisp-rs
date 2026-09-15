@@ -137,9 +137,20 @@ pub fn register(env: &Env, host: Host) {
         let changes = match args.get(2) {
             None | Some(Value::Null) => None,
             Some(Value::Dict(d)) => Some(format_changes(d)?),
+            // a block of rows, one format (or nil) per cell, set exactly rather than merged
+            Some(Value::List(rows)) => {
+                let block = format_block(rows)?;
+                let height = block.len() as u64;
+                let width = block.iter().map(|r| r.len()).max().unwrap_or(0) as u64;
+                if area.start.row as u64 + height > MAX_ROWS as u64 || area.start.col as u64 + width > MAX_COLS as u64 {
+                    return Err(fail(format!("sheet-format: a {height}×{width} block doesn't fit at {}", area.start.a1())));
+                }
+                writable(reg, "sheet-format")?;
+                return change(reg, &path, env, |sheet| Ok((vec![], sheet.stage_formats(area.start, block))));
+            }
             Some(other) => {
                 return Err(fail(format!(
-                    "sheet-format takes a dict like {{:num \"currency\" :dp 2}}, or nil to clear — got {}",
+                    "sheet-format takes a dict like {{:num \"currency\" :dp 2}}, nil to clear, or rows of formats — got {}",
                     type_name(other)
                 )))
             }
@@ -441,6 +452,27 @@ fn block_of(v: &Value, input: fn(&Value) -> String) -> Vec<Vec<String>> {
         Value::List(items) => vec![items.iter().map(input).collect()],
         other => vec![vec![input(other)]],
     }
+}
+
+/// Rows of formats for `sheet-format`'s block form: each a dict, or nil for none.
+fn format_block(rows: &[Value]) -> Result<Vec<Vec<Option<Map<String, J>>>>, LispError> {
+    rows.iter()
+        .map(|row| match row {
+            Value::List(cells) => cells
+                .iter()
+                .map(|c| match c {
+                    Value::Null => Ok(None),
+                    Value::Dict(d) => {
+                        let mut m = format_changes(d)?;
+                        m.retain(|_, v| !v.is_null()); // an exact format has no keys to remove
+                        Ok(Some(m))
+                    }
+                    other => Err(fail(format!("sheet-format: each cell's format is a dict or nil — got {}", type_name(other)))),
+                })
+                .collect(),
+            other => Err(fail(format!("sheet-format: a block is a list of rows — got {}", type_name(other)))),
+        })
+        .collect()
 }
 
 /// `{:num "currency" :dp 2 :bold true}` → the JSON object stored with each cell. Nil removes a key.

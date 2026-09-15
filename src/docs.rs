@@ -690,7 +690,7 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-put \"Report\" \"A1\" (query contacts :order \"name\"))"),
     doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the database, other sheets or the clock, which aren't tracked.",
          "(sheet-recalc \"Budget\")"),
-    doc!("sheet-format", "(sheet-format name area fmt) → list", "Merges a format into every cell of an area — a key set to nil is removed, and a nil format clears it. The keys are the host's: :num, :dp, :bold, :italic, :align.",
+    doc!("sheet-format", "(sheet-format name area fmt) → list", "Merges a format into every cell of an area — a key set to nil is removed, and a nil format clears it. Given rows of formats instead, sets each cell's exactly from the area's corner. The keys are the host's: :num, :dp, :cur, :bold, :italic, :align.",
          "(sheet-format \"Budget\" \"B1:B9\" {:num \"currency\" :dp 2})"),
     doc!("sheet-col-width", "(sheet-col-width name col width) → nil", "A column's width, or nil for the default.", "(sheet-col-width \"Budget\" \"A\" 160)"),
     doc!("sheet-insert-rows", "(sheet-insert-rows name row n) → dict", "Inserts n rows (default 1) before a row numbered from 1. Formulas are rewritten to follow their cells.",

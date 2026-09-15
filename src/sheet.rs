@@ -514,9 +514,8 @@ impl Sheet {
         }
         let mut touched = Vec::new();
         for at in area.cells() {
-            let cell = self.cells.entry(at).or_insert_with(CellData::empty);
             let mut fmt = match changes {
-                Some(_) => cell.fmt.take().unwrap_or_default(),
+                Some(_) => self.cells.get(&at).and_then(|c| c.fmt.clone()).unwrap_or_default(),
                 None => Map::new(),
             };
             for (k, v) in changes.into_iter().flatten() {
@@ -526,13 +525,32 @@ impl Sheet {
                     fmt.insert(k.clone(), v.clone());
                 }
             }
-            cell.fmt = (!fmt.is_empty()).then_some(fmt);
-            if cell.is_blank() {
-                self.cells.remove(&at);
-            }
+            self.put_format(at, fmt);
             touched.push(at);
         }
         Ok(touched)
+    }
+
+    /// Set each cell's format exactly — a block of rows from `origin`, `None` for no format. What
+    /// undo needs: putting back formats that differed from cell to cell.
+    pub fn stage_formats(&mut self, origin: CellRef, rows: Vec<Vec<Option<Map<String, J>>>>) -> Vec<CellRef> {
+        let mut touched = Vec::new();
+        for (r, row) in rows.into_iter().enumerate() {
+            for (c, fmt) in row.into_iter().enumerate() {
+                let at = CellRef::new(origin.row + r as u32, origin.col + c as u32);
+                self.put_format(at, fmt.unwrap_or_default());
+                touched.push(at);
+            }
+        }
+        touched
+    }
+
+    fn put_format(&mut self, at: CellRef, fmt: Map<String, J>) {
+        let cell = self.cells.entry(at).or_insert_with(CellData::empty);
+        cell.fmt = (!fmt.is_empty()).then_some(fmt);
+        if cell.is_blank() {
+            self.cells.remove(&at);
+        }
     }
 
     /// Write these cells — a cell no longer in memory is deleted — and bump the version, in one
