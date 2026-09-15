@@ -50,8 +50,20 @@ that function's documentation and lives nowhere else. Builtins have no EELisp so
 hand-written manual entry instead — signature, one line, worked example — and a test asserts the
 manual and the environment name exactly the same set.
 
-**Test suite: GREEN — 106 tests, 0 ignored.** `tests/lang.rs` (28) + `tests/docs.rs` (28) +
-`tests/db_agenda.rs` (27) + `tests/agenda_advanced.rs` (10) + `tests/host.rs` (8) + `tests/server.rs` (5).
+**A database that persists (`src/interpreter.rs`, `src/server.rs`).** A host names a file —
+`EngineHandle::spawn(path)`, `eelisp --serve --db <file>` — and a running engine can move to another
+with `open_database` when the host's workspace changes. A file that can't be opened leaves the engine
+running in memory rather than dead, and `(database-info)` says why.
+
+**Sheets (`src/sheet_ref.rs`, `src/sheet.rs`, `src/sheet_builtins.rs`).** A grid whose formulas are
+EELisp — `=(sum B1:B2)`, where uppercase `C3` and `A1:C9` are cell values — each sheet a SQLite file.
+A change recalculates its dependents in order (an iterative Tarjan finds cycles); results are stored,
+so opening a sheet runs nothing; inserting or deleting rows and columns rewrites references in the
+formula's *text*, keeping its spacing and comments. `sheet-new/open/get/rows/set/put/recalc/format/…`.
+
+**Test suite: GREEN — 139 tests, 0 ignored.** `tests/lang.rs` (28) + `tests/docs.rs` (28) +
+`tests/db_agenda.rs` (27) + `tests/sheet.rs` (27) + `tests/agenda_advanced.rs` (10) +
+`tests/host.rs` (8) + `tests/database.rs` (6) + `tests/server.rs` (5).
 
 **Remaining**: the WASM binding (`wasm-bindgen`) — deferred; it needs a non-C SQLite backend
 (wa-sqlite/OPFS) behind the `database` module's method surface. The editor RPC over the *threaded*
@@ -90,11 +102,17 @@ src/
   builtins.rs     arithmetic / comparison / string / list / dict / type / io / meta
   printer.rs      Value -> string
   docs.rs         (functions …) / (source …) — the builtin manual + the definition index
+  database.rs     the dBASE-style SQLite store
+  sheet_ref.rs    A1 addressing; rewriting a formula's references when rows/columns move
+  sheet.rs        a sheet: its file, cells, dependency graph and recalculation plan
+  sheet_builtins.rs  the sheet-* functions, and the recalculation loop
   prelude.rs      standard library (EELisp source)
   interpreter.rs  high-level API (new / eval_str / eval_all)
   bin/eelisp.rs   REPL + file/-e runner
 tests/lang.rs     acceptance spec
 tests/docs.rs     (functions …) / (source …), and the manual vs. the environment
+tests/database.rs a database that outlives the process
+tests/sheet.rs    sheets: addressing, recalculation, cycles, persistence, rows and columns
 ```
 
 ## Roadmap (from ANALYSIS §8)

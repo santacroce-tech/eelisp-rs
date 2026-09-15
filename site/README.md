@@ -40,6 +40,7 @@ builtins:
 grep -o 'b!("[^"]*"' src/builtins.rs | sed 's/b!("//;s/"//'          # core
 grep -oE 'define_db\(env, "[^"]+"' src/db_builtins.rs                # database
 grep -oE 'defb\(env, "[^"]+"' src/agenda_builtins.rs                 # agenda
+grep -oE '"sheet-[a-z-]+"' src/sheet_builtins.rs | sort -u              # sheets
 grep -oE '\(def(n|macro)? +[a-z][a-z0-9!?*<>=/-]*' src/prelude.rs    # prelude
 ```
 
