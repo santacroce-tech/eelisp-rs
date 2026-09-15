@@ -603,6 +603,8 @@ pub static DATABASE: &[Entry] = &[
     doc!("tables", "(tables) → list", "The names of every defined table.", "(tables)   → (\"contacts\")"),
     doc!("describe", "(describe table) → table", "The schema of a table: its fields and their types.", "(describe contacts)"),
     doc!("drop-table", "(drop-table table) → bool", "Deletes a table and everything in it.", "(drop-table contacts)"),
+    doc!("database-info", "(database-info) → dict", "Which database file the tables and agenda live in — `:memory:` when nothing is kept. `:error` says why, when the host asked for a file that couldn't be opened.",
+         "(database-info)   → {:path \"/Users/me/notes/.eeditor/eeditor.db\"}"),
     doc!("browse", "(browse table) → table-view", "An interactive grid of the rows — a widget in the editor, an ASCII table on the command line.",
          "(browse contacts)"),
     doc!("edit", "(edit table id) → form-view", "An interactive form for one record.", "(edit contacts 1)"),

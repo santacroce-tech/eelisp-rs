@@ -2,6 +2,8 @@
 //!   eelisp            — REPL
 //!   eelisp <file>     — run a file
 //!   eelisp -e "<expr>"— evaluate one expression
+//!   eelisp --serve [--workspace <dir>] [--db <file>]
+//!                     — JSON-line RPC for a host; `--db` keeps tables and agenda in a file
 
 use std::io::{self, BufRead, Write};
 
@@ -69,21 +71,35 @@ fn run_serve(it: &Interpreter) {
 }
 
 fn main() {
-    let it = Interpreter::new();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
 
-    if !args.is_empty() {
-        if args[0] == "--serve" {
-            // `--serve --workspace <dir>`: the dev bridge serves a folder, so tell the engine which
-            // one. Without it `(current-dir)` is empty here while the desktop app answers properly,
-            // and the same snippet would behave differently in the browser.
-            if let Some(dir) = args.iter().position(|a| a == "--workspace").and_then(|i| args.get(i + 1)) {
-                let dir = dir.clone();
-                it.editor.borrow_mut().current_dir = Some(Box::new(move || dir.clone()));
+    if args.first().map(String::as_str) == Some("--serve") {
+        // `--db <file>`: a host that wants its data kept names the file. Without it the engine is
+        // in memory, as it always was — the smoke test relies on starting clean. A file that
+        // can't be opened doesn't stop the server: it runs in memory and says so.
+        let it = match flag("--db") {
+            Some(db) => {
+                let it = Interpreter::with_database_or_memory(&db);
+                if let Some(e) = it.database_error.borrow().as_ref() {
+                    eprintln!("[eelisp] {} — running in memory", e);
+                }
+                it
             }
-            run_serve(&it);
-            return;
+            None => Interpreter::new(),
+        };
+        // `--workspace <dir>`: the dev bridge serves a folder, so tell the engine which one.
+        // Without it `(current-dir)` is empty here while the desktop app answers properly, and the
+        // same snippet would behave differently in the browser.
+        if let Some(dir) = flag("--workspace") {
+            it.editor.borrow_mut().current_dir = Some(Box::new(move || dir.clone()));
         }
+        run_serve(&it);
+        return;
+    }
+
+    let it = Interpreter::new();
+    if !args.is_empty() {
         if args[0] == "-e" {
             let src = args[1..].join(" ");
             match it.eval_str(&src) {
