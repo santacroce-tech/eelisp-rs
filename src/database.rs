@@ -21,6 +21,8 @@ use crate::value::*;
 pub struct Database {
     conn: Connection,
     defs: HashMap<String, TableDef>,
+    /// What it was opened from — a file path, or `:memory:`.
+    path: String,
 }
 
 fn db_err(e: impl std::fmt::Display) -> LispError {
@@ -40,12 +42,16 @@ pub struct Query {
 impl Database {
     pub fn open(path: &str) -> Result<Self, LispError> {
         let conn = Connection::open(path).map_err(db_err)?;
+        // Two hosts can share a workspace (the desktop app and the dev bridge): wait out the
+        // other's write instead of failing with `database is locked`. The journal stays SQLite's
+        // default rollback mode, so a file in a synced folder never grows -wal/-shm sidecars.
+        conn.busy_timeout(std::time::Duration::from_secs(2)).map_err(db_err)?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _eelisp_schema (name TEXT PRIMARY KEY, def TEXT NOT NULL)",
             [],
         )
         .map_err(db_err)?;
-        let mut db = Database { conn, defs: HashMap::new() };
+        let mut db = Database { conn, defs: HashMap::new(), path: path.to_string() };
         db.load_defs()?;
         Ok(db)
     }
@@ -62,6 +68,10 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
     }
 
     pub fn list_tables(&self) -> Vec<String> {

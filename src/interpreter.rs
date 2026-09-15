@@ -21,6 +21,9 @@ pub struct Interpreter {
     pub editor: Rc<RefCell<EditorHost>>,
     /// How each top-level definition was written — what `(source f)` reads back.
     pub sources: Rc<RefCell<SourceIndex>>,
+    /// Why the database in use isn't the one the host asked for, when it isn't. `(database-info)`
+    /// reports it, so a host can tell the user their data is not being saved.
+    pub database_error: Rc<RefCell<Option<String>>>,
 }
 
 impl Interpreter {
@@ -29,17 +32,40 @@ impl Interpreter {
         Self::with_database(":memory:")
     }
 
-    /// Open (or create) a database at `path` — `:memory:` for in-memory.
+    /// Open (or create) a database at `path` — `:memory:` for in-memory. Panics if it can't be
+    /// opened; a host that must keep running uses [`Interpreter::with_database_or_memory`].
     pub fn with_database(path: &str) -> Self {
+        Self::try_with_database(path).unwrap_or_else(|e| panic!("failed to open database {}: {}", path, e))
+    }
+
+    /// Open (or create) a database at `path`, creating its folder if needed.
+    pub fn try_with_database(path: &str) -> Result<Self, LispError> {
+        Ok(Self::build(open_database_file(path)?))
+    }
+
+    /// Open `path`, or — if that fails — run on an in-memory database and remember why, so the
+    /// engine still answers and `(database-info)` can say the data isn't being kept.
+    pub fn with_database_or_memory(path: &str) -> Self {
+        match Self::try_with_database(path) {
+            Ok(it) => it,
+            Err(e) => {
+                let it = Self::new();
+                *it.database_error.borrow_mut() = Some(format!("couldn't open {}: {}", path, e));
+                it
+            }
+        }
+    }
+
+    fn build(database: Database) -> Self {
         let global = env::root();
         builtins::register(&global);
 
-        let mut database = Database::open(path).expect("failed to open database");
-        agenda::ensure_agenda_tables(&mut database).expect("failed to create agenda tables");
+        let reg = Rc::new(RefCell::new(Agendas::new(agenda::agenda_name_from_path(database.path()))));
         let db = Rc::new(RefCell::new(database));
-        let reg = Rc::new(RefCell::new(Agendas::new(agenda::agenda_name_from_path(path))));
+        let database_error = Rc::new(RefCell::new(None));
 
         db_builtins::register(&global, db.clone());
+        db_builtins::register_info(&global, db.clone(), database_error.clone());
         agenda_builtins::register(&global, db.clone(), reg.clone());
 
         // output capture (echo to stdout by default — CLI/REPL) overrides the stdout print/println
@@ -54,12 +80,39 @@ impl Interpreter {
         let sources = Rc::new(RefCell::new(SourceIndex::default()));
         docs::register(&global, out.clone(), sources.clone());
 
-        let it =
-            Interpreter { global, database: db, agendas: reg, output: out, editor: ed, sources };
+        let it = Interpreter {
+            global,
+            database: db,
+            agendas: reg,
+            output: out,
+            editor: ed,
+            sources,
+            database_error,
+        };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
             panic!("prelude failed to load: {}", e);
         }
         it
+    }
+
+    /// Point the engine at another database file — a host whose workspace moved calls this. The
+    /// definitions in the environment stay; the tables, items and agenda files are the new
+    /// file's. Agendas opened with `open-agenda` are closed.
+    ///
+    /// If the file can't be opened the engine moves to an in-memory database rather than staying
+    /// on the old one: writing into the previous workspace's data would be the worse surprise.
+    pub fn open_database(&self, path: &str) -> Result<(), LispError> {
+        let (next, result) = match open_database_file(path) {
+            Ok(d) => (d, Ok(())),
+            Err(e) => (open_database_file(":memory:")?, Err(e)),
+        };
+        let mut reg = self.agendas.borrow_mut();
+        reg.active_name = agenda::agenda_name_from_path(next.path());
+        reg.inactive.clear();
+        *self.database.borrow_mut() = next;
+        *self.database_error.borrow_mut() =
+            result.as_ref().err().map(|e| format!("couldn't open {}: {}", path, e));
+        result
     }
 
     /// Evaluate all top-level forms, return the last result.
@@ -113,6 +166,20 @@ impl Interpreter {
     pub fn take_output(&self) -> String {
         std::mem::take(&mut self.output.borrow_mut().buffer)
     }
+}
+
+/// Open a database with the agenda tables in place. A file's folder is created first — a fresh
+/// workspace has no `.eeditor/` yet, and SQLite won't make one.
+fn open_database_file(path: &str) -> Result<Database, LispError> {
+    if path != ":memory:" && !path.is_empty() {
+        if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| LispError::Database(format!("can't create the folder {}: {}", dir.display(), e)))?;
+        }
+    }
+    let mut database = Database::open(path)?;
+    agenda::ensure_agenda_tables(&mut database)?;
+    Ok(database)
 }
 
 impl Default for Interpreter {

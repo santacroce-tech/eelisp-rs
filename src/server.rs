@@ -12,6 +12,7 @@ use crate::Interpreter;
 
 enum Job {
     Eval(String, Sender<String>),
+    OpenDatabase(String, Sender<Result<(), String>>),
     Stop,
 }
 
@@ -30,16 +31,26 @@ impl EngineHandle {
     /// job runs. `setup` runs *on* the interpreter thread — the only place the `Rc`-based
     /// `Interpreter` exists — so what it captures must be `Send`: an `Arc<Mutex<…>>` the host also
     /// holds is the usual shape, and it keeps reading current rather than freezing a value here.
+    ///
+    /// The database is opened on that thread too, so a slow or gated file (a folder behind a macOS
+    /// privacy prompt) holds up evaluation, never the host's own thread. If it can't be opened the
+    /// engine runs in memory and `(database-info)` says why.
     pub fn spawn_with(db_path: String, setup: impl FnOnce(&Interpreter) + Send + 'static) -> EngineHandle {
         let (tx, rx) = mpsc::channel::<Job>();
         let thread = thread::spawn(move || {
-            let it = Interpreter::with_database(&db_path);
+            let it = Interpreter::with_database_or_memory(&db_path);
+            if let Some(e) = it.database_error.borrow().as_ref() {
+                eprintln!("[eelisp] {} — running in memory", e);
+            }
             it.set_echo(false); // output is captured into the envelope, not stdout
             setup(&it);
             while let Ok(job) = rx.recv() {
                 match job {
                     Job::Eval(src, reply) => {
                         let _ = reply.send(it.eval_host(&src));
+                    }
+                    Job::OpenDatabase(path, reply) => {
+                        let _ = reply.send(it.open_database(&path).map_err(|e| e.to_string()));
                     }
                     Job::Stop => break,
                 }
@@ -55,6 +66,16 @@ impl EngineHandle {
             return r#"{"ok":false,"error":"engine stopped"}"#.to_string();
         }
         rrx.recv().unwrap_or_else(|_| r#"{"ok":false,"error":"engine dropped reply"}"#.to_string())
+    }
+
+    /// Move the engine to another database file (see `Interpreter::open_database`). Queued behind
+    /// any evaluation already sent, so it takes effect between two jobs, never inside one.
+    pub fn open_database(&self, path: &str) -> Result<(), String> {
+        let (rtx, rrx) = mpsc::channel();
+        if self.tx.send(Job::OpenDatabase(path.to_string(), rtx)).is_err() {
+            return Err("engine stopped".to_string());
+        }
+        rrx.recv().unwrap_or_else(|_| Err("engine dropped reply".to_string()))
     }
 }
 

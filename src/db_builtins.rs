@@ -212,6 +212,19 @@ pub fn register(env: &Env, db: Shared) {
     });
 }
 
+/// `(database-info)` — which database the engine is on, and why it isn't the one the host asked
+/// for when it isn't. Separate from `register` because the reason lives with the interpreter.
+pub fn register_info(env: &Env, db: Shared, error: Rc<RefCell<Option<String>>>) {
+    define_db(env, "database-info", ArgMode::Eval, move |_, _| {
+        let mut info = OrderedDict::default();
+        info.insert("path".into(), Value::Str(db.borrow().path().to_string()));
+        if let Some(e) = error.borrow().as_ref() {
+            info.insert("error".into(), Value::Str(e.clone()));
+        }
+        Ok(Value::Dict(Rc::new(info)))
+    });
+}
+
 // ── argument helpers ──────────────────────────────────────────────
 
 fn sym_or_str(v: &Value) -> Option<String> {
