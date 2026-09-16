@@ -359,6 +359,14 @@ str-join — builtin
       result, so opening a sheet runs no formula; changing a cell recalculates what depends on it.
     </p>
     <p>
+      A number written the way people write one is read as one, and asks for the format it was wearing:
+      <code>50%</code> is 0.5 shown as a percentage, <code>$1,200</code> and <code>R$ 1.200,50</code> are
+      money, <code>1 200,50</code> is twelve hundred and a half. Whichever of <code>.</code> or
+      <code>,</code> comes last is the decimal point; a lone comma before three digits is separating
+      thousands, so <code>1,200</code> is a thousand two hundred and <code>1,5</code> is one and a half.
+      A format already on the cell wins.
+    </p>
+    <p>
       <code>Rates!A1</code> and <code>Rates!A1:A9</code> read another sheet, named beside the one
       reading it — <code>money/Q3!A1</code> from a sheet in the same folder as <code>money/</code>.
       Writing a sheet redoes the open sheets that read it, once each, so two sheets naming each other

@@ -45,6 +45,11 @@ fn budget(name: &str) -> (PathBuf, Interpreter) {
     (dir, it)
 }
 
+/// `sheet-set` on a given interpreter's Budget — for tests that make more than one.
+fn sheet_set(it: &Interpreter, cell: &str, input: &str) -> String {
+    set(it, cell, input)
+}
+
 fn set(it: &Interpreter, cell: &str, input: &str) -> String {
     let escaped = input.replace('\\', "\\\\").replace('"', "\\\"");
     ev(it, &format!(r#"(sheet-set "Budget" "{cell}" "{escaped}")"#))
@@ -136,7 +141,7 @@ fn input_decides_the_value() {
         ("1e3", "1000"),
         ("'42", "\"42\""),
         ("rent", "\"rent\""),
-        ("1,200", "\"1,200\""),
+        ("1,200", "1200"), // a thousand two hundred — see a_number_can_be_typed_the_way_it_is_written
         ("inf", "\"inf\""),
         ("true", "\"true\""),
         ("", "nil"),
@@ -472,6 +477,54 @@ fn rewrite_formula_moves_only_references() {
     assert!(moved.changed && !moved.resized, "a reference that moved with its cell reads the same value");
     let other = rewrite_formula("(+ Other!A5 1)", &Edit::Insert { axis: Axis::Rows, at: 0, n: 1 });
     assert!(!other.changed, "another sheet's cells don't move");
+}
+
+// ── numbers as people write them ─────────────────────────────────────
+
+#[test]
+fn a_number_can_be_typed_the_way_it_is_written() {
+    let (_, it) = budget("typing-numbers");
+    // value, and the format the spelling asked for
+    for (input, value, fmt) in [
+        ("1200", "1200", ""),
+        ("-3.5", "-3.5", ""),
+        ("1e3", "1000", ""),
+        ("50%", "0.5", r#"{:num "percent"}"#),
+        ("-50%", "-0.5", r#"{:num "percent"}"#),
+        ("$1,200", "1200", r#"{:cur "USD" :num "currency"}"#),
+        ("R$ 1.200,50", "1200.5", r#"{:cur "BRL" :num "currency"}"#),
+        ("5 €", "5", r#"{:cur "EUR" :num "currency"}"#),
+        ("1,200", "1200", r#"{:num "number"}"#),
+        ("1,200.50", "1200.5", r#"{:num "number"}"#),
+        ("1.200,50", "1200.5", r#"{:num "number"}"#),
+        ("1 200,50", "1200.5", r#"{:num "number"}"#),
+        ("1,5", "1.5", ""),
+        ("1.200", "1.2", ""),
+    ] {
+        let (_, sheet) = budget("n");
+        sheet_set(&sheet, "A1", input);
+        assert_eq!(get(&sheet, "A1"), value, "value of {input:?}");
+        let payload = ev(&sheet, r#"(sheet-open "Budget")"#);
+        if fmt.is_empty() {
+            assert!(payload.contains(&format!(r#""{input}" {value} nil nil)"#)), "{input:?} asked for no format: {payload}");
+        } else {
+            assert!(payload.contains(fmt), "{input:?} should ask for {fmt}: {payload}");
+        }
+    }
+    // what isn't a number stays text
+    for input in ["1,2,3", "$", "%", "12 monkeys", "1..2", "--5"] {
+        set(&it, "B1", input);
+        assert_eq!(get(&it, "B1"), format!("{input:?}"), "{input:?} is text");
+    }
+}
+
+#[test]
+fn a_format_already_on_the_cell_wins() {
+    let (_, it) = budget("typing-format");
+    ev(&it, r#"(sheet-format "Budget" "A1" {:num "currency" :cur "EUR"})"#);
+    set(&it, "A1", "50%");
+    assert_eq!(get(&it, "A1"), "0.5", "the value still reads as a percentage");
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#"{:cur "EUR" :num "currency"}"#), "the cell keeps its own format");
 }
 
 // ── one sheet reading another ────────────────────────────────────────
