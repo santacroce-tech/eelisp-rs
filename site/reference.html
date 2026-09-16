@@ -373,6 +373,9 @@ str-join — builtin
       <tr><td><code>(sheet-rows name area)</code></td><td>an area's values as a list of rows</td></tr>
       <tr><td><code>(sheet-set name cell input)</code></td><td>typed input — a list of rows types a block, as a paste would → the changed cells</td></tr>
       <tr><td><code>(sheet-put name cell data)</code></td><td>values stay values; a result set writes a header row and its records</td></tr>
+      <tr><td><code>(sheet-copy name area)</code></td><td>what was typed, as rows of text</td></tr>
+      <tr><td><code>(sheet-paste name cell rows from)</code></td><td>types them back; <code>from</code> — where they were copied — moves each formula by the distance travelled</td></tr>
+      <tr><td><code>(sheet-fill name source target)</code></td><td>repeats the source over the target, each copy's references shifted by where it lands</td></tr>
       <tr><td><code>(sheet-recalc name)</code></td><td>rerun every formula — those that read the database, other sheets or the clock aren't tracked</td></tr>
       <tr><td><code>(sheet-format name area fmt)</code></td><td>merge a format like <code>{:num "currency" :dp 2}</code> into an area; <code>nil</code> clears; rows of formats set cells exactly</td></tr>
       <tr><td><code>(sheet-col-width name col width)</code></td><td><code>nil</code> for the default</td></tr>
