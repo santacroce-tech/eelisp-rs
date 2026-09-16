@@ -218,13 +218,18 @@ pub fn register(env: &Env, host: Host) {
     def("sheet-col-width", |reg, host, args, _| {
         let path = resolve(host, str_arg(args, 0, "sheet-col-width", "a sheet name")?)?;
         let col = col_arg(args, 1, "sheet-col-width")?;
-        let width = match args.get(2) {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(w)) if w.is_finite() && *w > 0.0 => Some(*w),
-            Some(other) => return Err(fail(format!("a width is a positive number, or nil — got {}", print_value(other, true)))),
-        };
+        let width = size_arg(args, 2, "a width")?;
         writable(reg, "sheet-col-width")?;
         reg.borrow_mut().sheet(&path)?.set_width(col, width)?;
+        Ok(Value::Null)
+    });
+
+    def("sheet-row-height", |reg, host, args, _| {
+        let path = resolve(host, str_arg(args, 0, "sheet-row-height", "a sheet name")?)?;
+        let row = row_arg(args, 1, "sheet-row-height")?;
+        let height = size_arg(args, 2, "a height")?;
+        writable(reg, "sheet-row-height")?;
+        reg.borrow_mut().sheet(&path)?.set_height(row, height)?;
         Ok(Value::Null)
     });
 
@@ -522,6 +527,15 @@ fn row_arg(args: &[Value], i: usize, name: &str) -> Result<u32, LispError> {
             "{name}: expected a row number from 1, got {}",
             other.map(|v| print_value(v, true)).unwrap_or_else(|| "nothing".into())
         ))),
+    }
+}
+
+/// A width or a height: a positive number, or nil for the default.
+fn size_arg(args: &[Value], i: usize, what: &str) -> Result<Option<f64>, LispError> {
+    match args.get(i) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) if n.is_finite() && *n > 0.0 => Ok(Some(*n)),
+        Some(other) => Err(fail(format!("{what} is a positive number, or nil — got {}", print_value(other, true)))),
     }
 }
 

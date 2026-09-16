@@ -26,7 +26,7 @@ use crate::value::*;
 pub const EXT: &str = "eesheet";
 /// `PRAGMA application_id` — "EESH". A sheet is recognised by its bytes, not its name.
 const APPLICATION_ID: i64 = 0x4545_5348;
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 /// A range this big is a typo, and reading it would build a list that size.
 pub const MAX_RANGE_CELLS: u64 = 1_000_000;
 
@@ -41,6 +41,7 @@ CREATE TABLE cells (
   PRIMARY KEY (row, col)
 ) WITHOUT ROWID;
 CREATE TABLE widths (col INTEGER PRIMARY KEY, width REAL NOT NULL);
+CREATE TABLE heights (row INTEGER PRIMARY KEY, height REAL NOT NULL);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -82,7 +83,8 @@ impl CellData {
 
 pub enum Input {
     Empty,
-    Literal(Value),
+    /// A value, and the format the way it was written asks for: `50%` is a percent, `$1,200` money.
+    Literal(Value, Option<Map<String, J>>),
     Formula(Formula),
 }
 
@@ -94,12 +96,174 @@ pub fn read_input(input: &str) -> Input {
         return Input::Formula(parse_formula(body));
     }
     if let Some(text) = input.strip_prefix('\'') {
-        return Input::Literal(Value::Str(text.to_string()));
+        return Input::Literal(Value::Str(text.to_string()), None);
     }
-    match looks_numeric(input.trim()).then(|| input.trim().parse::<f64>()) {
-        Some(Ok(n)) if n.is_finite() => Input::Literal(Value::Number(n)),
-        _ => Input::Literal(Value::Str(input.to_string())),
+    if reads_as_date(input.trim()) {
+        let mut fmt = Map::new();
+        fmt.insert("date".into(), J::from("iso"));
+        return Input::Literal(Value::Str(input.trim().to_string()), Some(fmt));
     }
+    match read_number(input.trim()) {
+        Some((n, dress)) if n.is_finite() => Input::Literal(Value::Number(n), dress.format()),
+        _ => Input::Literal(Value::Str(input.to_string()), None),
+    }
+}
+
+/// A date the way the language writes one — `2026-09-16`, with a time after it if there is one.
+/// Only this spelling: `09/16/2026` and `16/09/2026` are the same ten characters in two languages,
+/// and a sheet guessing wrong about which is worse than leaving them as text.
+pub fn reads_as_date(text: &str) -> bool {
+    let date = text.split(['T', ' ']).next().unwrap_or("");
+    let bytes = date.as_bytes();
+    if date.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    if !date.bytes().enumerate().all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit()) {
+        return false;
+    }
+    let Some((y, m, d)) = crate::dates::parse_ymd(date) else { return false };
+    (1..=12).contains(&m) && (1..=crate::dates::days_in_month(y, m)).contains(&d) && crate::dates::from_str(text).is_some()
+}
+
+/// How a typed number was dressed: `50%`, `$1,200`, `1 200,50`.
+#[derive(Default)]
+struct Dress {
+    percent: bool,
+    currency: Option<&'static str>,
+    grouped: bool,
+}
+
+impl Dress {
+    /// The format that spelling asks for — none for a bare number, which is left alone.
+    fn format(&self) -> Option<Map<String, J>> {
+        let mut m = Map::new();
+        if self.percent {
+            m.insert("num".into(), J::from("percent"));
+        } else if let Some(code) = self.currency {
+            m.insert("num".into(), J::from("currency"));
+            m.insert("cur".into(), J::from(code));
+        } else if self.grouped {
+            m.insert("num".into(), J::from("number"));
+        }
+        (!m.is_empty()).then_some(m)
+    }
+}
+
+/// The currency symbols worth knowing, longest first so `R$` wins over `$`.
+const CURRENCIES: &[(&str, &str)] = &[
+    ("R$", "BRL"), ("US$", "USD"), ("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY"),
+    ("₹", "INR"), ("₽", "RUB"), ("₩", "KRW"), ("₺", "TRY"), ("CA$", "CAD"), ("A$", "AUD"),
+];
+
+/// A number as a person writes one: `1200`, `-3.5`, `50%`, `$1,200`, `1 200,50`, `1.200,50`.
+/// Returns the value and how it was dressed, or None when the text isn't a number at all.
+fn read_number(text: &str) -> Option<(f64, Dress)> {
+    let mut dress = Dress::default();
+    let mut body = text.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    // a leading sign stays with the number, whatever is wrapped around it
+    let sign = if let Some(rest) = body.strip_prefix('-') {
+        body = rest.trim_start();
+        -1.0
+    } else {
+        body = body.strip_prefix('+').unwrap_or(body).trim_start();
+        1.0
+    };
+
+    if body.starts_with('-') || body.starts_with('+') {
+        return None; // one sign is a number; two is a typo
+    }
+
+    if let Some(rest) = body.strip_suffix('%') {
+        dress.percent = true;
+        body = rest.trim_end();
+    }
+    for (symbol, code) in CURRENCIES {
+        if let Some(rest) = body.strip_prefix(symbol) {
+            dress.currency = Some(code);
+            body = rest.trim_start();
+            break;
+        }
+        if let Some(rest) = body.strip_suffix(symbol) {
+            dress.currency = Some(code);
+            body = rest.trim_end();
+            break;
+        }
+    }
+    if dress.percent && dress.currency.is_some() {
+        return None; // money and a percentage at once is a typo, not a number
+    }
+
+    // A plain number — including `1e3` and `.5` — reads as it always has; anything else has to have
+    // its separators taken off first.
+    let value: f64 = if looks_numeric(body) {
+        body.parse().ok()?
+    } else {
+        undress_separators(body, &mut dress)?.parse().ok()?
+    };
+    Some((sign * if dress.percent { value / 100.0 } else { value }, dress))
+}
+
+/// Strip thousands separators and settle which mark is the decimal point: whichever of `.` or `,`
+/// comes last, with the other separating groups. `1,200` is a thousand two hundred; `1.200` is not,
+/// because a lone dot is this engine's decimal point.
+fn undress_separators(body: &str, dress: &mut Dress) -> Option<String> {
+    const SPACES: [char; 3] = [' ', '\u{a0}', '\u{202f}'];
+    let grouped_by_space = body.contains(SPACES);
+    let body: String = body.chars().filter(|c| !SPACES.contains(c)).collect();
+    if body.is_empty() || !body.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+        return None;
+    }
+    let (dots, commas) = (body.matches('.').count(), body.matches(',').count());
+    let decimal = match (dots, commas) {
+        (0, 0) => None,
+        // both marks are present: whichever comes last is the decimal point, the other groups
+        (1.., 1..) => Some(if body.rfind('.') > body.rfind(',') { '.' } else { ',' }),
+        // several of one mark can only be separating groups
+        (2.., 0) | (0, 2..) => None,
+        // a lone comma groups when it sits before exactly three digits — `1,200` — and is a decimal
+        // point otherwise, which is how most of the world writes `1,5`
+        (0, 1) => (!groups_of_three(&body, ',')).then_some(','),
+        // a lone dot is the decimal point, as it is everywhere else in the language
+        _ => Some('.'),
+    };
+    let mut digits = String::with_capacity(body.len());
+    for c in body.chars() {
+        match c {
+            '.' | ',' if Some(c) == decimal => digits.push('.'),
+            '.' | ',' => {
+                if !groups_of_three(&body, c) {
+                    return None; // a separator that isn't separating thousands isn't one
+                }
+                dress.grouped = true;
+            }
+            _ => digits.push(c),
+        }
+    }
+    dress.grouped |= grouped_by_space;
+    // a decimal point needs digits on both sides once the grouping is gone
+    (!digits.is_empty() && digits != "." && digits.matches('.').count() <= 1).then_some(digits)
+}
+
+/// Does `sep` separate groups of three digits — `1,200,000` — with a first group of one to three?
+fn groups_of_three(body: &str, sep: char) -> bool {
+    let head = body.split(sep).next().unwrap_or("");
+    let mut parts = body.split(sep).skip(1).peekable();
+    if head.is_empty() || head.len() > 3 || !head.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    while let Some(part) = parts.next() {
+        // the last group may carry the decimals, which are not this separator's business
+        let group: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let tail = &part[group.len()..];
+        if group.len() != 3 || (!tail.is_empty() && parts.peek().is_some()) {
+            return false;
+        }
+    }
+    body.contains(sep)
 }
 
 /// `12`, `-3.5`, `.5`, `1e3` — but not `inf`, `NaN` or `0x1F`, which Rust would happily parse.
@@ -227,11 +391,18 @@ pub enum Prepared {
 
 // ── a sheet ──────────────────────────────────────────────────────────
 
+/// The column widths and row heights, handed to a write together.
+pub struct Sizes<'a> {
+    pub widths: &'a BTreeMap<u32, f64>,
+    pub heights: &'a BTreeMap<u32, f64>,
+}
+
 pub struct Sheet {
     conn: Connection,
     pub path: PathBuf,
     cells: HashMap<CellRef, CellData>,
     widths: BTreeMap<u32, f64>,
+    heights: BTreeMap<u32, f64>,
     version: i64,
     /// `PRAGMA data_version` when last loaded — it moves when *another* connection commits.
     seen_data_version: i64,
@@ -277,6 +448,14 @@ impl Sheet {
         if schema > SCHEMA_VERSION {
             return Err(fail(format!("{} was made by a newer EEditor", path.display())));
         }
+        if schema < SCHEMA_VERSION {
+            // Row heights arrived after the first sheets did.
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS heights (row INTEGER PRIMARY KEY, height REAL NOT NULL);
+                 PRAGMA user_version = {SCHEMA_VERSION};"
+            ))
+            .map_err(sql(path))?;
+        }
         Self::with_connection(conn, path)
     }
 
@@ -288,6 +467,7 @@ impl Sheet {
             path: path.to_path_buf(),
             cells: HashMap::new(),
             widths: BTreeMap::new(),
+            heights: BTreeMap::new(),
             version: 0,
             seen_data_version: 0,
             single_deps: HashMap::new(),
@@ -324,6 +504,11 @@ impl Sheet {
         }
         self.widths = {
             let mut stmt = self.conn.prepare("SELECT col, width FROM widths").map_err(sql(&path))?;
+            let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql(&path))?;
+            mapped.collect::<Result<_, _>>().map_err(sql(&path))?
+        };
+        self.heights = {
+            let mut stmt = self.conn.prepare("SELECT row, height FROM heights").map_err(sql(&path))?;
             let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql(&path))?;
             mapped.collect::<Result<_, _>>().map_err(sql(&path))?
         };
@@ -444,9 +629,17 @@ impl Sheet {
                 cell.value = Value::Null;
                 cell.error = None;
             }
-            Input::Literal(v) => {
+            Input::Literal(v, format) => {
                 cell.value = v;
                 cell.error = None;
+                // How it was written asks for a format; what the cell already has wins.
+                if let Some(asked) = format {
+                    let mut fmt = cell.fmt.clone().unwrap_or_default();
+                    if !fmt.contains_key("num") {
+                        fmt.extend(asked);
+                        cell.fmt = Some(fmt);
+                    }
+                }
             }
             Input::Formula(f) => {
                 index(&mut self.single_deps, &mut self.range_deps, at, &f.refs);
@@ -680,6 +873,21 @@ impl Sheet {
         })
     }
 
+    /// A row's height, or `None` for the default — the other half of `set_width`.
+    pub fn set_height(&mut self, row: u32, height: Option<f64>) -> Result<(), LispError> {
+        match height {
+            Some(h) => self.heights.insert(row, h),
+            None => self.heights.remove(&row),
+        };
+        self.write(|tx, _, _| {
+            match height {
+                Some(h) => tx.execute("INSERT OR REPLACE INTO heights (row, height) VALUES (?1, ?2)", params![row, h])?,
+                None => tx.execute("DELETE FROM heights WHERE row = ?1", params![row])?,
+            };
+            Ok(())
+        })
+    }
+
     /// Insert or delete rows or columns: move the cells, rewrite every formula's references, shift
     /// the column widths, and write the lot in one transaction. Returns the formulas that now read
     /// different cells — a range that grew or shrank, a deleted reference — and so need recomputing.
@@ -704,21 +912,26 @@ impl Sheet {
             }
             self.cells.insert(to, cell);
         }
-        if edit.axis() == Axis::Cols {
-            self.widths = std::mem::take(&mut self.widths)
-                .into_iter()
-                .filter_map(|(c, w)| edit.map_index(c).map(|c| (c, w)))
-                .collect();
+        let moved = |sizes: BTreeMap<u32, f64>| -> BTreeMap<u32, f64> {
+            sizes.into_iter().filter_map(|(i, size)| edit.map_index(i).map(|i| (i, size))).collect()
+        };
+        match edit.axis() {
+            Axis::Cols => self.widths = moved(std::mem::take(&mut self.widths)),
+            Axis::Rows => self.heights = moved(std::mem::take(&mut self.heights)),
         }
         self.rebuild_index();
-        self.write(|tx, all, widths| {
+        self.write(|tx, all, sizes| {
             tx.execute("DELETE FROM cells", [])?;
             for (at, c) in all {
                 insert_cell(tx, *at, c)?;
             }
             tx.execute("DELETE FROM widths", [])?;
-            for (col, w) in widths {
+            for (col, w) in sizes.widths {
                 tx.execute("INSERT INTO widths (col, width) VALUES (?1, ?2)", params![col, w])?;
+            }
+            tx.execute("DELETE FROM heights", [])?;
+            for (row, h) in sizes.heights {
+                tx.execute("INSERT INTO heights (row, height) VALUES (?1, ?2)", params![row, h])?;
             }
             Ok(())
         })?;
@@ -728,13 +941,13 @@ impl Sheet {
 
     fn write(
         &mut self,
-        f: impl FnOnce(&Transaction, &HashMap<CellRef, CellData>, &BTreeMap<u32, f64>) -> rusqlite::Result<()>,
+        f: impl FnOnce(&Transaction, &HashMap<CellRef, CellData>, &Sizes) -> rusqlite::Result<()>,
     ) -> Result<(), LispError> {
         let next = self.version + 1;
-        let Sheet { conn, cells, widths, .. } = &mut *self;
+        let Sheet { conn, cells, widths, heights, .. } = &mut *self;
         let outcome = (|| {
             let tx = conn.transaction()?;
-            f(&tx, cells, widths)?;
+            f(&tx, cells, &Sizes { widths, heights })?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?1)", params![next.to_string()])?;
             tx.commit()
         })();
@@ -778,15 +991,13 @@ impl Sheet {
         d.insert("path".into(), Value::Str(self.path.display().to_string()));
         d.insert("version".into(), Value::Number(self.version as f64));
         d.insert("cells".into(), Value::List(Rc::new(at.into_iter().map(|c| self.row_value(c)).collect())));
-        d.insert(
-            "widths".into(),
+        let sizes = |m: &BTreeMap<u32, f64>| {
             Value::List(Rc::new(
-                self.widths
-                    .iter()
-                    .map(|(c, w)| Value::List(Rc::new(vec![Value::Number(*c as f64), Value::Number(*w)])))
-                    .collect(),
-            )),
-        );
+                m.iter().map(|(i, size)| Value::List(Rc::new(vec![Value::Number(*i as f64), Value::Number(*size)]))).collect(),
+            ))
+        };
+        d.insert("widths".into(), sizes(&self.widths));
+        d.insert("heights".into(), sizes(&self.heights));
         Value::Dict(Rc::new(d))
     }
 }

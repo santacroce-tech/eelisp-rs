@@ -359,6 +359,16 @@ str-join — builtin
       result, so opening a sheet runs no formula; changing a cell recalculates what depends on it.
     </p>
     <p>
+      A number written the way people write one is read as one, and asks for the format it was wearing:
+      <code>50%</code> is 0.5 shown as a percentage, <code>$1,200</code> and <code>R$ 1.200,50</code> are
+      money, <code>1 200,50</code> is twelve hundred and a half. Whichever of <code>.</code> or
+      <code>,</code> comes last is the decimal point; a lone comma before three digits is separating
+      thousands, so <code>1,200</code> is a thousand two hundred and <code>1,5</code> is one and a half.
+      A format already on the cell wins. <code>2026-09-16</code> is a date — the language's own
+      spelling, which sorts and does arithmetic; <code>16/09/2026</code> stays text, because a sheet
+      guessing which half is the month is worse than leaving it alone.
+    </p>
+    <p>
       <code>Rates!A1</code> and <code>Rates!A1:A9</code> read another sheet, named beside the one
       reading it — <code>money/Q3!A1</code> from a sheet in the same folder as <code>money/</code>.
       Writing a sheet redoes the open sheets that read it, once each, so two sheets naming each other
@@ -383,8 +393,8 @@ str-join — builtin
       <tr><td><code>(sheet-paste name cell rows from)</code></td><td>types them back; <code>from</code> — where they were copied — moves each formula by the distance travelled</td></tr>
       <tr><td><code>(sheet-fill name source target)</code></td><td>repeats the source over the target, each copy's references shifted by where it lands</td></tr>
       <tr><td><code>(sheet-recalc name)</code></td><td>rerun every formula — those that read the database, other sheets or the clock aren't tracked</td></tr>
-      <tr><td><code>(sheet-format name area fmt)</code></td><td>merge a format like <code>{:num "currency" :dp 2}</code> into an area; <code>nil</code> clears; rows of formats set cells exactly</td></tr>
-      <tr><td><code>(sheet-col-width name col width)</code></td><td><code>nil</code> for the default</td></tr>
+      <tr><td><code>(sheet-format name area fmt)</code></td><td>merge a format like <code>{:num "currency" :dp 2}</code> into an area; <code>nil</code> clears; rows of formats set cells exactly. The keys are the host's: <code>:num :dp :cur :date :bold :italic :align :wrap :bg :fg :border</code></td></tr>
+      <tr><td><code>(sheet-col-width name col width)</code> · <code>(sheet-row-height name row height)</code></td><td><code>nil</code> for the default; rows are numbered from 1</td></tr>
       <tr><td><code>(sheet-insert-rows name row n)</code> · <code>sheet-delete-rows</code></td><td>rows numbered from 1; formulas follow their cells, a deleted reference reads <code>#REF!</code></td></tr>
       <tr><td><code>(sheet-insert-cols name col n)</code> · <code>sheet-delete-cols</code></td><td>columns by letter</td></tr>
       <tr><td><code>(sheet-version name)</code></td><td>moves on every write</td></tr>
