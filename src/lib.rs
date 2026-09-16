@@ -29,6 +29,9 @@ pub mod parser;
 pub mod prelude;
 pub mod printer;
 pub mod server;
+pub mod sheet;
+pub mod sheet_builtins;
+pub mod sheet_ref;
 pub mod smart_parser;
 pub mod value;
 

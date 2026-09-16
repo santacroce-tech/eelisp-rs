@@ -10,7 +10,7 @@ use crate::env::{self, Env};
 use crate::output::OutputState;
 use crate::value::{LispError, Value};
 use crate::docs::{self, SourceIndex};
-use crate::{agenda_builtins, builtins, db_builtins, editor, eval, output, parser, prelude};
+use crate::{agenda_builtins, builtins, db_builtins, editor, eval, output, parser, prelude, sheet_builtins};
 
 pub struct Interpreter {
     pub global: Env,
@@ -75,6 +75,9 @@ impl Interpreter {
         // editor RPC bridge
         let ed = Rc::new(RefCell::new(EditorHost::default()));
         editor::register(&global, ed.clone());
+
+        // sheets — their names resolve against the host's (current-dir)
+        sheet_builtins::register(&global, ed.clone());
 
         // (functions …) / (source …) — needs the output channel and the definition index
         let sources = Rc::new(RefCell::new(SourceIndex::default()));

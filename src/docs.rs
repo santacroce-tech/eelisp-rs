@@ -30,8 +30,8 @@ pub struct Entry {
     pub example: &'static str,
 }
 
-/// The manual, in reading order: core language, database, agenda, editor RPC.
-pub static TABLES: &[&[Entry]] = &[CORE, DATABASE, AGENDA, EDITOR];
+/// The manual, in reading order: core language, database, agenda, sheets, editor RPC.
+pub static TABLES: &[&[Entry]] = &[CORE, DATABASE, AGENDA, SHEETS, EDITOR];
 
 pub fn builtins() -> impl Iterator<Item = &'static Entry> {
     TABLES.iter().flat_map(|t| t.iter())
@@ -476,8 +476,12 @@ pub static CORE: &[Entry] = &[
     doc!("/", "(/ a b …) → number", "Divides left to right. Dividing by zero is an error.", "(/ 100 5 2)   → 10"),
     doc!("mod", "(mod a b) → number", "The remainder of a divided by b.", "(mod 7 3)   → 1"),
     doc!("abs", "(abs n) → number", "Absolute value.", "(abs -4)   → 4"),
-    doc!("min", "(min a b …) → number", "The smallest argument.", "(min 3 1 2)   → 1"),
-    doc!("max", "(max a b …) → number", "The largest argument.", "(max 3 1 2)   → 3"),
+    doc!("min", "(min a b …) → number", "The smallest number. Lists are searched too, skipping nil and text — so (min B1:B9) reads a range.", "(min 3 '(1 nil 2))   → 1"),
+    doc!("max", "(max a b …) → number", "The largest number. Lists are searched too, skipping nil and text.", "(max 3 '(1 nil 7))   → 7"),
+    doc!("sum", "(sum a b …) → number", "Adds the numbers, looking inside lists and skipping nil and text — what a sheet's (sum B1:B9) needs. Nothing to add is 0.",
+         "(sum 1 '(2 nil \"x\" 3))   → 6"),
+    doc!("avg", "(avg a b …) → number", "The mean of the numbers, looking inside lists and skipping nil and text. An error when there are none.",
+         "(avg '(2 4 nil))   → 3"),
     doc!("floor", "(floor n) → number", "Rounds down.", "(floor 2.7)   → 2"),
     doc!("ceil", "(ceil n) → number", "Rounds up.", "(ceil 2.1)   → 3"),
     doc!("round", "(round n) → number", "Rounds to the nearest whole number, halves away from zero.", "(round 2.5)   → 3"),
@@ -666,6 +670,37 @@ pub static AGENDA: &[Entry] = &[
          "(export-agenda \"backup.json\")"),
     doc!("import-agenda", "(import-agenda \"f.json\") → number", "Reads items back from JSON, in one transaction.",
          "(import-agenda \"backup.json\")"),
+];
+
+/// Sheets: a grid whose formulas are EELisp, each sheet a `.eesheet` file. A sheet is named
+/// `"Budget"`, `"money/Budget"` or by absolute path — relative to (current-dir), `.eesheet` implied.
+/// Cells are `"C3"`, areas `"A1:C9"`. Inside a formula, `C3` and `A1:C9` are the cells' values.
+pub static SHEETS: &[Entry] = &[
+    doc!("sheet-new", "(sheet-new name) → string", "Creates an empty sheet file and returns its path. An error if the file exists.",
+         "(sheet-new \"Budget\")"),
+    doc!("sheet-open", "(sheet-open name) → dict", "The whole sheet for a host to draw: `{:path :version :cells ((row col input value error fmt) …) :widths ((col width) …)}`, rows and columns from 0. Runs no formula — values are the ones stored.",
+         "(sheet-open \"Budget\")"),
+    doc!("sheet-close", "(sheet-close name) → nil", "Closes the file. Do it before renaming or deleting one.", "(sheet-close \"Budget\")"),
+    doc!("sheet-get", "(sheet-get name cell)", "One cell's value. A cell whose formula failed is an error.", "(sheet-get \"Budget\" \"C3\")   → 1650"),
+    doc!("sheet-rows", "(sheet-rows name area) → list", "An area's values as a list of rows.",
+         "(sheet-rows \"Budget\" \"A1:B2\")   → ((\"rent\" 1200) (\"food\" 450))"),
+    doc!("sheet-set", "(sheet-set name cell input) → list", "Types into a cell — `1200`, `rent`, `'42` for text, `=(sum B1:B2)` for a formula — recalculates what depends on it and saves. Given a list of rows, types a whole block from that corner, as a paste would. Returns the changed cells as `(row col input value error fmt)`.",
+         "(sheet-set \"Budget\" \"B2\" \"450\")\n(sheet-set \"Budget\" \"C1\" '((\"=(sum B1:B2)\") (\"=(/ C1 12)\")))"),
+    doc!("sheet-put", "(sheet-put name cell data) → list", "Writes a block with its top-left corner at cell: a list of rows, one flat row, or a result set — a header row, then its records. Values stay values: text that would read as a number or formula is kept as text.",
+         "(sheet-put \"Report\" \"A1\" (query contacts :order \"name\"))"),
+    doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the database, other sheets or the clock, which aren't tracked.",
+         "(sheet-recalc \"Budget\")"),
+    doc!("sheet-format", "(sheet-format name area fmt) → list", "Merges a format into every cell of an area — a key set to nil is removed, and a nil format clears it. Given rows of formats instead, sets each cell's exactly from the area's corner. The keys are the host's: :num, :dp, :cur, :bold, :italic, :align.",
+         "(sheet-format \"Budget\" \"B1:B9\" {:num \"currency\" :dp 2})"),
+    doc!("sheet-col-width", "(sheet-col-width name col width) → nil", "A column's width, or nil for the default.", "(sheet-col-width \"Budget\" \"A\" 160)"),
+    doc!("sheet-insert-rows", "(sheet-insert-rows name row n) → dict", "Inserts n rows (default 1) before a row numbered from 1. Formulas are rewritten to follow their cells.",
+         "(sheet-insert-rows \"Budget\" 3)"),
+    doc!("sheet-delete-rows", "(sheet-delete-rows name row n) → dict", "Deletes n rows from a row numbered from 1. A formula that read a deleted cell reads #REF!.",
+         "(sheet-delete-rows \"Budget\" 3 2)"),
+    doc!("sheet-insert-cols", "(sheet-insert-cols name col n) → dict", "Inserts n columns before a column.", "(sheet-insert-cols \"Budget\" \"B\")"),
+    doc!("sheet-delete-cols", "(sheet-delete-cols name col n) → dict", "Deletes n columns from a column.", "(sheet-delete-cols \"Budget\" \"B\")"),
+    doc!("sheet-version", "(sheet-version name) → number", "A counter that moves on every write — how a host notices a sheet changed.",
+         "(sheet-version \"Budget\")   → 12"),
 ];
 
 /// The editor RPC — installed by the host, so these answer inside an editor and are inert on the
