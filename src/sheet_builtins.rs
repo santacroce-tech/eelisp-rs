@@ -125,6 +125,62 @@ pub fn register(env: &Env, host: Host) {
         write_block(reg, &path, env, origin, block, "sheet-put")
     });
 
+    // ── copying cells around ──
+
+    def("sheet-copy", |reg, host, args, _| {
+        let path = resolve(host, str_arg(args, 0, "sheet-copy", "a sheet name")?)?;
+        let area = area_arg(args, 1, "sheet-copy")?;
+        if area.len() > MAX_RANGE_CELLS {
+            return Err(fail(format!("{} is {} cells — too many to copy at once", area.a1(), area.len())));
+        }
+        let mut sheets = reg.borrow_mut();
+        let sheet = sheets.sheet(&path)?;
+        let rows = (area.start.row..=area.end.row)
+            .map(|r| {
+                let row = (area.start.col..=area.end.col)
+                    .map(|c| Value::Str(sheet.input_at(CellRef::new(r, c)).to_string()))
+                    .collect();
+                Value::List(Rc::new(row))
+            })
+            .collect();
+        Ok(Value::List(Rc::new(rows)))
+    });
+
+    def("sheet-paste", |reg, host, args, env| {
+        let path = resolve(host, str_arg(args, 0, "sheet-paste", "a sheet name")?)?;
+        let at = area_arg(args, 1, "sheet-paste")?.start;
+        let rows = block_of(args.get(2).unwrap_or(&Value::Null), typed);
+        // Where the block came from: given, its formulas move by the distance travelled.
+        let shift = match args.get(3) {
+            None | Some(Value::Null) => None,
+            Some(_) => {
+                let from = area_arg(args, 3, "sheet-paste")?.start;
+                Some((at.row as i64 - from.row as i64, at.col as i64 - from.col as i64))
+            }
+        };
+        let height = rows.len() as u64;
+        let width = rows.iter().map(|r| r.len()).max().unwrap_or(0) as u64;
+        if at.row as u64 + height > MAX_ROWS as u64 || at.col as u64 + width > MAX_COLS as u64 {
+            return Err(fail(format!("sheet-paste: a {height}×{width} block doesn't fit at {}", at.a1())));
+        }
+        writable(reg, "sheet-paste")?;
+        change(reg, &path, env, |sheet| {
+            let touched = sheet.stage_paste(at, rows, shift);
+            Ok((touched.clone(), touched))
+        })
+    });
+
+    def("sheet-fill", |reg, host, args, env| {
+        let path = resolve(host, str_arg(args, 0, "sheet-fill", "a sheet name")?)?;
+        let source = area_arg(args, 1, "sheet-fill")?;
+        let target = area_arg(args, 2, "sheet-fill")?;
+        writable(reg, "sheet-fill")?;
+        change(reg, &path, env, |sheet| {
+            let touched = sheet.stage_fill(source, target)?;
+            Ok((touched.clone(), touched))
+        })
+    });
+
     def("sheet-recalc", |reg, host, args, env| {
         let path = resolve(host, str_arg(args, 0, "sheet-recalc", "a sheet name")?)?;
         writable(reg, "sheet-recalc")?;

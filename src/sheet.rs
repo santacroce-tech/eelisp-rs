@@ -184,6 +184,15 @@ pub fn storable(v: Value) -> Result<Value, String> {
     })
 }
 
+/// A cell's input as it reads from `(dr, dc)` away: a formula's references move with it, anything
+/// else is the same text wherever it lands.
+fn moved_input(input: &str, shift: Option<(i64, i64)>) -> String {
+    match (shift, input.strip_prefix('=')) {
+        (Some((0, 0)), _) | (None, _) | (_, None) => input.to_string(),
+        (Some((dr, dc)), Some(body)) => format!("={}", shift_formula(body, dr, dc).text),
+    }
+}
+
 /// A formula that reads a failed cell fails too, naming where the trouble started — once, not as a
 /// chain through every cell in between.
 fn propagated(origin: CellRef, message: &str) -> String {
@@ -504,6 +513,53 @@ impl Sheet {
         cell.value = value;
         cell.error = error;
         changed
+    }
+
+    /// Type a block of inputs with its top-left at `origin`. `shift` is how far the block moved from
+    /// where it was copied: every formula's references move with it, which is what makes a pasted
+    /// `=(sum B1:B2)` read the rows it landed next to. `None` types the text exactly — a paste from
+    /// another program, where there are no references of ours to move.
+    pub fn stage_paste(&mut self, origin: CellRef, rows: Vec<Vec<String>>, shift: Option<(i64, i64)>) -> Vec<CellRef> {
+        let mut touched = Vec::new();
+        for (r, row) in rows.into_iter().enumerate() {
+            for (c, input) in row.into_iter().enumerate() {
+                let at = CellRef::new(origin.row + r as u32, origin.col + c as u32);
+                self.stage_input(at, moved_input(&input, shift));
+                touched.push(at);
+            }
+        }
+        touched
+    }
+
+    /// Repeat `source` over `target`, each copy's references shifted by where it lands — filling a
+    /// column of running totals down. Cells of `source` itself are left alone.
+    pub fn stage_fill(&mut self, source: Range, target: Range) -> Result<Vec<CellRef>, LispError> {
+        if target.len() > MAX_RANGE_CELLS {
+            return Err(fail(format!("{} is {} cells — too many to fill at once", target.a1(), target.len())));
+        }
+        let block: Vec<Vec<(String, CellRef)>> = (source.start.row..=source.end.row)
+            .map(|r| {
+                (source.start.col..=source.end.col)
+                    .map(|c| {
+                        let at = CellRef::new(r, c);
+                        (self.input_at(at).to_string(), at)
+                    })
+                    .collect()
+            })
+            .collect();
+        let (height, width) = (source.height() as usize, source.width() as usize);
+        let mut touched = Vec::new();
+        for at in target.cells() {
+            if source.contains(at) {
+                continue;
+            }
+            let (from_input, from) =
+                &block[(at.row - target.start.row) as usize % height][(at.col - target.start.col) as usize % width];
+            let shift = (at.row as i64 - from.row as i64, at.col as i64 - from.col as i64);
+            self.stage_input(at, moved_input(from_input, Some(shift)));
+            touched.push(at);
+        }
+        Ok(touched)
     }
 
     /// Merge `changes` into the format of every cell in `area` — a key set to null is removed — or

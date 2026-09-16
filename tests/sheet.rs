@@ -469,6 +469,64 @@ fn rewrite_formula_moves_only_references() {
     assert!(!other.changed, "another sheet's cells don't move");
 }
 
+// ── copying cells around ─────────────────────────────────────────────
+
+#[test]
+fn a_pasted_formula_reads_where_it_landed() {
+    let (_, it) = budget("paste");
+    ev(&it, r#"(sheet-set "Budget" "A1" '(("1" "10") ("2" "20") ("=(sum A1:A2)" "=(* A1 $B$1)")))"#);
+    assert_eq!(get(&it, "A3"), "3");
+    // copy the pair in row 3 one column right: relative references follow, $B$1 stays put
+    ev(&it, r#"(sheet-paste "Budget" "B3" (sheet-copy "Budget" "A3:B3") "A3")"#);
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#""=(sum B1:B2)""#), "{payload}");
+    assert!(payload.contains(r#""=(* B1 $B$1)""#), "the anchored one didn't move: {payload}");
+    assert_eq!(get(&it, "B3"), "30");
+    assert_eq!(get(&it, "C3"), "100");
+
+    // without a source, the text is typed as it is — a paste from another program
+    ev(&it, r#"(sheet-paste "Budget" "E1" '(("=(sum A1:A2)")))"#);
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#"(0 4 "=(sum A1:A2)" 3"#));
+
+    // a reference pushed off the top of the sheet has nowhere to point
+    ev(&it, r#"(sheet-paste "Budget" "A1" '(("=(+ A3 1)")) "A5")"#);
+    assert!(get_err(&it, "A1").contains("#REF!"));
+}
+
+#[test]
+fn fill_repeats_a_block_and_moves_its_references() {
+    let (_, it) = budget("fill");
+    ev(&it, r#"(sheet-set "Budget" "A1" '(("1") ("2") ("3") ("4")))"#);
+    set(&it, "B1", "=(* A1 10)");
+    ev(&it, r#"(sheet-fill "Budget" "B1" "B1:B4")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "B1:B4")"#), "((10) (20) (30) (40))");
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#""=(* A4 10)""#), "{payload}");
+
+    // a two-cell source tiles across the target
+    ev(&it, r#"(sheet-set "Budget" "D1" '(("x") ("y")))"#);
+    ev(&it, r#"(sheet-fill "Budget" "D1:D2" "D1:D6")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "D1:D6")"#), r#"(("x") ("y") ("x") ("y") ("x") ("y"))"#);
+
+    // filling from a formula that reads its own row keeps reading its own row
+    set(&it, "E1", "=(str A1 \"!\")");
+    ev(&it, r#"(sheet-fill "Budget" "E1" "E1:E3")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "E1:E3")"#), r#"(("1!") ("2!") ("3!"))"#);
+}
+
+#[test]
+fn shift_formula_moves_only_what_is_free_to_move() {
+    let rw = shift_formula("(+ A1 $A$1 B$2 $B2) ; A1 in a comment", 1, 2);
+    assert_eq!(rw.text, "(+ C2 $A$1 D$2 $B3) ; A1 in a comment");
+    assert!(rw.changed && !rw.resized);
+    let off = shift_formula("(+ A1 1)", -1, 0);
+    assert_eq!(off.text, "(+ #REF! 1)");
+    assert!(off.resized);
+    let ranges = shift_formula("(sum A1:B2)", 2, 0);
+    assert_eq!(ranges.text, "(sum A3:B4)");
+    assert_eq!(shift_formula("(+ 1 2)", 5, 5).changed, false);
+}
+
 // ── the aggregates a sheet leans on ──────────────────────────────────
 
 #[test]
