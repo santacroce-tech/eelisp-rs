@@ -307,9 +307,13 @@ fn change(
     })();
     match outcome {
         Ok(changed) => {
-            let mut sheets = reg.borrow_mut();
-            let sheet = sheets.sheet(path)?;
-            Ok(Value::List(Rc::new(changed.into_iter().map(|at| sheet.row_value(at)).collect())))
+            let rows: Vec<Value> = {
+                let mut sheets = reg.borrow_mut();
+                let sheet = sheets.sheet(path)?;
+                changed.iter().map(|at| sheet.row_value(*at)).collect()
+            };
+            propagate(reg, path, env)?;
+            Ok(Value::List(Rc::new(rows)))
         }
         Err(e) => {
             reg.borrow_mut().reload(path);
@@ -368,12 +372,19 @@ fn recalculate(
                     let result = match prepared {
                         None => continue,
                         Some(Prepared::Fail(message)) => Err(message),
-                        Some(Prepared::Eval { expr, bindings }) => {
-                            let scope = env::child(&root);
-                            for (name, value) in bindings {
-                                env::define(&scope, &name, value);
+                        Some(Prepared::Eval { expr, bindings, externals }) => {
+                            // Reading another sheet borrows the registry, which is why it happens
+                            // here — between formulas — and not inside `prepare`.
+                            match read_externals(reg, path, externals) {
+                                Err(message) => Err(message),
+                                Ok(others) => {
+                                    let scope = env::child(&root);
+                                    for (name, value) in bindings.into_iter().chain(others) {
+                                        env::define(&scope, &name, value);
+                                    }
+                                    eval::eval(expr, scope).map_err(|e| e.to_string())
+                                }
                             }
-                            eval::eval(expr, scope).map_err(|e| e.to_string())
                         }
                     };
                     if reg.borrow_mut().sheet(path)?.set_result(at, result) {
@@ -385,6 +396,62 @@ fn recalculate(
     }
     reg.borrow_mut().sheet(path)?.save(&save)?;
     Ok(save)
+}
+
+/// Read the cells a formula names in other sheets — `Budget!A1`, `Budget!A1:B3` — opening them as
+/// needed. A sheet is named beside the one referring to it, so `Budget!A1` in `money/Q3.eesheet`
+/// means `money/Budget.eesheet`.
+fn read_externals(reg: &Registry, from: &Path, externals: Vec<External>) -> Result<Vec<(String, Value)>, String> {
+    let base = from.parent().unwrap_or(Path::new("")).to_path_buf();
+    let mut out = Vec::with_capacity(externals.len());
+    for (symbol, name, at) in externals {
+        let target = resolve_in(&base, &name);
+        let mut sheets = reg.borrow_mut();
+        let sheet = sheets.sheet(&target).map_err(|e| format!("{symbol}: {e}"))?;
+        let value = match at {
+            RefSym::Cell(c) => match sheet.error_at(c) {
+                Some(e) => return Err(format!("{name}!{} has an error — {e}", c.a1())),
+                None => sheet.value_at(c),
+            },
+            RefSym::Range(range) => {
+                if range.len() > MAX_RANGE_CELLS {
+                    return Err(format!("{symbol} is {} cells — more than a formula can read", range.len()));
+                }
+                if let Some((c, e)) = sheet.first_error_in(range) {
+                    return Err(format!("{name}!{} has an error — {e}", c.a1()));
+                }
+                Value::List(Rc::new(range.cells().map(|c| sheet.value_at(c)).collect()))
+            }
+            _ => Value::Null,
+        };
+        out.push((symbol, value));
+    }
+    Ok(out)
+}
+
+/// A write can change what another open sheet shows. Every open sheet that reads this one is
+/// recomputed — once each, so two sheets reading each other settle instead of bouncing.
+fn propagate(reg: &Registry, changed: &Path, env: &Env) -> Result<(), LispError> {
+    let readers: Vec<PathBuf> = reg
+        .borrow()
+        .reading_map()
+        .into_iter()
+        .filter(|(path, names)| {
+            path != changed
+                && names.iter().any(|n| resolve_in(path.parent().unwrap_or(Path::new("")), n) == changed)
+        })
+        .map(|(path, _)| path)
+        .collect();
+    for reader in readers {
+        let seeds = match reg.borrow_mut().loaded(&reader) {
+            Some(sheet) => sheet.cells_reading_other_sheets(),
+            None => continue,
+        };
+        if !seeds.is_empty() {
+            recalculate(reg, &reader, &seeds, BTreeSet::new(), env)?;
+        }
+    }
+    Ok(())
 }
 
 /// Formulas run in the global environment, whatever scope the builtin was called from.
@@ -406,26 +473,31 @@ fn resolve(host: &Host, name: &str) -> Result<PathBuf, LispError> {
     if name.trim().is_empty() {
         return Err(fail("a sheet needs a name"));
     }
-    let named = Path::new(name);
-    let file = if named.extension().is_some_and(|e| e == std::ffi::OsStr::new(EXT)) { named.to_path_buf() } else { PathBuf::from(format!("{name}.{EXT}")) };
-    let absolute = if file.is_absolute() {
-        file
+    let dir = host.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default();
+    let base = if dir.is_empty() {
+        std::env::current_dir().map_err(|e| fail(format!("no folder to find {name} in: {e}")))?
     } else {
-        let dir = host.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default();
-        let base = if dir.is_empty() {
-            std::env::current_dir().map_err(|e| fail(format!("no folder to find {name} in: {e}")))?
-        } else {
-            PathBuf::from(dir)
-        };
-        base.join(file)
+        PathBuf::from(dir)
     };
+    Ok(resolve_in(&base, name))
+}
+
+/// The same, looking in `base` — the folder a sheet naming another one sits in.
+fn resolve_in(base: &Path, name: &str) -> PathBuf {
+    let named = Path::new(name);
+    let file = if named.extension().is_some_and(|e| e == std::ffi::OsStr::new(EXT)) {
+        named.to_path_buf()
+    } else {
+        PathBuf::from(format!("{name}.{EXT}"))
+    };
+    let absolute = if file.is_absolute() { file } else { base.join(file) };
     // One key per file however it was spelled: `notes/../Budget` and `Budget` are the same sheet.
     if let Ok(canonical) = absolute.canonicalize() {
-        return Ok(canonical);
+        return canonical;
     }
     match (absolute.parent().and_then(|p| p.canonicalize().ok()), absolute.file_name()) {
-        (Some(dir), Some(file)) => Ok(dir.join(file)),
-        _ => Ok(absolute),
+        (Some(dir), Some(file)) => dir.join(file),
+        _ => absolute,
     }
 }
 

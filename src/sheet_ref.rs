@@ -148,12 +148,12 @@ pub fn parse_area(s: &str) -> Option<Range> {
 }
 
 /// What a symbol inside a formula refers to, if it refers to anything.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RefSym {
     Cell(CellRef),
     Range(Range),
-    /// `Other!A1` — recognised so it can say it isn't supported, rather than *Undefined symbol*.
-    OtherSheet,
+    /// `Budget!A1` — cells in another sheet, named beside this one. `at` is a Cell or a Range.
+    Other { sheet: String, at: Box<RefSym> },
     /// What a reference to a deleted cell becomes.
     Deleted,
 }
@@ -165,8 +165,11 @@ pub fn classify(sym: &str) -> Option<RefSym> {
         return Some(RefSym::Deleted);
     }
     if let Some((sheet, rest)) = sym.split_once('!') {
-        let points_somewhere = parse_cell(rest).is_some() || parse_range(rest).is_some();
-        return (!sheet.is_empty() && points_somewhere).then_some(RefSym::OtherSheet);
+        if sheet.is_empty() {
+            return None;
+        }
+        let at = parse_cell(rest).map(|a| RefSym::Cell(a.cell)).or_else(|| parse_range(rest).map(RefSym::Range))?;
+        return Some(RefSym::Other { sheet: sheet.to_string(), at: Box::new(at) });
     }
     if let Some(a) = parse_cell(sym) {
         return Some(RefSym::Cell(a.cell));

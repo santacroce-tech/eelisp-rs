@@ -358,6 +358,12 @@ str-join — builtin
       <code>A1:C9</code> a flat list of values, <code>nil</code> for blanks. Each cell keeps its last
       result, so opening a sheet runs no formula; changing a cell recalculates what depends on it.
     </p>
+    <p>
+      <code>Rates!A1</code> and <code>Rates!A1:A9</code> read another sheet, named beside the one
+      reading it — <code>money/Q3!A1</code> from a sheet in the same folder as <code>money/</code>.
+      Writing a sheet redoes the open sheets that read it, once each, so two sheets naming each other
+      settle rather than bounce. A sheet that wasn't open when it changed is picked up by ↻.
+    </p>
 <pre><code>(sheet-new <span class="st">"Budget"</span>)
 (sheet-set <span class="st">"Budget"</span> <span class="st">"A1"</span> '((<span class="st">"rent"</span> <span class="st">"1200"</span>) (<span class="st">"food"</span> <span class="st">"450"</span>) (<span class="st">"total"</span> <span class="st">"=(sum B1:B2)"</span>)))
 (sheet-get <span class="st">"Budget"</span> <span class="st">"B3"</span>)        <span class="cm">; → 1650</span>
@@ -384,7 +390,8 @@ str-join — builtin
       <tr><td><code>(sheet-version name)</code></td><td>moves on every write</td></tr>
     </table></div>
     <p>
-      A formula may read sheets — <code>(sheet-get "Rates" "A1")</code> — but not change them.
+      A formula may read sheets — <code>Rates!A1</code>, or <code>(sheet-get "Rates" "A1")</code> for a
+      name it works out as it runs — but not change them.
     </p>
   </div></div>
 </section>

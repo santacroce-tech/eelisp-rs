@@ -79,7 +79,12 @@ fn a_symbol_is_a_reference_only_when_it_is_shaped_like_one() {
         Some(RefSym::Range(Range::new(CellRef::new(0, 0), CellRef::new(8, 1)))),
         "corners in either order"
     );
-    assert_eq!(classify("Other!A1"), Some(RefSym::OtherSheet));
+    assert_eq!(
+        classify("Other!A1"),
+        Some(RefSym::Other { sheet: "Other".into(), at: Box::new(RefSym::Cell(CellRef::new(0, 0))) })
+    );
+    assert!(matches!(classify("money/Q3!A1:B2"), Some(RefSym::Other { .. })));
+    assert_eq!(classify("!A1"), None);
     assert_eq!(classify("#REF!"), Some(RefSym::Deleted));
     for not_a_ref in ["c3", "A0", "A01", "x1", "total", "A1:", "3A"] {
         assert_eq!(classify(not_a_ref), None, "{not_a_ref}");
@@ -247,8 +252,8 @@ fn formulas_that_do_not_read_as_one_expression_say_so() {
     assert!(get_err(&it, "A2").contains("wrap several in (do"));
     set(&it, "A3", "=(+ 1");
     assert!(get_err(&it, "A3").contains("Parse error"));
-    set(&it, "A4", "=(+ Other!A1 1)");
-    assert!(get_err(&it, "A4").contains("can't reference another sheet yet"));
+    set(&it, "A4", "=(+ Nowhere!A1 1)");
+    assert!(get_err(&it, "A4").contains("no sheet at"), "{}", get_err(&it, "A4"));
     set(&it, "A5", "=(pow 10 400)");
     assert!(get_err(&it, "A5").contains("not a finite number"));
 }
@@ -467,6 +472,59 @@ fn rewrite_formula_moves_only_references() {
     assert!(moved.changed && !moved.resized, "a reference that moved with its cell reads the same value");
     let other = rewrite_formula("(+ Other!A5 1)", &Edit::Insert { axis: Axis::Rows, at: 0, n: 1 });
     assert!(!other.changed, "another sheet's cells don't move");
+}
+
+// ── one sheet reading another ────────────────────────────────────────
+
+#[test]
+fn a_formula_reads_another_sheet_by_name() {
+    let (dir, it) = budget("cross");
+    ev(&it, r#"(sheet-new "Rates")"#);
+    ev(&it, r#"(sheet-set "Rates" "A1" '(("0.2") ("0.3") ("0.5")))"#);
+    set(&it, "A1", "100");
+    set(&it, "B1", "=(* A1 Rates!A1)");
+    set(&it, "B2", "=(sum Rates!A1:A3)");
+    assert_eq!(get(&it, "B1"), "20");
+    assert_eq!(get(&it, "B2"), "1");
+
+    // a sheet in a folder is named from the folder of the sheet reading it
+    std::fs::create_dir(dir.join("money")).unwrap();
+    ev(&it, r#"(sheet-new "money/Q3")"#);
+    ev(&it, r#"(sheet-set "money/Q3" "A1" "7")"#);
+    set(&it, "B3", "=(+ money/Q3!A1 1)");
+    assert_eq!(get(&it, "B3"), "8");
+}
+
+#[test]
+fn changing_a_sheet_redoes_the_open_ones_that_read_it() {
+    let (_, it) = budget("cross-update");
+    ev(&it, r#"(sheet-new "Rates")"#);
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.2")"#);
+    set(&it, "A1", "100");
+    set(&it, "B1", "=(* A1 Rates!A1)");
+    assert_eq!(get(&it, "B1"), "20");
+
+    // writing the other sheet is enough — nothing asks Budget to recalculate
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.5")"#);
+    assert_eq!(get(&it, "B1"), "50");
+
+    // and an error over there arrives here, named
+    ev(&it, r#"(sheet-set "Rates" "A1" "=(nope)")"#);
+    assert!(get_err(&it, "B1").contains("Rates!A1 has an error — Undefined symbol: nope"), "{}", get_err(&it, "B1"));
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.25")"#);
+    assert_eq!(get(&it, "B1"), "25");
+}
+
+#[test]
+fn two_sheets_reading_each_other_settle() {
+    let (_, it) = budget("cross-circle");
+    ev(&it, r#"(sheet-new "Other")"#);
+    set(&it, "A1", "1");
+    set(&it, "B1", "=(+ Other!A1 1)");
+    ev(&it, r#"(sheet-set "Other" "A1" "=(+ Budget!A1 10)")"#);
+    // each sheet is recomputed once per write: no bouncing, and both hold a value
+    assert_eq!(ev(&it, r#"(sheet-get "Other" "A1")"#), "11");
+    assert_eq!(get(&it, "B1"), "12");
 }
 
 // ── copying cells around ─────────────────────────────────────────────
