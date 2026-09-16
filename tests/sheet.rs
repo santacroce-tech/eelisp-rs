@@ -79,7 +79,12 @@ fn a_symbol_is_a_reference_only_when_it_is_shaped_like_one() {
         Some(RefSym::Range(Range::new(CellRef::new(0, 0), CellRef::new(8, 1)))),
         "corners in either order"
     );
-    assert_eq!(classify("Other!A1"), Some(RefSym::OtherSheet));
+    assert_eq!(
+        classify("Other!A1"),
+        Some(RefSym::Other { sheet: "Other".into(), at: Box::new(RefSym::Cell(CellRef::new(0, 0))) })
+    );
+    assert!(matches!(classify("money/Q3!A1:B2"), Some(RefSym::Other { .. })));
+    assert_eq!(classify("!A1"), None);
     assert_eq!(classify("#REF!"), Some(RefSym::Deleted));
     for not_a_ref in ["c3", "A0", "A01", "x1", "total", "A1:", "3A"] {
         assert_eq!(classify(not_a_ref), None, "{not_a_ref}");
@@ -247,8 +252,8 @@ fn formulas_that_do_not_read_as_one_expression_say_so() {
     assert!(get_err(&it, "A2").contains("wrap several in (do"));
     set(&it, "A3", "=(+ 1");
     assert!(get_err(&it, "A3").contains("Parse error"));
-    set(&it, "A4", "=(+ Other!A1 1)");
-    assert!(get_err(&it, "A4").contains("can't reference another sheet yet"));
+    set(&it, "A4", "=(+ Nowhere!A1 1)");
+    assert!(get_err(&it, "A4").contains("no sheet at"), "{}", get_err(&it, "A4"));
     set(&it, "A5", "=(pow 10 400)");
     assert!(get_err(&it, "A5").contains("not a finite number"));
 }
@@ -467,6 +472,117 @@ fn rewrite_formula_moves_only_references() {
     assert!(moved.changed && !moved.resized, "a reference that moved with its cell reads the same value");
     let other = rewrite_formula("(+ Other!A5 1)", &Edit::Insert { axis: Axis::Rows, at: 0, n: 1 });
     assert!(!other.changed, "another sheet's cells don't move");
+}
+
+// ── one sheet reading another ────────────────────────────────────────
+
+#[test]
+fn a_formula_reads_another_sheet_by_name() {
+    let (dir, it) = budget("cross");
+    ev(&it, r#"(sheet-new "Rates")"#);
+    ev(&it, r#"(sheet-set "Rates" "A1" '(("0.2") ("0.3") ("0.5")))"#);
+    set(&it, "A1", "100");
+    set(&it, "B1", "=(* A1 Rates!A1)");
+    set(&it, "B2", "=(sum Rates!A1:A3)");
+    assert_eq!(get(&it, "B1"), "20");
+    assert_eq!(get(&it, "B2"), "1");
+
+    // a sheet in a folder is named from the folder of the sheet reading it
+    std::fs::create_dir(dir.join("money")).unwrap();
+    ev(&it, r#"(sheet-new "money/Q3")"#);
+    ev(&it, r#"(sheet-set "money/Q3" "A1" "7")"#);
+    set(&it, "B3", "=(+ money/Q3!A1 1)");
+    assert_eq!(get(&it, "B3"), "8");
+}
+
+#[test]
+fn changing_a_sheet_redoes_the_open_ones_that_read_it() {
+    let (_, it) = budget("cross-update");
+    ev(&it, r#"(sheet-new "Rates")"#);
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.2")"#);
+    set(&it, "A1", "100");
+    set(&it, "B1", "=(* A1 Rates!A1)");
+    assert_eq!(get(&it, "B1"), "20");
+
+    // writing the other sheet is enough — nothing asks Budget to recalculate
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.5")"#);
+    assert_eq!(get(&it, "B1"), "50");
+
+    // and an error over there arrives here, named
+    ev(&it, r#"(sheet-set "Rates" "A1" "=(nope)")"#);
+    assert!(get_err(&it, "B1").contains("Rates!A1 has an error — Undefined symbol: nope"), "{}", get_err(&it, "B1"));
+    ev(&it, r#"(sheet-set "Rates" "A1" "0.25")"#);
+    assert_eq!(get(&it, "B1"), "25");
+}
+
+#[test]
+fn two_sheets_reading_each_other_settle() {
+    let (_, it) = budget("cross-circle");
+    ev(&it, r#"(sheet-new "Other")"#);
+    set(&it, "A1", "1");
+    set(&it, "B1", "=(+ Other!A1 1)");
+    ev(&it, r#"(sheet-set "Other" "A1" "=(+ Budget!A1 10)")"#);
+    // each sheet is recomputed once per write: no bouncing, and both hold a value
+    assert_eq!(ev(&it, r#"(sheet-get "Other" "A1")"#), "11");
+    assert_eq!(get(&it, "B1"), "12");
+}
+
+// ── copying cells around ─────────────────────────────────────────────
+
+#[test]
+fn a_pasted_formula_reads_where_it_landed() {
+    let (_, it) = budget("paste");
+    ev(&it, r#"(sheet-set "Budget" "A1" '(("1" "10") ("2" "20") ("=(sum A1:A2)" "=(* A1 $B$1)")))"#);
+    assert_eq!(get(&it, "A3"), "3");
+    // copy the pair in row 3 one column right: relative references follow, $B$1 stays put
+    ev(&it, r#"(sheet-paste "Budget" "B3" (sheet-copy "Budget" "A3:B3") "A3")"#);
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#""=(sum B1:B2)""#), "{payload}");
+    assert!(payload.contains(r#""=(* B1 $B$1)""#), "the anchored one didn't move: {payload}");
+    assert_eq!(get(&it, "B3"), "30");
+    assert_eq!(get(&it, "C3"), "100");
+
+    // without a source, the text is typed as it is — a paste from another program
+    ev(&it, r#"(sheet-paste "Budget" "E1" '(("=(sum A1:A2)")))"#);
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#"(0 4 "=(sum A1:A2)" 3"#));
+
+    // a reference pushed off the top of the sheet has nowhere to point
+    ev(&it, r#"(sheet-paste "Budget" "A1" '(("=(+ A3 1)")) "A5")"#);
+    assert!(get_err(&it, "A1").contains("#REF!"));
+}
+
+#[test]
+fn fill_repeats_a_block_and_moves_its_references() {
+    let (_, it) = budget("fill");
+    ev(&it, r#"(sheet-set "Budget" "A1" '(("1") ("2") ("3") ("4")))"#);
+    set(&it, "B1", "=(* A1 10)");
+    ev(&it, r#"(sheet-fill "Budget" "B1" "B1:B4")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "B1:B4")"#), "((10) (20) (30) (40))");
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#""=(* A4 10)""#), "{payload}");
+
+    // a two-cell source tiles across the target
+    ev(&it, r#"(sheet-set "Budget" "D1" '(("x") ("y")))"#);
+    ev(&it, r#"(sheet-fill "Budget" "D1:D2" "D1:D6")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "D1:D6")"#), r#"(("x") ("y") ("x") ("y") ("x") ("y"))"#);
+
+    // filling from a formula that reads its own row keeps reading its own row
+    set(&it, "E1", "=(str A1 \"!\")");
+    ev(&it, r#"(sheet-fill "Budget" "E1" "E1:E3")"#);
+    assert_eq!(ev(&it, r#"(sheet-rows "Budget" "E1:E3")"#), r#"(("1!") ("2!") ("3!"))"#);
+}
+
+#[test]
+fn shift_formula_moves_only_what_is_free_to_move() {
+    let rw = shift_formula("(+ A1 $A$1 B$2 $B2) ; A1 in a comment", 1, 2);
+    assert_eq!(rw.text, "(+ C2 $A$1 D$2 $B3) ; A1 in a comment");
+    assert!(rw.changed && !rw.resized);
+    let off = shift_formula("(+ A1 1)", -1, 0);
+    assert_eq!(off.text, "(+ #REF! 1)");
+    assert!(off.resized);
+    let ranges = shift_formula("(sum A1:B2)", 2, 0);
+    assert_eq!(ranges.text, "(sum A3:B4)");
+    assert_eq!(shift_formula("(+ 1 2)", 5, 5).changed, false);
 }
 
 // ── the aggregates a sheet leans on ──────────────────────────────────

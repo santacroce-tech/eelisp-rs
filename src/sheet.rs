@@ -184,6 +184,15 @@ pub fn storable(v: Value) -> Result<Value, String> {
     })
 }
 
+/// A cell's input as it reads from `(dr, dc)` away: a formula's references move with it, anything
+/// else is the same text wherever it lands.
+fn moved_input(input: &str, shift: Option<(i64, i64)>) -> String {
+    match (shift, input.strip_prefix('=')) {
+        (Some((0, 0)), _) | (None, _) | (_, None) => input.to_string(),
+        (Some((dr, dc)), Some(body)) => format!("={}", shift_formula(body, dr, dc).text),
+    }
+}
+
 /// A formula that reads a failed cell fails too, naming where the trouble started — once, not as a
 /// chain through every cell in between.
 fn propagated(origin: CellRef, message: &str) -> String {
@@ -205,9 +214,13 @@ pub enum Step {
     Cycle(Vec<CellRef>),
 }
 
+/// A reference to another sheet, waiting to be read: the symbol, the sheet's name, and where in it.
+pub type External = (String, String, RefSym);
+
 pub enum Prepared {
-    /// Evaluate `expr` with each reference bound to its value.
-    Eval { expr: Value, bindings: Vec<(String, Value)> },
+    /// Evaluate `expr` with each reference bound to its value — once `externals`, which name cells in
+    /// other sheets, have been read and bound too.
+    Eval { expr: Value, bindings: Vec<(String, Value)>, externals: Vec<External> },
     /// The formula can't run: its text doesn't parse, or it reads a failed or deleted cell.
     Fail(String),
 }
@@ -354,6 +367,37 @@ impl Sheet {
         self.cells.get(&at).map(|c| c.input.as_str()).unwrap_or("")
     }
 
+    /// The sheets this one's formulas name — how a write to one of them finds the sheets to redo.
+    pub fn reads_sheets(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .cells
+            .values()
+            .filter_map(|c| c.formula.as_ref())
+            .flat_map(|f| f.refs.iter())
+            .filter_map(|(_, r)| match r {
+                RefSym::Other { sheet, .. } => Some(sheet.clone()),
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// The formulas that read another sheet — what to recompute when one of them changes.
+    pub fn cells_reading_other_sheets(&self) -> Vec<CellRef> {
+        let mut out: Vec<CellRef> = self
+            .cells
+            .iter()
+            .filter(|(_, c)| {
+                c.formula.as_ref().is_some_and(|f| f.refs.iter().any(|(_, r)| matches!(r, RefSym::Other { .. })))
+            })
+            .map(|(at, _)| *at)
+            .collect();
+        out.sort();
+        out
+    }
+
     pub fn formula_cells(&self) -> Vec<CellRef> {
         let mut out: Vec<CellRef> =
             self.cells.iter().filter(|(_, c)| c.formula.is_some()).map(|(at, _)| *at).collect();
@@ -458,6 +502,7 @@ impl Sheet {
             Err(m) => return Some(Prepared::Fail(m.clone())),
         };
         let mut bindings = Vec::with_capacity(formula.refs.len());
+        let mut externals = Vec::new();
         for (name, r) in &formula.refs {
             let value = match r {
                 RefSym::Cell(c) => {
@@ -479,10 +524,11 @@ impl Sheet {
                     }
                     Value::List(Rc::new(range.cells().map(|c| self.value_at(c)).collect()))
                 }
-                RefSym::OtherSheet => {
-                    return Some(Prepared::Fail(format!(
-                        "{name}: formulas can't reference another sheet yet — use (sheet-get \"Sheet\" \"A1\")"
-                    )))
+                // Another sheet's cells: only the registry can read those, so they are handed back
+                // to be resolved between formulas, where borrowing another sheet is safe.
+                RefSym::Other { sheet, at } => {
+                    externals.push((name.clone(), sheet.clone(), (**at).clone()));
+                    continue;
                 }
                 RefSym::Deleted => {
                     return Some(Prepared::Fail(format!("{DELETED} — this formula read a cell that was deleted")))
@@ -490,7 +536,7 @@ impl Sheet {
             };
             bindings.push((name.clone(), value));
         }
-        Some(Prepared::Eval { expr, bindings })
+        Some(Prepared::Eval { expr, bindings, externals })
     }
 
     /// Record a formula's outcome. True when the value or the error actually changed.
@@ -504,6 +550,53 @@ impl Sheet {
         cell.value = value;
         cell.error = error;
         changed
+    }
+
+    /// Type a block of inputs with its top-left at `origin`. `shift` is how far the block moved from
+    /// where it was copied: every formula's references move with it, which is what makes a pasted
+    /// `=(sum B1:B2)` read the rows it landed next to. `None` types the text exactly — a paste from
+    /// another program, where there are no references of ours to move.
+    pub fn stage_paste(&mut self, origin: CellRef, rows: Vec<Vec<String>>, shift: Option<(i64, i64)>) -> Vec<CellRef> {
+        let mut touched = Vec::new();
+        for (r, row) in rows.into_iter().enumerate() {
+            for (c, input) in row.into_iter().enumerate() {
+                let at = CellRef::new(origin.row + r as u32, origin.col + c as u32);
+                self.stage_input(at, moved_input(&input, shift));
+                touched.push(at);
+            }
+        }
+        touched
+    }
+
+    /// Repeat `source` over `target`, each copy's references shifted by where it lands — filling a
+    /// column of running totals down. Cells of `source` itself are left alone.
+    pub fn stage_fill(&mut self, source: Range, target: Range) -> Result<Vec<CellRef>, LispError> {
+        if target.len() > MAX_RANGE_CELLS {
+            return Err(fail(format!("{} is {} cells — too many to fill at once", target.a1(), target.len())));
+        }
+        let block: Vec<Vec<(String, CellRef)>> = (source.start.row..=source.end.row)
+            .map(|r| {
+                (source.start.col..=source.end.col)
+                    .map(|c| {
+                        let at = CellRef::new(r, c);
+                        (self.input_at(at).to_string(), at)
+                    })
+                    .collect()
+            })
+            .collect();
+        let (height, width) = (source.height() as usize, source.width() as usize);
+        let mut touched = Vec::new();
+        for at in target.cells() {
+            if source.contains(at) {
+                continue;
+            }
+            let (from_input, from) =
+                &block[(at.row - target.start.row) as usize % height][(at.col - target.start.col) as usize % width];
+            let shift = (at.row as i64 - from.row as i64, at.col as i64 - from.col as i64);
+            self.stage_input(at, moved_input(from_input, Some(shift)));
+            touched.push(at);
+        }
+        Ok(touched)
     }
 
     /// Merge `changes` into the format of every cell in `area` — a key set to null is removed — or
@@ -725,7 +818,7 @@ fn index(
                 single.entry(*c).or_default().insert(at);
             }
             RefSym::Range(range) => ranges.push((*range, at)),
-            RefSym::OtherSheet | RefSym::Deleted => {}
+            RefSym::Other { .. } | RefSym::Deleted => {}
         }
     }
 }
@@ -830,6 +923,16 @@ impl Sheets {
         let sheet = Sheet::create(path)?;
         self.open.insert(path.to_path_buf(), sheet);
         Ok(self.open.get_mut(path).unwrap())
+    }
+
+    /// Every open sheet's path, and the names of the sheets its formulas read.
+    pub fn reading_map(&self) -> Vec<(PathBuf, Vec<String>)> {
+        self.open.iter().map(|(path, sheet)| (path.clone(), sheet.reads_sheets())).collect()
+    }
+
+    /// An already-open sheet, without rereading it from disk.
+    pub fn loaded(&mut self, path: &Path) -> Option<&mut Sheet> {
+        self.open.get_mut(path)
     }
 
     /// Close the connection. True if it was open.

@@ -148,12 +148,12 @@ pub fn parse_area(s: &str) -> Option<Range> {
 }
 
 /// What a symbol inside a formula refers to, if it refers to anything.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RefSym {
     Cell(CellRef),
     Range(Range),
-    /// `Other!A1` — recognised so it can say it isn't supported, rather than *Undefined symbol*.
-    OtherSheet,
+    /// `Budget!A1` — cells in another sheet, named beside this one. `at` is a Cell or a Range.
+    Other { sheet: String, at: Box<RefSym> },
     /// What a reference to a deleted cell becomes.
     Deleted,
 }
@@ -165,8 +165,11 @@ pub fn classify(sym: &str) -> Option<RefSym> {
         return Some(RefSym::Deleted);
     }
     if let Some((sheet, rest)) = sym.split_once('!') {
-        let points_somewhere = parse_cell(rest).is_some() || parse_range(rest).is_some();
-        return (!sheet.is_empty() && points_somewhere).then_some(RefSym::OtherSheet);
+        if sheet.is_empty() {
+            return None;
+        }
+        let at = parse_cell(rest).map(|a| RefSym::Cell(a.cell)).or_else(|| parse_range(rest).map(RefSym::Range))?;
+        return Some(RefSym::Other { sheet: sheet.to_string(), at: Box::new(at) });
     }
     if let Some(a) = parse_cell(sym) {
         return Some(RefSym::Cell(a.cell));
@@ -276,24 +279,69 @@ pub struct Rewrite {
 /// Move the references in a formula body (the text after `=`) to where their cells went.
 /// Strings, comments and everything that isn't a cell reference are left exactly as they were.
 pub fn rewrite_formula(body: &str, edit: &Edit) -> Rewrite {
-    let unchanged = || Rewrite { text: body.to_string(), changed: false, resized: false };
+    let mut resized = false;
+    let mut rw = rewrite_symbols(body, |sym| rewrite_symbol(sym, edit, &mut resized));
+    rw.resized = resized;
+    rw
+}
+
+/// Move every reference by `(dr, dc)` — what copying a formula to another cell does. A `$` holds a
+/// coordinate still; a reference pushed off the sheet becomes `#REF!`.
+pub fn shift_formula(body: &str, dr: i64, dc: i64) -> Rewrite {
+    let mut lost = false;
+    let shift = |a: Anchored| -> Option<Anchored> {
+        let row = if a.abs_row { a.cell.row as i64 } else { a.cell.row as i64 + dr };
+        let col = if a.abs_col { a.cell.col as i64 } else { a.cell.col as i64 + dc };
+        let ok = (0..MAX_ROWS as i64).contains(&row) && (0..MAX_COLS as i64).contains(&col);
+        ok.then(|| Anchored { cell: CellRef::new(row as u32, col as u32), ..a })
+    };
+    let mut rw = rewrite_symbols(body, |sym| {
+        if sym.contains('!') {
+            return None; // another sheet's cells, or an already-deleted reference
+        }
+        if let Some(a) = parse_cell(sym) {
+            return Some(match shift(a) {
+                Some(moved) => moved.print(),
+                None => {
+                    lost = true;
+                    DELETED.to_string()
+                }
+            });
+        }
+        let (left, right) = sym.split_once(':')?;
+        match (shift(parse_cell(left)?), shift(parse_cell(right)?)) {
+            (Some(a), Some(b)) => Some(format!("{}:{}", a.print(), b.print())),
+            _ => {
+                lost = true;
+                Some(DELETED.to_string())
+            }
+        }
+    });
+    rw.resized = lost;
+    rw
+}
+
+/// Replace the reference-shaped symbols in a formula's text, leaving strings, comments, spacing and
+/// everything else exactly as written. `replace` returns the new spelling of a symbol, or None to
+/// leave it alone.
+fn rewrite_symbols(body: &str, mut replace: impl FnMut(&str) -> Option<String>) -> Rewrite {
     let Ok(tokens) = lex_spanned(body) else {
-        return unchanged(); // a formula that doesn't read is already an error; leave it be
+        // a formula that doesn't read is already an error; leave it be
+        return Rewrite { text: body.to_string(), changed: false, resized: false };
     };
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
     let mut last = 0;
-    let mut resized = false;
     for t in tokens {
         let Token::Sym(sym) = &t.tok else { continue };
-        let Some(replacement) = rewrite_symbol(sym, edit, &mut resized) else { continue };
+        let Some(replacement) = replace(sym) else { continue };
         out.extend(&chars[last..t.start]);
         out.push_str(&replacement);
         last = t.end;
     }
     out.extend(&chars[last..]);
     let changed = out != body;
-    Rewrite { text: out, changed, resized }
+    Rewrite { text: out, changed, resized: false }
 }
 
 /// The new spelling of one symbol, or `None` when it isn't a reference this edit moves.

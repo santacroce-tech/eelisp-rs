@@ -674,7 +674,8 @@ pub static AGENDA: &[Entry] = &[
 
 /// Sheets: a grid whose formulas are EELisp, each sheet a `.eesheet` file. A sheet is named
 /// `"Budget"`, `"money/Budget"` or by absolute path — relative to (current-dir), `.eesheet` implied.
-/// Cells are `"C3"`, areas `"A1:C9"`. Inside a formula, `C3` and `A1:C9` are the cells' values.
+/// Cells are `"C3"`, areas `"A1:C9"`. Inside a formula, `C3` and `A1:C9` are the cells' values, and
+/// `Rates!A1` reads a sheet of that name beside this one.
 pub static SHEETS: &[Entry] = &[
     doc!("sheet-new", "(sheet-new name) → string", "Creates an empty sheet file and returns its path. An error if the file exists.",
          "(sheet-new \"Budget\")"),
@@ -688,7 +689,13 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-set \"Budget\" \"B2\" \"450\")\n(sheet-set \"Budget\" \"C1\" '((\"=(sum B1:B2)\") (\"=(/ C1 12)\")))"),
     doc!("sheet-put", "(sheet-put name cell data) → list", "Writes a block with its top-left corner at cell: a list of rows, one flat row, or a result set — a header row, then its records. Values stay values: text that would read as a number or formula is kept as text.",
          "(sheet-put \"Report\" \"A1\" (query contacts :order \"name\"))"),
-    doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the database, other sheets or the clock, which aren't tracked.",
+    doc!("sheet-copy", "(sheet-copy name area) → list", "What was typed into an area, as rows of text — the other half of sheet-paste.",
+         "(sheet-copy \"Budget\" \"B1:B3\")   → ((\"1200\") (\"450\") (\"=(sum B1:B2)\"))"),
+    doc!("sheet-paste", "(sheet-paste name cell rows from) → list", "Types rows of input from a cell. Given `from` — where they were copied — every formula's references move by the distance travelled, so a pasted total adds up its new neighbours. Without it the text is typed exactly, which is what a paste from another program needs.",
+         "(sheet-paste \"Budget\" \"C1\" (sheet-copy \"Budget\" \"B1:B3\") \"B1\")"),
+    doc!("sheet-fill", "(sheet-fill name source target) → list", "Repeats the source over the target area, each copy's references shifted by where it lands — filling a column of totals down. The source's own cells are left alone.",
+         "(sheet-fill \"Budget\" \"C1\" \"C2:C12\")"),
+    doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the database or the clock, and for another sheet that wasn't open at the time, none of which are tracked.",
          "(sheet-recalc \"Budget\")"),
     doc!("sheet-format", "(sheet-format name area fmt) → list", "Merges a format into every cell of an area — a key set to nil is removed, and a nil format clears it. Given rows of formats instead, sets each cell's exactly from the area's corner. The keys are the host's: :num, :dp, :cur, :bold, :italic, :align.",
          "(sheet-format \"Budget\" \"B1:B9\" {:num \"currency\" :dp 2})"),
