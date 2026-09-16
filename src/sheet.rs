@@ -82,7 +82,8 @@ impl CellData {
 
 pub enum Input {
     Empty,
-    Literal(Value),
+    /// A value, and the format the way it was written asks for: `50%` is a percent, `$1,200` money.
+    Literal(Value, Option<Map<String, J>>),
     Formula(Formula),
 }
 
@@ -94,12 +95,153 @@ pub fn read_input(input: &str) -> Input {
         return Input::Formula(parse_formula(body));
     }
     if let Some(text) = input.strip_prefix('\'') {
-        return Input::Literal(Value::Str(text.to_string()));
+        return Input::Literal(Value::Str(text.to_string()), None);
     }
-    match looks_numeric(input.trim()).then(|| input.trim().parse::<f64>()) {
-        Some(Ok(n)) if n.is_finite() => Input::Literal(Value::Number(n)),
-        _ => Input::Literal(Value::Str(input.to_string())),
+    match read_number(input.trim()) {
+        Some((n, dress)) if n.is_finite() => Input::Literal(Value::Number(n), dress.format()),
+        _ => Input::Literal(Value::Str(input.to_string()), None),
     }
+}
+
+/// How a typed number was dressed: `50%`, `$1,200`, `1 200,50`.
+#[derive(Default)]
+struct Dress {
+    percent: bool,
+    currency: Option<&'static str>,
+    grouped: bool,
+}
+
+impl Dress {
+    /// The format that spelling asks for — none for a bare number, which is left alone.
+    fn format(&self) -> Option<Map<String, J>> {
+        let mut m = Map::new();
+        if self.percent {
+            m.insert("num".into(), J::from("percent"));
+        } else if let Some(code) = self.currency {
+            m.insert("num".into(), J::from("currency"));
+            m.insert("cur".into(), J::from(code));
+        } else if self.grouped {
+            m.insert("num".into(), J::from("number"));
+        }
+        (!m.is_empty()).then_some(m)
+    }
+}
+
+/// The currency symbols worth knowing, longest first so `R$` wins over `$`.
+const CURRENCIES: &[(&str, &str)] = &[
+    ("R$", "BRL"), ("US$", "USD"), ("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY"),
+    ("₹", "INR"), ("₽", "RUB"), ("₩", "KRW"), ("₺", "TRY"), ("CA$", "CAD"), ("A$", "AUD"),
+];
+
+/// A number as a person writes one: `1200`, `-3.5`, `50%`, `$1,200`, `1 200,50`, `1.200,50`.
+/// Returns the value and how it was dressed, or None when the text isn't a number at all.
+fn read_number(text: &str) -> Option<(f64, Dress)> {
+    let mut dress = Dress::default();
+    let mut body = text.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    // a leading sign stays with the number, whatever is wrapped around it
+    let sign = if let Some(rest) = body.strip_prefix('-') {
+        body = rest.trim_start();
+        -1.0
+    } else {
+        body = body.strip_prefix('+').unwrap_or(body).trim_start();
+        1.0
+    };
+
+    if body.starts_with('-') || body.starts_with('+') {
+        return None; // one sign is a number; two is a typo
+    }
+
+    if let Some(rest) = body.strip_suffix('%') {
+        dress.percent = true;
+        body = rest.trim_end();
+    }
+    for (symbol, code) in CURRENCIES {
+        if let Some(rest) = body.strip_prefix(symbol) {
+            dress.currency = Some(code);
+            body = rest.trim_start();
+            break;
+        }
+        if let Some(rest) = body.strip_suffix(symbol) {
+            dress.currency = Some(code);
+            body = rest.trim_end();
+            break;
+        }
+    }
+    if dress.percent && dress.currency.is_some() {
+        return None; // money and a percentage at once is a typo, not a number
+    }
+
+    // A plain number — including `1e3` and `.5` — reads as it always has; anything else has to have
+    // its separators taken off first.
+    let value: f64 = if looks_numeric(body) {
+        body.parse().ok()?
+    } else {
+        undress_separators(body, &mut dress)?.parse().ok()?
+    };
+    Some((sign * if dress.percent { value / 100.0 } else { value }, dress))
+}
+
+/// Strip thousands separators and settle which mark is the decimal point: whichever of `.` or `,`
+/// comes last, with the other separating groups. `1,200` is a thousand two hundred; `1.200` is not,
+/// because a lone dot is this engine's decimal point.
+fn undress_separators(body: &str, dress: &mut Dress) -> Option<String> {
+    const SPACES: [char; 3] = [' ', '\u{a0}', '\u{202f}'];
+    let grouped_by_space = body.contains(SPACES);
+    let body: String = body.chars().filter(|c| !SPACES.contains(c)).collect();
+    if body.is_empty() || !body.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+        return None;
+    }
+    let (dots, commas) = (body.matches('.').count(), body.matches(',').count());
+    let decimal = match (dots, commas) {
+        (0, 0) => None,
+        // both marks are present: whichever comes last is the decimal point, the other groups
+        (1.., 1..) => Some(if body.rfind('.') > body.rfind(',') { '.' } else { ',' }),
+        // several of one mark can only be separating groups
+        (2.., 0) | (0, 2..) => None,
+        // a lone comma groups when it sits before exactly three digits — `1,200` — and is a decimal
+        // point otherwise, which is how most of the world writes `1,5`
+        (0, 1) => (!groups_of_three(&body, ',')).then_some(','),
+        // a lone dot is the decimal point, as it is everywhere else in the language
+        _ => Some('.'),
+    };
+    let mut digits = String::with_capacity(body.len());
+    for c in body.chars() {
+        match c {
+            '.' | ',' if Some(c) == decimal => digits.push('.'),
+            '.' | ',' => {
+                if !groups_of_three(&body, c) {
+                    return None; // a separator that isn't separating thousands isn't one
+                }
+                dress.grouped = true;
+            }
+            _ => digits.push(c),
+        }
+    }
+    dress.grouped |= grouped_by_space;
+    // a decimal point needs digits on both sides once the grouping is gone
+    (!digits.is_empty() && digits != "." && digits.matches('.').count() <= 1).then_some(digits)
+}
+
+/// Does `sep` separate groups of three digits — `1,200,000` — with a first group of one to three?
+fn groups_of_three(body: &str, sep: char) -> bool {
+    let head = body.split(sep).next().unwrap_or("");
+    let mut parts = body.split(sep).skip(1).peekable();
+    if head.is_empty() || head.len() > 3 || !head.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    while let Some(part) = parts.next() {
+        // the last group may carry the decimals, which are not this separator's business
+        let group: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let tail = &part[group.len()..];
+        if group.len() != 3 || (!tail.is_empty() && parts.peek().is_some()) {
+            return false;
+        }
+    }
+    body.contains(sep)
 }
 
 /// `12`, `-3.5`, `.5`, `1e3` — but not `inf`, `NaN` or `0x1F`, which Rust would happily parse.
@@ -444,9 +586,17 @@ impl Sheet {
                 cell.value = Value::Null;
                 cell.error = None;
             }
-            Input::Literal(v) => {
+            Input::Literal(v, format) => {
                 cell.value = v;
                 cell.error = None;
+                // How it was written asks for a format; what the cell already has wins.
+                if let Some(asked) = format {
+                    let mut fmt = cell.fmt.clone().unwrap_or_default();
+                    if !fmt.contains_key("num") {
+                        fmt.extend(asked);
+                        cell.fmt = Some(fmt);
+                    }
+                }
             }
             Input::Formula(f) => {
                 index(&mut self.single_deps, &mut self.range_deps, at, &f.refs);
