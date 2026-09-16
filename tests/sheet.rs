@@ -527,6 +527,46 @@ fn a_format_already_on_the_cell_wins() {
     assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#"{:cur "EUR" :num "currency"}"#), "the cell keeps its own format");
 }
 
+#[test]
+fn an_iso_date_is_a_date_and_other_spellings_are_text() {
+    let (_, it) = budget("dates");
+    set(&it, "A1", "2026-09-16");
+    assert_eq!(get(&it, "A1"), "\"2026-09-16\"");
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#"{:date "iso"}"#), "it asked to be shown as a date");
+    // the value is the language's own date, so date arithmetic works on it
+    set(&it, "A2", "=(date-add A1 1 :months)");
+    assert_eq!(get(&it, "A2"), "\"2026-10-16\"");
+    set(&it, "A3", "=(date-diff \"2026-09-30\" A1)");
+    assert_eq!(get(&it, "A3"), "14"); // (date-diff a b) counts the days from b to a
+
+    for text in ["16/09/2026", "2026-13-01", "2026-02-30", "2026-9-16", "16 Sep 2026"] {
+        set(&it, "B1", text);
+        assert_eq!(get(&it, "B1"), format!("{text:?}"), "{text:?} stays text");
+    }
+    // a time after the date is still a date
+    set(&it, "C1", "2026-09-16 14:30");
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(r#""2026-09-16 14:30" "2026-09-16 14:30" nil {:date "iso"}"#));
+}
+
+#[test]
+fn a_row_can_be_given_a_height() {
+    let (dir, it) = budget("heights");
+    ev(&it, r#"(sheet-row-height "Budget" 3 48)"#);
+    ev(&it, r#"(sheet-col-width "Budget" "B" 200)"#);
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(":heights ((2 48))"));
+
+    // heights follow their rows through an insert, and survive a reopen
+    ev(&it, r#"(sheet-insert-rows "Budget" 1)"#);
+    assert!(ev(&it, r#"(sheet-open "Budget")"#).contains(":heights ((3 48))"));
+    ev(&it, r#"(sheet-close "Budget")"#);
+    let other = engine(&dir);
+    let payload = ev(&other, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(":heights ((3 48))") && payload.contains(":widths ((1 200))"), "{payload}");
+    ev(&other, r#"(sheet-row-height "Budget" 4 nil)"#);
+    assert!(ev(&other, r#"(sheet-open "Budget")"#).contains(":heights ()"));
+    assert!(err(&other, r#"(sheet-row-height "Budget" 4 -1)"#).contains("positive number"));
+}
+
 // ── one sheet reading another ────────────────────────────────────────
 
 #[test]
