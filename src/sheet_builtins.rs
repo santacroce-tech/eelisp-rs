@@ -454,8 +454,11 @@ fn block_of(v: &Value, input: fn(&Value) -> String) -> Vec<Vec<String>> {
     }
 }
 
+/// Each cell's own format, or none, in rows — `sheet-format`'s block form.
+type FormatBlock = Vec<Vec<Option<Map<String, J>>>>;
+
 /// Rows of formats for `sheet-format`'s block form: each a dict, or nil for none.
-fn format_block(rows: &[Value]) -> Result<Vec<Vec<Option<Map<String, J>>>>, LispError> {
+fn format_block(rows: &[Value]) -> Result<FormatBlock, LispError> {
     rows.iter()
         .map(|row| match row {
             Value::List(cells) => cells
