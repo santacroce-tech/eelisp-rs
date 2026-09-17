@@ -375,11 +375,39 @@ str-join — builtin
       settle rather than bounce. A sheet that wasn't open when it changed is picked up by ↻.
     </p>
 <pre><code>(sheet-new <span class="st">"Budget"</span>)
-(sheet-set <span class="st">"Budget"</span> <span class="st">"A1"</span> '((<span class="st">"rent"</span> <span class="st">"1200"</span>) (<span class="st">"food"</span> <span class="st">"450"</span>) (<span class="st">"total"</span> <span class="st">"=(sum B1:B2)"</span>)))
+(sheet-set <span class="st">"Budget"</span> <span class="st">"A1"</span>
+           '((<span class="st">"rent"</span> <span class="st">"1200"</span>) (<span class="st">"food"</span> <span class="st">"450"</span>) (<span class="st">"total"</span> <span class="st">"=(sum B1:B2)"</span>)))
 (sheet-get <span class="st">"Budget"</span> <span class="st">"B3"</span>)        <span class="cm">; → 1650</span>
 (sheet-rows <span class="st">"Budget"</span> <span class="st">"A1:B2"</span>)    <span class="cm">; → (("rent" 1200) ("food" 450))</span>
 (sheet-set <span class="st">"Budget"</span> <span class="st">"B2"</span> <span class="st">"500"</span>)
 (sheet-get <span class="st">"Budget"</span> <span class="st">"B3"</span>)        <span class="cm">; → 1700</span></code></pre>
+    <h3>Inside a formula</h3>
+    <div class="table-wrap"><table>
+      <tr><th>You write</th><th>It means</th></tr>
+      <tr><td><code>B1</code></td><td>the value in B1 — capitals only, since <code>b1</code> is an ordinary name</td></tr>
+      <tr><td><code>B1:B9</code></td><td>the range as a flat list, blanks included as <code>nil</code></td></tr>
+      <tr><td><code>$B$1</code> · <code>B$1</code> · <code>$B1</code></td><td>pinned whole, by row, by column — a pin survives copying and filling</td></tr>
+      <tr><td><code>Rates!A1</code></td><td>another sheet's cell, that sheet named beside this one</td></tr>
+      <tr><td><code>#REF!</code></td><td>what a reference becomes when its cell is deleted</td></tr>
+    </table></div>
+    <p>
+      There are no separate spreadsheet functions: a formula is an expression, so everything on this
+      page is available in one. The ones reached for most are
+      <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code> and <code>length</code>
+      over a range; <code>round</code> and <code>if</code>; <code>str</code> and
+      <code>str-join</code> for text; <code>map</code>, <code>filter</code> and <code>reduce</code>
+      when a range needs working over; <code>date-add</code>, <code>date-diff</code> and
+      <code>date-format</code> for dates; and <code>count-records</code> or <code>query</code> to
+      reach the database.
+    </p>
+<pre><code>=(sum B1:B9)
+=(round (/ B1 $E$1) 2)       <span class="cm">; a share of the total; the pin</span>
+                             <span class="cm">;   survives being filled down</span>
+=(sum (filter (fn (x) (&gt; x 400)) B1:B3))
+=(date-format (today) <span class="st">"yyyy-MM-dd"</span>)   <span class="cm">; (today) is an instant</span>
+=(count-records contacts :where <span class="st">"city = ?"</span> :params '(<span class="st">"Lisbon"</span>))</code></pre>
+
+    <h3>The functions</h3>
     <div class="table-wrap"><table>
       <tr><th>Function</th><th>Notes</th></tr>
       <tr><td><code>(sheet-new name)</code></td><td>an empty sheet file → its path; an error if it exists</td></tr>
@@ -393,7 +421,7 @@ str-join — builtin
       <tr><td><code>(sheet-paste name cell rows from)</code></td><td>types them back; <code>from</code> — where they were copied — moves each formula by the distance travelled</td></tr>
       <tr><td><code>(sheet-fill name source target)</code></td><td>repeats the source over the target, each copy's references shifted by where it lands</td></tr>
       <tr><td><code>(sheet-recalc name)</code></td><td>rerun every formula — those that read the database, other sheets or the clock aren't tracked</td></tr>
-      <tr><td><code>(sheet-format name area fmt)</code></td><td>merge a format like <code>{:num "currency" :dp 2}</code> into an area; <code>nil</code> clears; rows of formats set cells exactly. The keys are the host's: <code>:num :dp :cur :date :bold :italic :align :wrap :bg :fg :border</code></td></tr>
+      <tr><td><code>(sheet-format name area fmt)</code></td><td>merge a format like <code>{:num "currency" :dp 2}</code> into an area; <code>nil</code> clears; rows of formats set cells exactly. The keys are the host's: <code>:num</code> <code>:dp</code> <code>:cur</code> <code>:date</code> <code>:bold</code> <code>:italic</code> <code>:align</code> <code>:wrap</code> <code>:bg</code> <code>:fg</code> <code>:border</code></td></tr>
       <tr><td><code>(sheet-col-width name col width)</code> · <code>(sheet-row-height name row height)</code></td><td><code>nil</code> for the default; rows are numbered from 1</td></tr>
       <tr><td><code>(sheet-insert-rows name row n)</code> · <code>sheet-delete-rows</code></td><td>rows numbered from 1; formulas follow their cells, a deleted reference reads <code>#REF!</code></td></tr>
       <tr><td><code>(sheet-insert-cols name col n)</code> · <code>sheet-delete-cols</code></td><td>columns by letter</td></tr>
