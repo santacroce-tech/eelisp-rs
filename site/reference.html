@@ -336,7 +336,7 @@ str-join — builtin
     <h3>Views, templates, files</h3>
     <div class="table-wrap"><table>
       <tr><th>Function</th><th>Notes</th></tr>
-      <tr><td><code>(defview name (:category … ))</code> · <code>(show name)</code></td><td>filtered, optionally grouped</td></tr>
+      <tr><td><code>(defview name :filter expr :sort-by f :group-by f)</code> · <code>(show name)</code></td><td>filtered, optionally grouped</td></tr>
       <tr><td><code>(views)</code> · <code>(drop-view "name")</code></td><td></td></tr>
       <tr><td><code>(deftemplate name (…))</code> · <code>(from-template name)</code></td><td></td></tr>
       <tr><td><code>(templates)</code> · <code>(drop-template name)</code></td><td></td></tr>
