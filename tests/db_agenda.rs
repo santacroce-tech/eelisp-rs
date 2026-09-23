@@ -33,6 +33,9 @@ fn db_insert_returns_record_with_id() {
     assert_eq!(s(&it, "(record-id r)"), "1");
     assert_eq!(s(&it, "(field-get r :name)"), "Alice");
     assert_eq!(s(&it, "(field-get r :age)"), "30");
+    // the manual's spelling: a string key, the way a row handed around as data is read
+    assert_eq!(s(&it, "(field-get r \"name\")"), "Alice");
+    assert_eq!(s(&it, "(field-get (field-set r \"age\" 31) \"age\")"), "31");
 }
 
 #[test]
