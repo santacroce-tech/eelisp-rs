@@ -3,6 +3,7 @@
 //! Both builtins print and return nil, so every assertion here reads the captured output.
 
 use eelisp::docs::{self, Entry};
+use eelisp::printer::print_value;
 use eelisp::value::Value;
 use eelisp::Interpreter;
 
@@ -295,4 +296,49 @@ fn every_special_form_is_reachable_from_source() {
         let text = out(&it, &format!("(source {})", e.name));
         assert!(text.contains(e.name), "(source {}) said:\n{text}", e.name);
     }
+}
+
+// ───────────────────── function-list / source-text ───────────────────
+
+#[test]
+fn function_list_returns_the_rows_functions_prints() {
+    let it = fresh();
+    let v = it
+        .eval_str("(map (fn (r) (list (dict-get r \"name\") (dict-get r \"kind\") (dict-get r \"sig\"))) (function-list \"str-join\"))")
+        .unwrap();
+    let text = print_value(&v, true);
+    assert!(text.contains("\"str-join\" \"builtin\""), "{text}");
+    assert!(it.eval_str("(function-list \"str-join\")").is_ok());
+}
+
+#[test]
+fn function_list_carries_the_summary_a_definition_was_written_with() {
+    let it = fresh();
+    let v = it
+        .eval_str(";; Says hello.\n(defn greet (name) name)\n(first (function-list \"greet\"))")
+        .unwrap();
+    let text = print_value(&v, true);
+    assert!(text.contains("\"function\""), "{text}");
+    assert!(text.contains("(greet name)"), "{text}");
+    assert!(text.contains("Says hello."), "{text}");
+}
+
+#[test]
+fn function_list_with_no_match_is_empty_not_an_error() {
+    let it = fresh();
+    assert_eq!(it.eval_str("(length (function-list \"nosuchthing\"))").unwrap(), Value::Number(0.0));
+}
+
+#[test]
+fn source_text_returns_what_source_prints() {
+    let it = fresh();
+    let v = it.eval_str(";; squares\n(defn sq (n) (* n n))\n(def which \"sq\")\n(source-text which)").unwrap();
+    match v {
+        Value::Str(s) => {
+            assert!(s.contains("sq — function"), "{s}");
+            assert!(s.contains(";; squares"), "{s}");
+        }
+        other => panic!("expected a string, got {other:?}"),
+    }
+    assert!(it.eval_str("(source-text \"nosuchthing\")").is_err());
 }

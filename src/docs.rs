@@ -368,11 +368,87 @@ fn render_entry(e: &Entry, kind: &str) -> String {
     out
 }
 
+// ── the same, as data ────────────────────────────────────────────────
+//
+// `functions` and `source` are for reading at the REPL; a program — a form listing the functions,
+// say — needs the rows themselves. `function-list` and `source-text` return what the other two
+// print.
+
+/// A row's one line of prose: the manual's summary for a builtin or special form, the first line of
+/// the comment block above a definition otherwise.
+fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
+    let manual = match kind {
+        "special" => special_form_entry(name),
+        "builtin" => builtin_entry(name),
+        _ => None,
+    };
+    if let Some(e) = manual {
+        return e.summary.to_string();
+    }
+    index
+        .get(name)
+        .and_then(|d| d.comments.lines().map(|l| l.trim_start_matches(';').trim()).find(|l| !l.is_empty()))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn row_dict(r: &Row, index: &SourceIndex) -> Value {
+    let mut d = OrderedDict::default();
+    d.insert("name".into(), Value::Str(r.name.clone()));
+    d.insert("kind".into(), Value::Str(r.kind.to_string()));
+    d.insert("sig".into(), Value::Str(r.sig.clone()));
+    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index)));
+    Value::Dict(Rc::new(d))
+}
+
 // ── registration ─────────────────────────────────────────────────────
 
-/// Register `functions` and `source`. Both write through the host's output channel — they are
-/// things you read, so they print and return nil, the way `println` does.
+/// Register `functions` and `source`, which write through the host's output channel — they are
+/// things you read, so they print and return nil, the way `println` does — and `function-list` and
+/// `source-text`, which return the same thing as data.
 pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<SourceIndex>>) {
+    {
+        let index = index.clone();
+        let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
+            let filter = filter_text(args.first());
+            let (rows, _) = listing(env, filter.as_deref());
+            let index = index.borrow();
+            Ok(Value::List(Rc::new(rows.iter().map(|r| row_dict(r, &index)).collect())))
+        };
+        env::define(
+            env,
+            "function-list",
+            Value::Builtin(Rc::new(Builtin {
+                name: "function-list".into(),
+                arg_mode: ArgMode::Eval,
+                func: Box::new(f),
+            })),
+        );
+    }
+    {
+        let index = index.clone();
+        let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
+            // Evaluated, unlike `source`: a program hands it a name it holds in a variable.
+            let name = match args.first() {
+                Some(Value::Symbol(s)) | Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
+                _ => {
+                    return Err(LispError::InvalidSyntax(
+                        "source-text expects a name, e.g. (source-text \"map\")".into(),
+                    ))
+                }
+            };
+            Ok(Value::Str(render_source(&name, env, &index.borrow())?))
+        };
+        env::define(
+            env,
+            "source-text",
+            Value::Builtin(Rc::new(Builtin {
+                name: "source-text".into(),
+                arg_mode: ArgMode::Eval,
+                func: Box::new(f),
+            })),
+        );
+    }
     {
         let out = out.clone();
         let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
@@ -584,6 +660,10 @@ pub static CORE: &[Entry] = &[
          "(functions)          ; everything\n(functions \"date\")   ; just the date ones"),
     doc!("source", "(source name) → nil", "Shows a definition: the source and comments for EELisp code, the manual entry for a builtin.",
          "(source map)\n(source zzalinhar)"),
+    doc!("function-list", "(function-list filter) → list", "What (functions) lists, as data: one dict per name with name, kind, sig and summary.",
+         "(map (fn (r) (dict-get r \"name\")) (function-list \"str-j\"))   → (\"str-join\")"),
+    doc!("source-text", "(source-text name) → string", "What (source name) prints, as a string. The name is evaluated, so it may come from a variable.",
+         "(source-text \"square\")"),
 ];
 
 /// The dBASE-style database layer. Table names are passed unevaluated — write `contacts`, not

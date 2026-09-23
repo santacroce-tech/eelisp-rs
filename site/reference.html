@@ -236,6 +236,8 @@
       <tr><td><code>(functions)</code></td><td>every function, macro and special form in scope, with its call shape</td></tr>
       <tr><td><code>(functions "str")</code></td><td>only the names containing <code>str</code>; a symbol or keyword works too</td></tr>
       <tr><td><code>(source map)</code></td><td>one definition — the name is not evaluated, so <code>'map</code> and <code>"map"</code> also work</td></tr>
+      <tr><td><code>(function-list "str")</code></td><td>the same rows as data — a list of dicts with <code>name</code>, <code>kind</code>, <code>sig</code> and <code>summary</code></td></tr>
+      <tr><td><code>(source-text "map")</code></td><td>what <code>(source map)</code> prints, returned as a string; the name is evaluated, so it can come from a variable</td></tr>
     </table></div>
     <p>
       For anything written in EELisp, <code>(source f)</code> echoes the definition back <em>as it was
