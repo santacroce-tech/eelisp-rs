@@ -290,7 +290,7 @@ str-join — builtin
       <tr><td><code>(browse table)</code></td><td>a table view</td></tr>
       <tr><td><code>(edit table id)</code></td><td>a form view for one record</td></tr>
       <tr><td><code>(defform name table (field)…)</code></td><td>a named form, computed fields allowed</td></tr>
-      <tr><td><code>(field-get r "name")</code> · <code>(field-set r "name" v)</code></td><td></td></tr>
+      <tr><td><code>(field-get r "name")</code> · <code>(field-set r "name" v)</code></td><td>the key may be a string or a keyword — <code>:name</code></td></tr>
       <tr><td><code>(record-id r)</code></td><td></td></tr>
     </table></div>
     <p class="muted"><small>Field types: <code>string</code>, <code>number</code>, <code>bool</code>, <code>date</code>.</small></p>
@@ -454,7 +454,10 @@ str-join — builtin
     <p>
       In <a href="https://eeditor.app">EEditor</a>, keybindings use a higher-level set of commands
       on top of these — see
-      <a href="https://eeditor.app/manual.html#keybindings">the keybinding reference</a>.
+      <a href="https://eeditor.app/manual.html#keybindings">the keybinding reference</a> — and a
+      form's handlers use <code>ui-get</code>, <code>ui-set</code> and friends, which are ordinary
+      EELisp functions the app defines; they are in
+      <a href="https://eeditor.app/manual.html#forms">the forms chapter</a>.
     </p>
   </div></div>
 </section>

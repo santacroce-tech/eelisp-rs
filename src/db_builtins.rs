@@ -284,10 +284,12 @@ fn as_record(v: Option<&Value>) -> Result<Rc<Record>, LispError> {
     }
 }
 
+/// A field name for `field-get` / `field-set`: a keyword, a symbol, or — as the manual promises —
+/// a plain string, which is what code handling a row it was given as data naturally has.
 fn as_key(v: Option<&Value>) -> Result<String, LispError> {
     match v {
-        Some(Value::Keyword(k)) | Some(Value::Symbol(k)) => Ok(k.clone()),
-        _ => Err(LispError::InvalidSyntax("expected a keyword".into())),
+        Some(Value::Keyword(k)) | Some(Value::Symbol(k)) | Some(Value::Str(k)) => Ok(k.clone()),
+        _ => Err(LispError::InvalidSyntax("expected a field name (a keyword or a string)".into())),
     }
 }
 
