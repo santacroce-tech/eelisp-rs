@@ -125,3 +125,16 @@ fn smart_add_honors_auto_categorize() {
     // only the "call" item is auto-tagged phone
     assert_eq!(s(&it, "(length (records (items :category \"phone\")))"), "1");
 }
+
+#[test]
+fn item_to_dict_exposes_an_items_fields() {
+    let it = Interpreter::new();
+    s(&it, "(add-item \"call Bob\" :when \"2026-09-14\" :priority 1 :notes \"about the lease\")");
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 1)) \"text\")"), "call Bob");
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 1)) \"when\")"), "2026-09-14");
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 1)) \"notes\")"), "about the lease");
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 1)) \"id\")"), "1");
+    // A dict passes through; anything else is refused.
+    assert_eq!(s(&it, "(dict-get (item->dict {:a 1}) \"a\")"), "1");
+    assert!(it.eval_str("(item->dict 3)").is_err());
+}

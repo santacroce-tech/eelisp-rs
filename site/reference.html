@@ -296,6 +296,8 @@ str-join — builtin
       <tr><td><code>(record-id r)</code></td><td></td></tr>
     </table></div>
     <p class="muted"><small>Field types: <code>string</code>, <code>number</code>, <code>bool</code>, <code>date</code>.</small></p>
+    <p class="muted"><small>The table is named bare — <code>(query contacts)</code> — or by a call that returns its
+      name, which is how a program picks a table at run time: <code>(query (dict-get f "table"))</code>.</small></p>
   </div></div>
 </section>
 
@@ -313,6 +315,7 @@ str-join — builtin
       <tr><td><code>(items :search :category :priority :when-before :when-after)</code></td><td></td></tr>
       <tr><td><code>(items-on date)</code> · <code>(items-between a b)</code></td><td></td></tr>
       <tr><td><code>(item-get id)</code> · <code>(item-set id :k v)</code> · <code>(item-done id)</code></td><td></td></tr>
+      <tr><td><code>(item-&gt;dict item)</code></td><td>an item's fields as a dict — <code>id</code>, <code>text</code>, <code>when</code>, <code>priority</code>, <code>notes</code>, <code>categories</code> …</td></tr>
       <tr><td><code>(item-count)</code></td><td></td></tr>
       <tr><td><code>(every n :weeks)</code></td><td>recurrence — <code>:days</code>, <code>:weeks</code>, <code>:months</code></td></tr>
     </table></div>

@@ -260,10 +260,16 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
             Ok(a)
         }
         ArgMode::TableFirst => {
-            // arg 0 (table name) is passed raw; the rest evaluate normally.
+            // arg 0 (table name) is passed raw, so a bare `(query contacts)` names the table; the
+            // rest evaluate normally. A call in that place is evaluated, which is how a program
+            // names a table it holds in a variable: `(query (str "con" "tacts"))`. `'x` evaluates
+            // to the symbol x, so that spelling keeps working too.
             let mut a = Vec::with_capacity(items.len().saturating_sub(1));
             if items.len() > 1 {
-                a.push(items[1].clone());
+                a.push(match &items[1] {
+                    Value::List(l) if !l.is_empty() => eval(items[1].clone(), env.clone())?,
+                    other => other.clone(),
+                });
             }
             for x in items.iter().skip(2) {
                 a.push(eval(x.clone(), env.clone())?);

@@ -136,3 +136,15 @@ fn a_failed_move_lands_in_memory_not_in_the_old_file() {
     assert_eq!(result(&engine.eval("(item-count)")), "1");
     assert_eq!(info(&engine), (good, None), "a successful open clears the error");
 }
+
+#[test]
+fn a_table_can_be_named_by_an_expression() {
+    let it = Interpreter::new();
+    it.eval_str("(deftable pets (name:string kind:string))").unwrap();
+    it.eval_str("(def which \"pets\")").unwrap();
+    it.eval_str("(insert (str which) {:name \"Rex\" :kind \"dog\"})").unwrap();
+    it.eval_str("(insert (if true which nil) {:name \"Tom\" :kind \"cat\"})").unwrap();
+    assert_eq!(it.eval_str("(count-records (str which))").unwrap(), eelisp::value::Value::Number(2.0));
+    assert_eq!(it.eval_str("(count-records pets)").unwrap(), eelisp::value::Value::Number(2.0));
+    assert_eq!(it.eval_str("(count-records 'pets)").unwrap(), eelisp::value::Value::Number(2.0));
+}

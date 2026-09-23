@@ -714,6 +714,8 @@ pub static AGENDA: &[Entry] = &[
     doc!("items-between", "(items-between from to) → list", "Items due in a date range, ends included.",
          "(items-between \"2026-09-01\" \"2026-09-30\")"),
     doc!("item-get", "(item-get id) → item", "One item by id.", "(item-get 3)"),
+    doc!("item->dict", "(item->dict item) → dict", "An item's fields as a dict — id, text, its properties (when, priority, …), notes, categories, created, modified.",
+         "(dict-get (item->dict (item-get 3)) \"when\")   → \"2026-09-14\""),
     doc!("item-set", "(item-set id :k v …) → item", "Changes an item's text, properties or notes.", "(item-set 3 :priority 1)"),
     doc!("item-done", "(item-done id) → item", "Marks an item done; a recurring item rolls forward to its next date.", "(item-done 3)"),
     doc!("item-count", "(item-count) → number", "How many items the agenda holds.", "(item-count)"),
