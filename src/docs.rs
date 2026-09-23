@@ -374,8 +374,8 @@ fn render_entry(e: &Entry, kind: &str) -> String {
 // say — needs the rows themselves. `function-list` and `source-text` return what the other two
 // print.
 
-/// A row's one line of prose: the manual's summary for a builtin or special form, the first line of
-/// the comment block above a definition otherwise.
+/// A row's one line of prose: the manual's summary for a builtin or special form, otherwise the
+/// first sentence of the comment block above a definition (which may run over several lines).
 fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
     let manual = match kind {
         "special" => special_form_entry(name),
@@ -385,11 +385,19 @@ fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
     if let Some(e) = manual {
         return e.summary.to_string();
     }
-    index
-        .get(name)
-        .and_then(|d| d.comments.lines().map(|l| l.trim_start_matches(';').trim()).find(|l| !l.is_empty()))
-        .unwrap_or("")
-        .to_string()
+    let Some(def) = index.get(name) else { return String::new() };
+    let para: Vec<&str> = def
+        .comments
+        .lines()
+        .map(|l| l.trim_start_matches(';').trim())
+        .skip_while(|l| l.is_empty())
+        .take_while(|l| !l.is_empty())
+        .collect();
+    let text = para.join(" ");
+    match text.find(". ") {
+        Some(i) => text[..=i].to_string(),
+        None => text,
+    }
 }
 
 fn row_dict(r: &Row, index: &SourceIndex) -> Value {

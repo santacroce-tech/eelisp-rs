@@ -342,3 +342,12 @@ fn source_text_returns_what_source_prints() {
     }
     assert!(it.eval_str("(source-text \"nosuchthing\")").is_err());
 }
+
+#[test]
+fn function_list_summary_is_the_first_sentence_even_across_lines() {
+    let it = fresh();
+    let v = it
+        .eval_str(";; Adds two numbers and\n;; returns the sum. Nothing else.\n(defn add2 (a b) (+ a b))\n(dict-get (first (function-list \"add2\")) \"summary\")")
+        .unwrap();
+    assert_eq!(v, Value::Str("Adds two numbers and returns the sum.".into()));
+}
