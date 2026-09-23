@@ -321,7 +321,8 @@ pub fn items(db: &Database, f: &ItemFilter) -> Result<Value, LispError> {
         params.push(Value::Str(format!("%\"priority\":\"{}\"%", p)));
     }
     if let Some(d) = &f.when_before {
-        clauses.push("json_extract(properties,'$.when') < ?".into());
+        // An empty `when` (a cleared date) sorts before every date; it is not "before" any of them.
+        clauses.push("json_extract(properties,'$.when') < ? AND json_extract(properties,'$.when') != ''".into());
         params.push(Value::Str(d.clone()));
     }
     if let Some(d) = &f.when_after {
@@ -781,7 +782,8 @@ fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> 
 
 fn matches_overdue(when: &Option<String>) -> bool {
     match when {
-        Some(w) => w.as_str() < today().as_str(),
+        // An item whose date was cleared keeps an empty `when`; no date is never overdue.
+        Some(w) => !w.is_empty() && w.as_str() < today().as_str(),
         None => false,
     }
 }

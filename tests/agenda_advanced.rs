@@ -138,3 +138,15 @@ fn item_to_dict_exposes_an_items_fields() {
     assert_eq!(s(&it, "(dict-get (item->dict {:a 1}) \"a\")"), "1");
     assert!(it.eval_str("(item->dict 3)").is_err());
 }
+
+#[test]
+fn an_item_without_a_date_is_never_overdue() {
+    let it = Interpreter::new();
+    s(&it, "(add-item \"old\" :when \"2000-01-01\")");
+    s(&it, "(add-item \"cleared\" :when \"2000-01-01\")");
+    s(&it, "(item-set 2 :when \"\")");
+    s(&it, "(add-item \"undated\")");
+    assert_eq!(s(&it, "(length (records (items :when-before \"2100-01-01\")))"), "1");
+    s(&it, "(defview late :filter (overdue?))");
+    assert_eq!(s(&it, "(length (records (show late)))"), "1");
+}
