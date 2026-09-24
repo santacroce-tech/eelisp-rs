@@ -47,6 +47,11 @@ grep -oE '\(def(n|macro)? +[a-z][a-z0-9!?*<>=/-]*' src/prelude.rs    # prelude
 ## Deploying
 
 ```bash
-rsync -avz --delete -e "ssh -i ~/.ssh/id_epitetus" \
-  site/ root@91.98.47.97:/var/www/eelisp.app/
+scripts/deploy-site.sh --dry-run   # what would change
+scripts/deploy-site.sh             # deploy
 ```
+
+It mirrors `site/` onto the server (`rsync --delete`), leaving this README off it. Where it goes — the
+server, the user, the key, the folder — is in `.deploy.env` at the repo root, which git ignores: copy
+`.deploy.env.example` and fill it in. It deploys **`main` only**, clean and the same as GitHub's, because
+the deploy copies the working tree: a branch checked out for review must never go live by accident.
