@@ -39,8 +39,9 @@ fn define(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, Lis
     );
 }
 
-pub fn register(env: &Env, host: Host) {
-    let reg: Registry = Rc::new(RefCell::new(Sheets::default()));
+/// Define the `sheet-*` builtins over `reg` — the open sheets, which the interpreter also holds, so
+/// a host can hand it sheets as bytes and take them back (`Interpreter::import_sheet`).
+pub fn register(env: &Env, host: Host, reg: Registry) {
 
     // Every builtin gets the registry and the host; this keeps each definition to what it does.
     let def = |name: &str, f: fn(&Registry, &Host, &[Value], &Env) -> Result<Value, LispError>| {
@@ -474,16 +475,14 @@ fn root_of(env: &Env) -> Env {
 // ── arguments ────────────────────────────────────────────────────────
 
 /// A sheet name → the file. See the module comment.
-fn resolve(host: &Host, name: &str) -> Result<PathBuf, LispError> {
+/// The file a sheet name means — against `(current-dir)`, the workspace. With no workspace and no
+/// process folder either (a browser), a name stays relative: `"examples/Budget"` is just that key.
+pub fn resolve(host: &Host, name: &str) -> Result<PathBuf, LispError> {
     if name.trim().is_empty() {
         return Err(fail("a sheet needs a name"));
     }
     let dir = host.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default();
-    let base = if dir.is_empty() {
-        std::env::current_dir().map_err(|e| fail(format!("no folder to find {name} in: {e}")))?
-    } else {
-        PathBuf::from(dir)
-    };
+    let base = if dir.is_empty() { std::env::current_dir().unwrap_or_default() } else { PathBuf::from(dir) };
     Ok(resolve_in(&base, name))
 }
 

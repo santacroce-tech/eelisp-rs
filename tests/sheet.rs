@@ -692,3 +692,47 @@ fn sum_avg_min_max_read_lists_and_skip_blanks_and_text() {
     assert!(err(&it, "(avg '(nil))").contains("needs at least one number"));
     assert!(err(&it, r#"(sum "3")"#).contains("Type mismatch"));
 }
+
+// ── a sheet as bytes — what a browser, which has no files, is handed ──
+
+#[test]
+fn a_sheet_travels_as_bytes_formulas_and_all() {
+    let (_dir, a) = budget("bytes-a");
+    set(&a, "A1", "40");
+    set(&a, "A2", "2");
+    set(&a, "A3", "=(+ A1 A2)");
+    let bytes = a.export_sheet("Budget").unwrap();
+    assert_eq!(&bytes[..16], b"SQLite format 3\0");
+
+    // Another engine, in another workspace where no Budget file exists: it opens from the bytes.
+    let dir = scratch("bytes-b");
+    let b = engine(&dir);
+    b.import_sheet("Budget", &bytes).unwrap();
+    assert_eq!(get(&b, "A3"), "42");
+    assert!(!dir.join("Budget.eesheet").exists(), "nothing was written to disk");
+
+    // It is a live sheet there: a change recalculates, and moves its version.
+    let before = b.sheet_versions();
+    set(&b, "A1", "100");
+    assert_eq!(get(&b, "A3"), "102");
+    let after = b.sheet_versions();
+    assert_eq!(after.len(), 1);
+    assert!(after[0].1 > before[0].1, "{before:?} → {after:?}");
+
+    // …and goes back out as bytes with the change in it.
+    let c = engine(&scratch("bytes-c"));
+    c.import_sheet("Budget", &b.export_sheet("Budget").unwrap()).unwrap();
+    assert_eq!(get(&c, "A3"), "102");
+}
+
+#[test]
+fn bytes_that_are_not_a_sheet_are_refused() {
+    let it = engine(&scratch("bytes-bad"));
+    let e = it.import_sheet("Budget", b"certainly not a sqlite file, just text").unwrap_err().to_string();
+    assert!(e.contains("is not a sheet"), "{e}");
+    // A SQLite database that isn't a sheet — the engine's own — is refused too.
+    let db = Interpreter::new().export_database().unwrap();
+    let e = it.import_sheet("Budget", &db).unwrap_err().to_string();
+    assert!(e.contains("is not a sheet"), "{e}");
+    assert!(it.export_sheet("Budget").is_err());
+}

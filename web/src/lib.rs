@@ -47,6 +47,46 @@ impl Engine {
     pub fn changes(&self) -> f64 {
         self.it.database_changes() as f64
     }
+
+    /// A sheet as the bytes of a `.eesheet` file, open from now on under `name` — the name forms and
+    /// formulas use for it. The page has no files: this is how an exported app's sheets arrive.
+    #[wasm_bindgen(js_name = importSheet)]
+    pub fn import_sheet(&self, name: &str, bytes: &[u8]) -> Result<(), JsError> {
+        self.it.import_sheet(name, bytes).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// An open sheet as the bytes of a `.eesheet` file — what the page keeps after it changed.
+    #[wasm_bindgen(js_name = exportSheet)]
+    pub fn export_sheet(&self, name: &str) -> Result<Vec<u8>, JsError> {
+        self.it.export_sheet(name).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Every open sheet and its version, as JSON: `[["examples/Budget.eesheet", 7], …]`. A version
+    /// that moved is a sheet to keep again.
+    #[wasm_bindgen(js_name = sheetVersions)]
+    pub fn sheet_versions(&self) -> String {
+        let v: Vec<(String, i64)> = self.it.sheet_versions();
+        let items: Vec<String> = v
+            .iter()
+            .map(|(p, n)| format!("[{},{}]", json_string(p), n))
+            .collect();
+        format!("[{}]", items.join(","))
+    }
+}
+
+/// A string as a JSON string literal.
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 impl Default for Engine {

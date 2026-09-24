@@ -24,6 +24,8 @@ pub struct Interpreter {
     /// Why the database in use isn't the one the host asked for, when it isn't. `(database-info)`
     /// reports it, so a host can tell the user their data is not being saved.
     pub database_error: Rc<RefCell<Option<String>>>,
+    /// The open sheets — shared with the `sheet-*` builtins.
+    pub sheets: Rc<RefCell<crate::sheet::Sheets>>,
 }
 
 impl Interpreter {
@@ -77,7 +79,8 @@ impl Interpreter {
         editor::register(&global, ed.clone());
 
         // sheets — their names resolve against the host's (current-dir)
-        sheet_builtins::register(&global, ed.clone());
+        let sheets = Rc::new(RefCell::new(crate::sheet::Sheets::default()));
+        sheet_builtins::register(&global, ed.clone(), sheets.clone());
 
         // (functions …) / (source …) — needs the output channel and the definition index
         let sources = Rc::new(RefCell::new(SourceIndex::default()));
@@ -91,6 +94,7 @@ impl Interpreter {
             editor: ed,
             sources,
             database_error,
+            sheets,
         };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
             panic!("prelude failed to load: {}", e);
@@ -135,6 +139,28 @@ impl Interpreter {
         *self.database.borrow_mut() = next;
         *self.database_error.borrow_mut() = None;
         Ok(())
+    }
+
+    /// A sheet given as the bytes of a `.eesheet` file, open from now on under `name` — resolved the
+    /// way `(sheet-open name)` resolves it, so the formulas and forms that name it find it.
+    pub fn import_sheet(&self, name: &str, bytes: &[u8]) -> Result<(), LispError> {
+        let path = sheet_builtins::resolve(&self.editor, name)?;
+        self.sheets.borrow_mut().import(&path, bytes)
+    }
+
+    /// An open sheet as the bytes of a `.eesheet` file.
+    pub fn export_sheet(&self, name: &str) -> Result<Vec<u8>, LispError> {
+        let path = sheet_builtins::resolve(&self.editor, name)?;
+        let mut sheets = self.sheets.borrow_mut();
+        let sheet = sheets
+            .loaded(&path)
+            .ok_or_else(|| LispError::Runtime(format!("{} isn't open", path.display())))?;
+        sheet.to_bytes()
+    }
+
+    /// Every open sheet, as `(path, version)` — a version that moved is a sheet to keep again.
+    pub fn sheet_versions(&self) -> Vec<(String, i64)> {
+        self.sheets.borrow().versions().into_iter().map(|(p, v)| (p.display().to_string(), v)).collect()
     }
 
     /// Changes to the database's rows since it was opened or imported.

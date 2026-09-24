@@ -439,6 +439,27 @@ impl Sheet {
         }
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)
             .map_err(sql(path))?;
+        Self::checked(conn, path)
+    }
+
+    /// A sheet from the bytes of a `.eesheet` file, held in memory under `path` — how a browser,
+    /// which has no files, gets the sheets an exported app carries. Checked like a file: bytes that
+    /// aren't a sheet are refused.
+    pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Sheet, LispError> {
+        let mut conn = Connection::open_in_memory().map_err(sql(path))?;
+        conn.deserialize_read_exact(rusqlite::MAIN_DB, bytes, bytes.len(), false)
+            .map_err(|_| fail(format!("{} is not a sheet", path.display())))?;
+        Self::checked(conn, path)
+    }
+
+    /// The sheet as the bytes of a `.eesheet` file — what a browser keeps between visits.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, LispError> {
+        Ok(self.conn.serialize(rusqlite::MAIN_DB).map_err(sql(&self.path))?.to_vec())
+    }
+
+    /// A connection that should be a sheet: it is one (its application id), of a version this
+    /// engine can read (older ones are brought up to date).
+    fn checked(conn: Connection, path: &Path) -> Result<Sheet, LispError> {
         let not_a_sheet = || fail(format!("{} is not a sheet", path.display()));
         let app_id: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0)).map_err(|_| not_a_sheet())?;
         if app_id != APPLICATION_ID {
@@ -1144,6 +1165,21 @@ impl Sheets {
     /// An already-open sheet, without rereading it from disk.
     pub fn loaded(&mut self, path: &Path) -> Option<&mut Sheet> {
         self.open.get_mut(path)
+    }
+
+    /// A sheet given as the bytes of a `.eesheet` file, open from now on under `path` — replacing
+    /// one open there. (A browser has no files: it hands the engine the sheets an app carries.)
+    pub fn import(&mut self, path: &Path, bytes: &[u8]) -> Result<(), LispError> {
+        let sheet = Sheet::from_bytes(path, bytes)?;
+        self.open.insert(path.to_path_buf(), sheet);
+        Ok(())
+    }
+
+    /// Every open sheet: its path and its version — which moves with every change to it.
+    pub fn versions(&self) -> Vec<(PathBuf, i64)> {
+        let mut v: Vec<(PathBuf, i64)> = self.open.iter().map(|(p, s)| (p.clone(), s.version())).collect();
+        v.sort();
+        v
     }
 
     /// Close the connection. True if it was open.
