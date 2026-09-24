@@ -20,6 +20,9 @@ if [ -z "$AR" ]; then
   exit 1
 fi
 export AR_wasm32_unknown_unknown="$AR"
+# SQLite's WebAssembly shim writes C23 attributes ([[noreturn]]). A recent clang takes them in any mode;
+# clang 14 (Ubuntu 22.04) only in C2x mode. gnu2x works on both.
+export CFLAGS_wasm32_unknown_unknown="${CFLAGS_wasm32_unknown_unknown:--std=gnu2x}"
 
 PROFILE=release
 FLAG=--release
