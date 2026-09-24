@@ -773,6 +773,8 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-open \"Budget\")"),
     doc!("sheet-bytes", "(sheet-bytes name) → string", "A sheet's .eesheet file, as base64 — how a host that reads only text carries a sheet (Export as HTML).",
          "(str-len (sheet-bytes \"Budget\"))"),
+    doc!("sheet-from-bytes", "(sheet-from-bytes name base64) → string", "A new sheet file made from base64 bytes (what sheet-bytes gives) — refuses bytes that aren't a sheet, and an existing file.",
+         "(sheet-from-bytes \"Copy\" (sheet-bytes \"Budget\"))"),
     doc!("sheet-close", "(sheet-close name) → nil", "Closes the file. Do it before renaming or deleting one.", "(sheet-close \"Budget\")"),
     doc!("sheet-get", "(sheet-get name cell)", "One cell's value. A cell whose formula failed is an error.", "(sheet-get \"Budget\" \"C3\")   → 1650"),
     doc!("sheet-rows", "(sheet-rows name area) → list", "An area's values as a list of rows.",

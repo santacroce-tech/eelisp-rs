@@ -747,3 +747,19 @@ fn sheet_bytes_is_the_file_in_base64() {
     assert_eq!(b64.len() % 4, 0);
     let _ = dir;
 }
+
+#[test]
+fn sheet_from_bytes_makes_a_new_file_and_nothing_else() {
+    let (dir, it) = budget("from-bytes");
+    set(&it, "A1", "7");
+    set(&it, "A2", "=(* A1 6)");
+    ev(&it, r#"(def b (sheet-bytes "Budget"))"#);
+    ev(&it, r#"(sheet-from-bytes "copies/Copy" b)"#);
+    assert!(dir.join("copies/Copy.eesheet").is_file());
+    assert_eq!(ev(&it, r#"(sheet-get "copies/Copy" "A2")"#), "42");
+    // never over a file, never from bytes that aren't a sheet
+    assert!(err(&it, r#"(sheet-from-bytes "Budget" b)"#).contains("already exists"));
+    assert!(err(&it, r#"(sheet-from-bytes "Other" "aGVsbG8gd29ybGQh")"#).contains("is not a sheet"));
+    assert!(err(&it, r#"(sheet-from-bytes "Other" "not base64!")"#).contains("isn't base64"));
+    assert!(!dir.join("Other.eesheet").exists());
+}

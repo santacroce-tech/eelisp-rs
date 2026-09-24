@@ -70,6 +70,25 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         Ok(Value::Str(base64(&bytes)))
     });
 
+    // The reverse: a new sheet file made from base64 bytes — a sheet an exported page carried, back
+    // into the workspace. Refuses bytes that aren't a sheet, and never writes over a file.
+    def("sheet-from-bytes", |reg, host, args, _| {
+        let path = resolve(host, str_arg(args, 0, "sheet-from-bytes", "a sheet name")?)?;
+        let data = str_arg(args, 1, "sheet-from-bytes", "the sheet's bytes, in base64")?;
+        writable(reg, "sheet-from-bytes")?;
+        let bytes = unbase64(data).ok_or_else(|| fail("sheet-from-bytes: that isn't base64"))?;
+        if path.exists() {
+            return Err(fail(format!("{} already exists", path.display())));
+        }
+        Sheet::from_bytes(&path, &bytes)?; // a sheet at all?
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| fail(format!("{}: {e}", dir.display())))?;
+        }
+        std::fs::write(&path, &bytes).map_err(|e| fail(format!("{}: {e}", path.display())))?;
+        reg.borrow_mut().close(&path);
+        Ok(Value::Str(path.display().to_string()))
+    });
+
     def("sheet-close", |reg, host, args, _| {
         let path = resolve(host, str_arg(args, 0, "sheet-close", "a sheet name")?)?;
         writable(reg, "sheet-close")?;
@@ -662,8 +681,54 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Bytes from standard base64; None when it isn't.
+fn unbase64(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let clean: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+    if clean.len() % 4 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(clean.len() / 4 * 3);
+    for q in clean.chunks(4) {
+        let pad = q.iter().rev().take_while(|&&c| c == b'=').count();
+        if pad > 2 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, &c) in q.iter().enumerate() {
+            n |= if i >= 4 - pad { 0 } else { val(c)? } << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod base64_tests {
+    #[test]
+    fn decodes_what_it_encodes_and_refuses_what_isnt_base64() {
+        for input in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+            assert_eq!(super::unbase64(&super::base64(input.as_bytes())).unwrap(), input.as_bytes());
+        }
+        assert!(super::unbase64("abc").is_none());
+        assert!(super::unbase64("ab!d").is_none());
+    }
+
     #[test]
     fn matches_the_rfc_examples() {
         for (input, want) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
