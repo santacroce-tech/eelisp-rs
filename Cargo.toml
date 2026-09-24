@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 regex = "1.13.1"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "serialize"] }
 serde_json = "1.0.151"
 ureq = { version = "^2", optional = true }
 

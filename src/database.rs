@@ -42,6 +42,30 @@ pub struct Query {
 impl Database {
     pub fn open(path: &str) -> Result<Self, LispError> {
         let conn = Connection::open(path).map_err(db_err)?;
+        Self::from_connection(conn, path)
+    }
+
+    /// A database from the bytes of a whole SQLite file — what [`Database::to_bytes`] gave, or an
+    /// `.db` a user picked — held in memory. How the browser build gets its data back between
+    /// visits: it has no files, so the host keeps the bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, LispError> {
+        let mut conn = Connection::open_in_memory().map_err(db_err)?;
+        conn.deserialize_read_exact(rusqlite::MAIN_DB, bytes, bytes.len(), false).map_err(db_err)?;
+        Self::from_connection(conn, ":memory:")
+    }
+
+    /// The whole database as the bytes of a SQLite file.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, LispError> {
+        Ok(self.conn.serialize(rusqlite::MAIN_DB).map_err(db_err)?.to_vec())
+    }
+
+    /// Rows inserted, changed or deleted since it was opened — cheap to ask, so a host can tell
+    /// whether there is anything new to keep.
+    pub fn total_changes(&self) -> u64 {
+        self.conn.total_changes()
+    }
+
+    fn from_connection(conn: Connection, path: &str) -> Result<Self, LispError> {
         // Two hosts can share a workspace (the desktop app and the dev bridge): wait out the
         // other's write instead of failing with `database is locked`. The journal stays SQLite's
         // default rollback mode, so a file in a synced folder never grows -wal/-shm sidecars.
