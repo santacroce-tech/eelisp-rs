@@ -1,0 +1,142 @@
+;; Books.eeform — one record at a time, the dBASE way: move with |◀ ◀ ▶ ▶|, and New, Edit, Save,
+;; Cancel, Delete. The boxes are locked while you browse and open while you edit, so a record can't
+;; change by accident; Save and Cancel only light up while there is something to keep or throw away.
+;;
+;; Press ▶ run. An empty table? Record → Add sample books. The rows live in the books table of the
+;; workspace database — (browse books) at the REPL shows the same thing as a grid.
+
+(form "Books" :size (520 380) :on-load bk-load :menu (("Record" ("New" bk-new) ("Edit" bk-edit) ("Save" bk-save) ("Cancel" bk-cancel) ("Delete" bk-delete) ("-") ("Add sample books" bk-samples) ("-") ("Close" bk-close)) ("Go" ("First" bk-first) ("Previous" bk-prev) ("Next" bk-next) ("Last" bk-last)))
+  (label lblTitle :text "Title" :at (16 20) :size (80 24))
+  (textbox txtTitle :required true :at (100 16) :size (404 28))
+  (label lblAuthor :text "Author" :at (16 56) :size (80 24))
+  (textbox txtAuthor :at (100 52) :size (404 28))
+  (label lblYear :text "Year" :at (16 92) :size (80 24))
+  (textbox txtYear :number true :min 0 :max 2100 :at (100 88) :size (88 28))
+  (label lblNotes :text "Notes" :at (16 128) :size (80 24))
+  (textbox txtNotes :multiline true :at (100 124) :size (404 88))
+  (button btnFirst :text "|◀" :at (16 228) :size (44 30) :on-click bk-first)
+  (button btnPrev :text "◀" :at (64 228) :size (44 30) :on-click bk-prev)
+  (button btnNext :text "▶" :at (112 228) :size (44 30) :on-click bk-next)
+  (button btnLast :text "▶|" :at (160 228) :size (44 30) :on-click bk-last)
+  (label lblPos :at (216 232) :size (140 24))
+  (textbox txtFind :placeholder "find…" :at (364 228) :size (140 30) :on-change bk-find)
+  (button btnNew :text "New" :at (16 272) :size (88 30) :on-click bk-new)
+  (button btnEdit :text "Edit" :at (112 272) :size (88 30) :on-click bk-edit)
+  (button btnSave :text "Save" :submit true :default true :at (208 272) :size (88 30) :on-click bk-save)
+  (button btnCancel :text "Cancel" :cancel true :at (304 272) :size (88 30) :on-click bk-cancel)
+  (button btnDelete :text "Delete" :at (416 272) :size (88 30) :on-click bk-delete)
+  (label lblStatus :at (16 320) :size (488 24)))
+
+(deftable books (title:string author:string year:number notes:string))
+
+;; Where we are: an index into the table in id order, and whether the boxes are being edited.
+(def bk-pos 0)
+(def bk-mode "browse")    ;; "browse", "edit" or "new"
+
+(defn bk-all () (records (query books :order "_id")))
+
+(defn bk-load (f)
+  (set! bk-pos 0)
+  (bk-show f))
+
+;; The record at bk-pos into the boxes, then the buttons to match.
+(defn bk-show (f)
+  (let (rows (bk-all)
+        n (length rows))
+    (when (>= bk-pos n) (set! bk-pos (max 0 (- n 1))))
+    (if (= n 0)
+      (do
+        (bk-fill nil)
+        (ui-set "lblPos" :text "No records"))
+      (do
+        (bk-fill (nth rows bk-pos))
+        (ui-set "lblPos" :text (str "Record " (+ bk-pos 1) " of " n))))
+    (bk-mode! "browse" n)))
+
+(defn bk-fill (r)
+  (ui-set "txtTitle" :value (if r (field-get r :title) ""))
+  (ui-set "txtAuthor" :value (if r (field-get r :author) ""))
+  (ui-set "txtYear" :value (if r (field-get r :year) ""))
+  (ui-set "txtNotes" :value (if r (field-get r :notes) "")))
+
+;; Browsing: the boxes locked, moving allowed. Editing: the other way round.
+(defn bk-mode! (mode n)
+  (set! bk-mode mode)
+  (let (editing (not (= mode "browse")))
+    (for-each c '("txtTitle" "txtAuthor" "txtYear" "txtNotes" "btnSave" "btnCancel")
+      (ui-set c :enabled editing))
+    (ui-set "btnNew" :enabled (not editing))
+    (ui-set "txtFind" :enabled (not editing))
+    (ui-set "btnEdit" :enabled (and (not editing) (> n 0)))
+    (ui-set "btnDelete" :enabled (and (not editing) (> n 0)))
+    (ui-set "btnFirst" :enabled (and (not editing) (> bk-pos 0)))
+    (ui-set "btnPrev" :enabled (and (not editing) (> bk-pos 0)))
+    (ui-set "btnNext" :enabled (and (not editing) (< bk-pos (- n 1))))
+    (ui-set "btnLast" :enabled (and (not editing) (< bk-pos (- n 1))))))
+
+;; ── moving ──
+
+(defn bk-first (f) (set! bk-pos 0) (bk-show f))
+(defn bk-prev (f) (set! bk-pos (max 0 (- bk-pos 1))) (bk-show f))
+(defn bk-next (f) (set! bk-pos (+ bk-pos 1)) (bk-show f))
+(defn bk-last (f) (set! bk-pos (- (length (bk-all)) 1)) (bk-show f))
+
+;; Find: the first record, from the top, whose title or author contains the text.
+(defn bk-find (f)
+  (let (text (str-lower (str-trim (or (ui-get f "txtFind") "")))
+        rows (bk-all))
+    (when (not (= text ""))
+      (loop (i 0)
+        (cond
+          (>= i (length rows)) (ui-set "lblStatus" :text (str "Nothing matches \"" text "\""))
+          (or (str-contains (str-lower (str (field-get (nth rows i) :title))) text)
+              (str-contains (str-lower (str (field-get (nth rows i) :author))) text))
+            (do (set! bk-pos i) (ui-set "lblStatus" :text "") (bk-show f))
+          true (recur (+ i 1)))))))
+
+;; ── changing ──
+
+(defn bk-new (f)
+  (bk-fill nil)
+  (ui-set "lblPos" :text "New record")
+  (ui-set "lblStatus" :text "")
+  (bk-mode! "new" 0)
+  (ui-focus "txtTitle"))
+
+(defn bk-edit (f)
+  (bk-mode! "edit" (length (bk-all)))
+  (ui-set "lblStatus" :text "Editing — Save keeps it, Cancel (Esc) throws it away")
+  (ui-focus "txtTitle"))
+
+;; Save is :submit, so the :required title and the year's :min/:max are checked before this runs.
+(defn bk-save (f)
+  (let (title (str-trim (ui-get f "txtTitle"))
+        data {:title title :author (str-trim (or (ui-get f "txtAuthor") "")) :year (ui-get f "txtYear") :notes (ui-get f "txtNotes")})
+    (if (= bk-mode "new")
+      (do
+        (insert books data)
+        (set! bk-pos (- (length (bk-all)) 1)))
+      (update books (record-id (nth (bk-all) bk-pos)) data))
+    (ui-set "lblStatus" :text (str "Saved " title))
+    (bk-show f)))
+
+(defn bk-cancel (f)
+  (ui-set "lblStatus" :text "")
+  (bk-show f))
+
+(defn bk-delete (f)
+  (let (rows (bk-all))
+    (when (> (length rows) 0)
+      (let (r (nth rows bk-pos))
+        (delete books (record-id r))
+        (ui-set "lblStatus" :text (str "Deleted " (field-get r :title)))
+        (bk-show f)))))
+
+(defn bk-samples (f)
+  (insert books {:title "The Mythical Man-Month" :author "Frederick Brooks" :year 1975 :notes "Adding people to a late project makes it later."})
+  (insert books {:title "Structure and Interpretation of Computer Programs" :author "Abelson & Sussman" :year 1985 :notes "The wizard book."})
+  (insert books {:title "Gödel, Escher, Bach" :author "Douglas Hofstadter" :year 1979 :notes ""})
+  (ui-set "lblStatus" :text "Three books added")
+  (bk-show f))
+
+(defn bk-close (f) (ui-close))

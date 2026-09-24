@@ -368,11 +368,95 @@ fn render_entry(e: &Entry, kind: &str) -> String {
     out
 }
 
+// ── the same, as data ────────────────────────────────────────────────
+//
+// `functions` and `source` are for reading at the REPL; a program — a form listing the functions,
+// say — needs the rows themselves. `function-list` and `source-text` return what the other two
+// print.
+
+/// A row's one line of prose: the manual's summary for a builtin or special form, otherwise the
+/// first sentence of the comment block above a definition (which may run over several lines).
+fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
+    let manual = match kind {
+        "special" => special_form_entry(name),
+        "builtin" => builtin_entry(name),
+        _ => None,
+    };
+    if let Some(e) = manual {
+        return e.summary.to_string();
+    }
+    let Some(def) = index.get(name) else { return String::new() };
+    let para: Vec<&str> = def
+        .comments
+        .lines()
+        .map(|l| l.trim_start_matches(';').trim())
+        .skip_while(|l| l.is_empty())
+        .take_while(|l| !l.is_empty())
+        .collect();
+    let text = para.join(" ");
+    match text.find(". ") {
+        Some(i) => text[..=i].to_string(),
+        None => text,
+    }
+}
+
+fn row_dict(r: &Row, index: &SourceIndex) -> Value {
+    let mut d = OrderedDict::default();
+    d.insert("name".into(), Value::Str(r.name.clone()));
+    d.insert("kind".into(), Value::Str(r.kind.to_string()));
+    d.insert("sig".into(), Value::Str(r.sig.clone()));
+    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index)));
+    Value::Dict(Rc::new(d))
+}
+
 // ── registration ─────────────────────────────────────────────────────
 
-/// Register `functions` and `source`. Both write through the host's output channel — they are
-/// things you read, so they print and return nil, the way `println` does.
+/// Register `functions` and `source`, which write through the host's output channel — they are
+/// things you read, so they print and return nil, the way `println` does — and `function-list` and
+/// `source-text`, which return the same thing as data.
 pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<SourceIndex>>) {
+    {
+        let index = index.clone();
+        let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
+            let filter = filter_text(args.first());
+            let (rows, _) = listing(env, filter.as_deref());
+            let index = index.borrow();
+            Ok(Value::List(Rc::new(rows.iter().map(|r| row_dict(r, &index)).collect())))
+        };
+        env::define(
+            env,
+            "function-list",
+            Value::Builtin(Rc::new(Builtin {
+                name: "function-list".into(),
+                arg_mode: ArgMode::Eval,
+                func: Box::new(f),
+            })),
+        );
+    }
+    {
+        let index = index.clone();
+        let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
+            // Evaluated, unlike `source`: a program hands it a name it holds in a variable.
+            let name = match args.first() {
+                Some(Value::Symbol(s)) | Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
+                _ => {
+                    return Err(LispError::InvalidSyntax(
+                        "source-text expects a name, e.g. (source-text \"map\")".into(),
+                    ))
+                }
+            };
+            Ok(Value::Str(render_source(&name, env, &index.borrow())?))
+        };
+        env::define(
+            env,
+            "source-text",
+            Value::Builtin(Rc::new(Builtin {
+                name: "source-text".into(),
+                arg_mode: ArgMode::Eval,
+                func: Box::new(f),
+            })),
+        );
+    }
     {
         let out = out.clone();
         let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
@@ -584,6 +668,10 @@ pub static CORE: &[Entry] = &[
          "(functions)          ; everything\n(functions \"date\")   ; just the date ones"),
     doc!("source", "(source name) → nil", "Shows a definition: the source and comments for EELisp code, the manual entry for a builtin.",
          "(source map)\n(source zzalinhar)"),
+    doc!("function-list", "(function-list filter) → list", "What (functions) lists, as data: one dict per name with name, kind, sig and summary.",
+         "(map (fn (r) (dict-get r \"name\")) (function-list \"str-j\"))   → (\"str-join\")"),
+    doc!("source-text", "(source-text name) → string", "What (source name) prints, as a string. The name is evaluated, so it may come from a variable.",
+         "(source-text \"square\")"),
 ];
 
 /// The dBASE-style database layer. Table names are passed unevaluated — write `contacts`, not
@@ -634,6 +722,8 @@ pub static AGENDA: &[Entry] = &[
     doc!("items-between", "(items-between from to) → list", "Items due in a date range, ends included.",
          "(items-between \"2026-09-01\" \"2026-09-30\")"),
     doc!("item-get", "(item-get id) → item", "One item by id.", "(item-get 3)"),
+    doc!("item->dict", "(item->dict item) → dict", "An item's fields as a dict — id, text, its properties (when, priority, …), notes, categories, created, modified.",
+         "(dict-get (item->dict (item-get 3)) \"when\")   → \"2026-09-14\""),
     doc!("item-set", "(item-set id :k v …) → item", "Changes an item's text, properties or notes.", "(item-set 3 :priority 1)"),
     doc!("item-done", "(item-done id) → item", "Marks an item done; a recurring item rolls forward to its next date.", "(item-done 3)"),
     doc!("item-count", "(item-count) → number", "How many items the agenda holds.", "(item-count)"),
@@ -643,18 +733,18 @@ pub static AGENDA: &[Entry] = &[
          "(defcategory work/calls)"),
     doc!("assign", "(assign id \"path\") → item", "Files an item under a category.", "(assign 3 \"work/calls\")"),
     doc!("unassign", "(unassign id \"path\") → item", "Removes an item from a category.", "(unassign 3 \"work/calls\")"),
-    doc!("categories", "(categories) → list", "Every category, as paths.", "(categories)   → (\"work\" \"work/calls\")"),
+    doc!("categories", "(categories) → string", "Every category as an indented tree, one per line.", "(categories)   → \"work\\n  work/calls\""),
     doc!("defrule", "(defrule name :when … :assign … :action …) → dict", "A rule that files items automatically. `:assign` and `:action` may repeat.",
-         "(defrule calls :when (match \"call\") :assign \"work/calls\")"),
+         "(defrule calls :when (str-contains (str-lower text) \"call\") :assign \"work/calls\")"),
     doc!("apply-rules", "(apply-rules id) → number", "Runs the rules over one item, or over all of them with no id. Returns how many changed.",
          "(apply-rules)   → 4"),
     doc!("auto-categorize", "(auto-categorize on) → bool", "Whether new items get the rules applied as they arrive.", "(auto-categorize true)"),
-    doc!("rules", "(rules) → list", "Every defined rule.", "(rules)"),
+    doc!("rules", "(rules) → string", "Every defined rule, one \"name: condition\" per line.", "(rules)"),
     doc!("drop-rule", "(drop-rule \"name\") → bool", "Deletes a rule.", "(drop-rule \"calls\")"),
-    doc!("defview", "(defview name (:category … :group-by …)) → dict", "A saved, filtered — optionally grouped — view of the agenda.",
-         "(defview today (:when-before \"2026-09-12\"))"),
-    doc!("show", "(show name) → list", "Runs a saved view.", "(show today)"),
-    doc!("views", "(views) → list", "Every saved view.", "(views)"),
+    doc!("defview", "(defview name :filter expr :sort-by field :group-by field :desc bool) → string", "A saved, filtered — optionally sorted and grouped — view of the agenda. The filter sees what a rule condition sees: text, when, (has-category …), (overdue?).",
+         "(defview late :filter (overdue?) :sort-by when)\n(defview calls :filter (has-category \"work/calls\"))"),
+    doc!("show", "(show name) → result-set", "Runs a saved view — the items as a result-set, or a text outline when the view groups.", "(show today)"),
+    doc!("views", "(views) → string", "Every saved view's name, one per line.", "(views)"),
     doc!("drop-view", "(drop-view \"name\") → bool", "Deletes a saved view.", "(drop-view \"today\")"),
     doc!("deftemplate", "(deftemplate name (…)) → dict", "A template of item properties to stamp out repeatedly.",
          "(deftemplate standup (:priority 2 :category \"work\"))"),

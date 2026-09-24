@@ -236,6 +236,8 @@
       <tr><td><code>(functions)</code></td><td>every function, macro and special form in scope, with its call shape</td></tr>
       <tr><td><code>(functions "str")</code></td><td>only the names containing <code>str</code>; a symbol or keyword works too</td></tr>
       <tr><td><code>(source map)</code></td><td>one definition — the name is not evaluated, so <code>'map</code> and <code>"map"</code> also work</td></tr>
+      <tr><td><code>(function-list "str")</code></td><td>the same rows as data — a list of dicts with <code>name</code>, <code>kind</code>, <code>sig</code> and <code>summary</code></td></tr>
+      <tr><td><code>(source-text "map")</code></td><td>what <code>(source map)</code> prints, returned as a string; the name is evaluated, so it can come from a variable</td></tr>
     </table></div>
     <p>
       For anything written in EELisp, <code>(source f)</code> echoes the definition back <em>as it was
@@ -294,6 +296,8 @@ str-join — builtin
       <tr><td><code>(record-id r)</code></td><td></td></tr>
     </table></div>
     <p class="muted"><small>Field types: <code>string</code>, <code>number</code>, <code>bool</code>, <code>date</code>.</small></p>
+    <p class="muted"><small>The table is named bare — <code>(query contacts)</code> — or by a call that returns its
+      name, which is how a program picks a table at run time: <code>(query (dict-get f "table"))</code>.</small></p>
   </div></div>
 </section>
 
@@ -311,6 +315,7 @@ str-join — builtin
       <tr><td><code>(items :search :category :priority :when-before :when-after)</code></td><td></td></tr>
       <tr><td><code>(items-on date)</code> · <code>(items-between a b)</code></td><td></td></tr>
       <tr><td><code>(item-get id)</code> · <code>(item-set id :k v)</code> · <code>(item-done id)</code></td><td></td></tr>
+      <tr><td><code>(item-&gt;dict item)</code></td><td>an item's fields as a dict — <code>id</code>, <code>text</code>, <code>when</code>, <code>priority</code>, <code>notes</code>, <code>categories</code> …</td></tr>
       <tr><td><code>(item-count)</code></td><td></td></tr>
       <tr><td><code>(every n :weeks)</code></td><td>recurrence — <code>:days</code>, <code>:weeks</code>, <code>:months</code></td></tr>
     </table></div>
@@ -331,7 +336,7 @@ str-join — builtin
     <h3>Views, templates, files</h3>
     <div class="table-wrap"><table>
       <tr><th>Function</th><th>Notes</th></tr>
-      <tr><td><code>(defview name (:category … ))</code> · <code>(show name)</code></td><td>filtered, optionally grouped</td></tr>
+      <tr><td><code>(defview name :filter expr :sort-by f :group-by f)</code> · <code>(show name)</code></td><td>filtered, optionally grouped</td></tr>
       <tr><td><code>(views)</code> · <code>(drop-view "name")</code></td><td></td></tr>
       <tr><td><code>(deftemplate name (…))</code> · <code>(from-template name)</code></td><td></td></tr>
       <tr><td><code>(templates)</code> · <code>(drop-template name)</code></td><td></td></tr>

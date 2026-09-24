@@ -43,7 +43,8 @@ _HTTP builtins (the one network dependency) are the small remaining piece._
 for a Tauri app to hold in state; `eelisp --serve` gives the same as a JSON-line stdin/stdout RPC.
 
 **Self-documenting (`src/docs.rs`).** `(functions)` lists every function, macro and special form in
-scope — `(functions "str")` filters by name — and `(source f)` shows one. For anything written in
+scope — `(functions "str")` filters by name — and `(source f)` shows one; `(function-list …)` and
+`(source-text f)` return the same as data, for programs such as a form that browses them. For anything written in
 EELisp that is the definition *as written*: the parser keeps each top-level form's text and the `;;`
 comment block above it (`parser::top_forms` → `SourceIndex`), so a comment written over a `defn` is
 that function's documentation and lives nowhere else. Builtins have no EELisp source, so they get a

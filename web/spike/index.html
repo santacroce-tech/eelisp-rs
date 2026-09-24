@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>eelisp in the browser</title>
+<pre id="out">loading…</pre>
+<script type="module">
+import init, { Engine } from "../pkg/eelisp_web.js";
+const out = document.getElementById("out");
+const log = [];
+const t0 = performance.now();
+await init();
+const e = new Engine();
+const tInit = performance.now() - t0;
+const ev = (src) => JSON.parse(e.eval(src));
+const check = (name, src, want) => {
+  const r = ev(src);
+  const got = r.ok ? JSON.stringify(r.result) : "ERROR " + r.error;
+  const pass = want instanceof RegExp ? want.test(got) : got === want;
+  log.push({ name, pass, got: got.slice(0, 160) });
+};
+check("arithmetic", "(+ 1 2)", "3");
+check("tail calls", "(loop (i 0 acc 0) (if (> i 100000) acc (recur (+ i 1) (+ acc i))))", "5000050000");
+check("strings", '(str-join "-" (list "a" "b"))', '"a-b"');
+check("sqlite: deftable+insert+query", '(deftable pets (name:string age:number)) (insert pets {:name "Rex" :age 3}) (insert pets {:name "Tom" :age 5}) (count-records pets :where "age > ?" :params (list 2))', "2");
+check("sqlite: a result-set crosses to JS", '(query pets :order "name")', /\$resultSet/);
+check("the clock", '(> (now) 1700000000)', "true");
+check("dates", '(date-format (today) "yyyy")', /"20\d\d"/);
+check("agenda: smart add", '(add "call Bob tomorrow !!") (item-count)', "1");
+check("agenda: item->dict", '(dict-get (item->dict (item-get 1)) "text")', '"call Bob"');
+check("docs as data", '(length (function-list "str-"))', /^\d+$/);
+check("source-text", '(str-len (source-text "take"))', /^\d+$/);
+check("http is refused, not a crash", '(http-get "https://example.com")', /ERROR .*isn't available/);
+check("printed output is captured", '(println "hi")', "null");
+// A real form: the forms prelude, then Books.eeform, then its handlers as the app would call them.
+const prelude = await (await fetch("prelude.eelisp")).text();
+const books = await (await fetch("Books.eeform")).text();
+check("forms prelude loads", prelude + "\n'ok", /ok/);
+check("Books.eeform loads", books + "\n'ok", /ok/);
+check("Books: samples", "(ui-run bk-samples '{})", /Record 1 of 3/);
+check("Books: next", "(ui-run bk-next '{})", /Record 2 of 3/);
+// Speed: 10k rows in, a filtered query out.
+let t = performance.now();
+ev("(deftable big (n:number label:string))");
+ev('(loop (i 0) (if (< i 10000) (do (insert big {:n i :label (str "row " i)}) (recur (+ i 1))) nil))');
+const tInsert = performance.now() - t;
+t = performance.now();
+const q = ev('(length (records (query big :where "n % 7 = 0" :order "n" :desc true)))');
+const tQuery = performance.now() - t;
+log.push({ name: "10k inserts / filtered query", pass: q.ok && q.result === 1429, got: `insert ${tInsert.toFixed(0)} ms · query ${tQuery.toFixed(0)} ms · rows ${q.result}` });
+out.textContent = [`init ${tInit.toFixed(0)} ms`, ...log.map((l) => `${l.pass ? "ok  " : "FAIL"} ${l.name} — ${l.got}`)].join("\n");
+window.__done = log;
+</script>

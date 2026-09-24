@@ -821,6 +821,7 @@ fn json_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
 
 // ── HTTP (ANALYSIS §4.11) — synchronous, returns {:status N :body "…"} ──
 
+#[cfg(feature = "http")]
 fn http_dict(status: u16, body: String) -> Value {
     let mut d = OrderedDict::default();
     d.insert("status".into(), Value::Number(status as f64));
@@ -828,6 +829,7 @@ fn http_dict(status: u16, body: String) -> Value {
     Value::Dict(Rc::new(d))
 }
 
+#[cfg(feature = "http")]
 fn http_result(r: Result<ureq::Response, ureq::Error>) -> Result<Value, LispError> {
     match r {
         Ok(resp) => {
@@ -842,6 +844,7 @@ fn http_result(r: Result<ureq::Response, ureq::Error>) -> Result<Value, LispErro
     }
 }
 
+#[cfg(feature = "http")]
 fn http_get(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let url = match args.first() {
         Some(Value::Str(u)) => u,
@@ -850,6 +853,19 @@ fn http_get(args: &[Value], _: &Env) -> Result<Value, LispError> {
     http_result(ureq::get(url).timeout(std::time::Duration::from_secs(30)).call())
 }
 
+/// Built without the `http` feature (the WebAssembly engine): the names exist, so the manual and the
+/// environment still agree, and say why they can't work here.
+#[cfg(not(feature = "http"))]
+fn http_get(_: &[Value], _: &Env) -> Result<Value, LispError> {
+    Err(LispError::Runtime("http-get isn't available in this build of the engine".into()))
+}
+
+#[cfg(not(feature = "http"))]
+fn http_post(_: &[Value], _: &Env) -> Result<Value, LispError> {
+    Err(LispError::Runtime("http-post isn't available in this build of the engine".into()))
+}
+
+#[cfg(feature = "http")]
 fn http_post(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let url = match args.first() {
         Some(Value::Str(u)) => u,

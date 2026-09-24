@@ -89,6 +89,31 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             agenda::item_get(&db.borrow(), int_arg(args.first())?)
         });
     }
+    // An item's fields as a plain dict, so code can read them: `id`, `text`, then its properties
+    // (`when`, `priority`, …) in the order they were set, then `notes`, `categories`, `created`
+    // and `modified`. A dict passes through, so (item->dict x) is safe on either.
+    defb(env, "item->dict", ArgMode::Eval, |args, _| match args.first() {
+        Some(Value::Item(it)) => {
+            let mut d = OrderedDict::default();
+            d.insert("id".into(), Value::Number(it.id as f64));
+            d.insert("text".into(), Value::Str(it.text.clone()));
+            for k in &it.properties.keys {
+                if let Some(v) = it.properties.get(k) {
+                    d.insert(k.clone(), v.clone());
+                }
+            }
+            d.insert("notes".into(), Value::Str(it.notes.clone()));
+            d.insert(
+                "categories".into(),
+                Value::List(Rc::new(it.categories.iter().map(|c| Value::Str(c.clone())).collect())),
+            );
+            d.insert("created".into(), Value::Str(it.created.clone()));
+            d.insert("modified".into(), Value::Str(it.modified.clone()));
+            Ok(Value::Dict(Rc::new(d)))
+        }
+        Some(v @ Value::Dict(_)) => Ok(v.clone()),
+        _ => Err(LispError::InvalidSyntax("item->dict expects an item, e.g. (item->dict (item-get 1))".into())),
+    });
     {
         let db = db.clone();
         defb(env, "item-set", ArgMode::Eval, move |args, _| {

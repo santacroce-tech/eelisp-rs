@@ -118,6 +118,30 @@ impl Interpreter {
         result
     }
 
+    /// The engine's database as the bytes of a SQLite file — tables, items, rules, views.
+    pub fn export_database(&self) -> Result<Vec<u8>, LispError> {
+        self.database.borrow().to_bytes()
+    }
+
+    /// Replace the engine's database with one given as bytes (see [`Interpreter::export_database`]).
+    /// Like [`Interpreter::open_database`], definitions in the environment stay; the data is the
+    /// new one's. Bytes that aren't a SQLite database are refused and the current data kept.
+    pub fn import_database(&self, bytes: &[u8]) -> Result<(), LispError> {
+        let mut next = Database::from_bytes(bytes)?;
+        agenda::ensure_agenda_tables(&mut next)?;
+        let mut reg = self.agendas.borrow_mut();
+        reg.active_name = agenda::agenda_name_from_path(next.path());
+        reg.inactive.clear();
+        *self.database.borrow_mut() = next;
+        *self.database_error.borrow_mut() = None;
+        Ok(())
+    }
+
+    /// Changes to the database's rows since it was opened or imported.
+    pub fn database_changes(&self) -> u64 {
+        self.database.borrow().total_changes()
+    }
+
     /// Evaluate all top-level forms, return the last result.
     pub fn eval_str(&self, src: &str) -> Result<Value, LispError> {
         let forms = parser::top_forms(src)?;

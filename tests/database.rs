@@ -136,3 +136,45 @@ fn a_failed_move_lands_in_memory_not_in_the_old_file() {
     assert_eq!(result(&engine.eval("(item-count)")), "1");
     assert_eq!(info(&engine), (good, None), "a successful open clears the error");
 }
+
+#[test]
+fn a_table_can_be_named_by_an_expression() {
+    let it = Interpreter::new();
+    it.eval_str("(deftable pets (name:string kind:string))").unwrap();
+    it.eval_str("(def which \"pets\")").unwrap();
+    it.eval_str("(insert (str which) {:name \"Rex\" :kind \"dog\"})").unwrap();
+    it.eval_str("(insert (if true which nil) {:name \"Tom\" :kind \"cat\"})").unwrap();
+    assert_eq!(it.eval_str("(count-records (str which))").unwrap(), eelisp::value::Value::Number(2.0));
+    assert_eq!(it.eval_str("(count-records pets)").unwrap(), eelisp::value::Value::Number(2.0));
+    assert_eq!(it.eval_str("(count-records 'pets)").unwrap(), eelisp::value::Value::Number(2.0));
+}
+
+#[test]
+fn a_database_travels_as_bytes_and_comes_back_whole() {
+    let a = Interpreter::new();
+    a.eval_str("(deftable pets (name:string age:number))").unwrap();
+    a.eval_str("(insert pets {:name \"Rex\" :age 3})").unwrap();
+    a.eval_str("(add \"call Bob tomorrow\")").unwrap();
+    assert!(a.database_changes() > 0);
+    let bytes = a.export_database().unwrap();
+    assert_eq!(&bytes[..16], b"SQLite format 3\0");
+
+    // A fresh engine: the table's definition, its rows and the agenda all arrive with the bytes.
+    let b = Interpreter::new();
+    b.import_database(&bytes).unwrap();
+    let v = |src: &str| eelisp::printer::print_value(&b.eval_str(src).unwrap(), false);
+    assert_eq!(v("(count-records pets)"), "1");
+    assert_eq!(v("(field-get (first (records (query pets))) :name)"), "Rex");
+    assert_eq!(v("(item-count)"), "1");
+    b.eval_str("(insert pets {:name \"Tom\" :age 5})").unwrap();
+    assert_eq!(v("(count-records pets)"), "2");
+    assert!(b.database_changes() > 0);
+}
+
+#[test]
+fn bytes_that_are_not_a_database_are_refused_and_the_data_kept() {
+    let it = Interpreter::new();
+    it.eval_str("(deftable pets (name:string)) (insert pets {:name \"Rex\"})").unwrap();
+    assert!(it.import_database(b"not a database at all, just some text that goes on").is_err());
+    assert_eq!(it.eval_str("(count-records pets)").unwrap(), eelisp::value::Value::Number(1.0));
+}

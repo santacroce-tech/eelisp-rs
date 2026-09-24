@@ -28,6 +28,8 @@ pub mod output;
 pub mod parser;
 pub mod prelude;
 pub mod printer;
+/// A thread per engine — native hosts only; a browser runs the interpreter on its own thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod sheet;
 pub mod sheet_builtins;
