@@ -2,6 +2,7 @@
 //! String dates are "YYYY-MM-DD"; epoch times are f64 seconds since the Unix epoch (UTC).
 //! Uses Howard Hinnant's civil algorithms — no external date crate.
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
@@ -54,8 +55,16 @@ pub fn parse_ymd(s: &str) -> Option<(i64, i64, i64)> {
     Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
 }
 
+/// The current time in epoch seconds. Every clock read in the engine comes through here.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_epoch() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// In a browser `SystemTime::now()` panics; JavaScript's `Date.now()` is milliseconds.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn now_epoch() -> f64 {
+    js_sys::Date::now() / 1000.0
 }
 
 /// Midnight (UTC) of the current day, in epoch seconds.

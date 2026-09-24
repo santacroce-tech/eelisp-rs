@@ -1,0 +1,23 @@
+;; EEditor forms ⇄ EELisp — loaded into the engine once, before the first form runs.
+;;
+;; A handler is a function of the form's state: `f` is a dict keyed by control name, so
+;; (ui-get f "txtName") is what the text box holds. The engine cannot reach the UI, so a change is
+;; *queued* — (ui-set "lblStatus" :text "Saved") — and EEditor applies the queue, in order, when
+;; the handler returns. Reads as imperative code; is data underneath.
+
+;; A layout evaluates to itself. So a .eeform file can be evaluated whole — the handlers get
+;; defined, the layout is just data — and (form …) typed at the REPL doesn't try to call `button`.
+(defmacro form (. body) (list 'quote (cons 'form body)))
+
+(def ui-changes '())
+(defn ui-queue (change) (set! ui-changes (cons change ui-changes)) nil)
+
+(defn ui-get (f ctl) (dict-get f ctl))                          ;; a control's value
+(defn ui-set (ctl prop val) (ui-queue (list "set" ctl prop val)) val)  ;; :value :text :items :rows :columns :enabled :visible
+(defn ui-message (text) (ui-queue (list "message" text)))       ;; a toast
+(defn ui-focus (ctl) (ui-queue (list "focus" ctl)))             ;; put the caret in a control
+(defn ui-close () (ui-queue (list "close")))                    ;; stop the form, back to the designer
+(defn ui-open (path) (ui-queue (list "open" path)))             ;; open and run another form
+
+;; What EEditor calls for every event: empty the queue, run the handler, hand the queue back.
+(defn ui-run (handler f) (set! ui-changes '()) (handler f) (reverse ui-changes))

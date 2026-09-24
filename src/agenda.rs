@@ -1170,12 +1170,9 @@ fn add_months(date: &str, n: i64) -> Option<String> {
     Some(fmt_ymd(ny, nm, nd))
 }
 
-/// Current timestamp `YYYY-MM-DDTHH:MM:SSZ` (native clock; the WASM build will inject time).
+/// Current timestamp `YYYY-MM-DDTHH:MM:SSZ`, from the one clock (`dates::now_epoch`).
 pub fn iso_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let secs = crate::dates::now_epoch() as i64;
     let (y, m, d) = civil_from_days(secs.div_euclid(86400));
     let rem = secs.rem_euclid(86400);
     format!("{}T{:02}:{:02}:{:02}Z", fmt_ymd(y, m, d), rem / 3600, (rem % 3600) / 60, rem % 60)

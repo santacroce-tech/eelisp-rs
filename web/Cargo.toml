@@ -1,0 +1,21 @@
+[package]
+name = "eelisp-web"
+version = "0.3.0"
+edition = "2021"
+description = "The EELisp engine in a browser: the interpreter and SQLite compiled to WebAssembly"
+license = "MIT"
+publish = false
+
+# Its own package, not a member of the engine's: the engine stays free of browser bindings, and
+# this crate is only ever built for wasm32-unknown-unknown.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+eelisp = { path = "..", default-features = false }
+wasm-bindgen = "=0.2.126"
+
+[profile.release]
+opt-level = "s"
+lto = true

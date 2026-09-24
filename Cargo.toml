@@ -14,12 +14,22 @@ license = "MIT"
 name = "eelisp"
 path = "src/lib.rs"
 
-[[bin]]
-name = "eelisp"
-path = "src/bin/eelisp.rs"
-
 [dependencies]
 regex = "1.13.1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde_json = "1.0.151"
-ureq = "^2"
+ureq = { version = "^2", optional = true }
+
+# `http-get`/`http-post`. Off for the WebAssembly build, where a browser has its own `fetch`.
+[features]
+default = ["http"]
+http = ["dep:ureq"]
+
+# In a browser there is no system clock to read: the time comes from JavaScript's Date.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+
+[[bin]]
+name = "eelisp"
+path = "src/bin/eelisp.rs"
+required-features = ["http"]
