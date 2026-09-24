@@ -692,3 +692,74 @@ fn sum_avg_min_max_read_lists_and_skip_blanks_and_text() {
     assert!(err(&it, "(avg '(nil))").contains("needs at least one number"));
     assert!(err(&it, r#"(sum "3")"#).contains("Type mismatch"));
 }
+
+// ── a sheet as bytes — what a browser, which has no files, is handed ──
+
+#[test]
+fn a_sheet_travels_as_bytes_formulas_and_all() {
+    let (_dir, a) = budget("bytes-a");
+    set(&a, "A1", "40");
+    set(&a, "A2", "2");
+    set(&a, "A3", "=(+ A1 A2)");
+    let bytes = a.export_sheet("Budget").unwrap();
+    assert_eq!(&bytes[..16], b"SQLite format 3\0");
+
+    // Another engine, in another workspace where no Budget file exists: it opens from the bytes.
+    let dir = scratch("bytes-b");
+    let b = engine(&dir);
+    b.import_sheet("Budget", &bytes).unwrap();
+    assert_eq!(get(&b, "A3"), "42");
+    assert!(!dir.join("Budget.eesheet").exists(), "nothing was written to disk");
+
+    // It is a live sheet there: a change recalculates, and moves its version.
+    let before = b.sheet_versions();
+    set(&b, "A1", "100");
+    assert_eq!(get(&b, "A3"), "102");
+    let after = b.sheet_versions();
+    assert_eq!(after.len(), 1);
+    assert!(after[0].1 > before[0].1, "{before:?} → {after:?}");
+
+    // …and goes back out as bytes with the change in it.
+    let c = engine(&scratch("bytes-c"));
+    c.import_sheet("Budget", &b.export_sheet("Budget").unwrap()).unwrap();
+    assert_eq!(get(&c, "A3"), "102");
+}
+
+#[test]
+fn bytes_that_are_not_a_sheet_are_refused() {
+    let it = engine(&scratch("bytes-bad"));
+    let e = it.import_sheet("Budget", b"certainly not a sqlite file, just text").unwrap_err().to_string();
+    assert!(e.contains("is not a sheet"), "{e}");
+    // A SQLite database that isn't a sheet — the engine's own — is refused too.
+    let db = Interpreter::new().export_database().unwrap();
+    let e = it.import_sheet("Budget", &db).unwrap_err().to_string();
+    assert!(e.contains("is not a sheet"), "{e}");
+    assert!(it.export_sheet("Budget").is_err());
+}
+
+#[test]
+fn sheet_bytes_is_the_file_in_base64() {
+    let (dir, it) = budget("bytes-b64");
+    set(&it, "A1", "7");
+    let b64 = ev(&it, r#"(sheet-bytes "Budget")"#);
+    let b64 = b64.trim_matches('"');
+    assert!(b64.starts_with("U1FMaXRlIGZvcm1hdCAz"), "SQLite format 3…: {}", &b64[..24]); // "SQLite format 3"
+    assert_eq!(b64.len() % 4, 0);
+    let _ = dir;
+}
+
+#[test]
+fn sheet_from_bytes_makes_a_new_file_and_nothing_else() {
+    let (dir, it) = budget("from-bytes");
+    set(&it, "A1", "7");
+    set(&it, "A2", "=(* A1 6)");
+    ev(&it, r#"(def b (sheet-bytes "Budget"))"#);
+    ev(&it, r#"(sheet-from-bytes "copies/Copy" b)"#);
+    assert!(dir.join("copies/Copy.eesheet").is_file());
+    assert_eq!(ev(&it, r#"(sheet-get "copies/Copy" "A2")"#), "42");
+    // never over a file, never from bytes that aren't a sheet
+    assert!(err(&it, r#"(sheet-from-bytes "Budget" b)"#).contains("already exists"));
+    assert!(err(&it, r#"(sheet-from-bytes "Other" "aGVsbG8gd29ybGQh")"#).contains("is not a sheet"));
+    assert!(err(&it, r#"(sheet-from-bytes "Other" "not base64!")"#).contains("isn't base64"));
+    assert!(!dir.join("Other.eesheet").exists());
+}
