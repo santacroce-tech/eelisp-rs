@@ -736,3 +736,14 @@ fn bytes_that_are_not_a_sheet_are_refused() {
     assert!(e.contains("is not a sheet"), "{e}");
     assert!(it.export_sheet("Budget").is_err());
 }
+
+#[test]
+fn sheet_bytes_is_the_file_in_base64() {
+    let (dir, it) = budget("bytes-b64");
+    set(&it, "A1", "7");
+    let b64 = ev(&it, r#"(sheet-bytes "Budget")"#);
+    let b64 = b64.trim_matches('"');
+    assert!(b64.starts_with("U1FMaXRlIGZvcm1hdCAz"), "SQLite format 3…: {}", &b64[..24]); // "SQLite format 3"
+    assert_eq!(b64.len() % 4, 0);
+    let _ = dir;
+}

@@ -771,6 +771,8 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-new \"Budget\")"),
     doc!("sheet-open", "(sheet-open name) → dict", "The whole sheet for a host to draw: `{:path :version :cells ((row col input value error fmt) …) :widths ((col width) …) :heights ((row height) …)}`, rows and columns from 0. Runs no formula — values are the ones stored.",
          "(sheet-open \"Budget\")"),
+    doc!("sheet-bytes", "(sheet-bytes name) → string", "A sheet's .eesheet file, as base64 — how a host that reads only text carries a sheet (Export as HTML).",
+         "(str-len (sheet-bytes \"Budget\"))"),
     doc!("sheet-close", "(sheet-close name) → nil", "Closes the file. Do it before renaming or deleting one.", "(sheet-close \"Budget\")"),
     doc!("sheet-get", "(sheet-get name cell)", "One cell's value. A cell whose formula failed is an error.", "(sheet-get \"Budget\" \"C3\")   → 1650"),
     doc!("sheet-rows", "(sheet-rows name area) → list", "An area's values as a list of rows.",

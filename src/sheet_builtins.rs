@@ -61,6 +61,15 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         Ok(reg.borrow_mut().sheet(&path)?.payload())
     });
 
+    // A sheet as the base64 of its .eesheet file — how a host that can only read text gets a sheet
+    // to carry (EEditor's Export as HTML puts it in the page, which opens it from those bytes).
+    def("sheet-bytes", |reg, host, args, _| {
+        let path = resolve(host, str_arg(args, 0, "sheet-bytes", "a sheet name")?)?;
+        let mut sheets = reg.borrow_mut();
+        let bytes = sheets.sheet(&path)?.to_bytes()?;
+        Ok(Value::Str(base64(&bytes)))
+    });
+
     def("sheet-close", |reg, host, args, _| {
         let path = resolve(host, str_arg(args, 0, "sheet-close", "a sheet name")?)?;
         writable(reg, "sheet-close")?;
@@ -637,4 +646,28 @@ fn format_changes(d: &OrderedDict) -> Result<Map<String, J>, LispError> {
         }
     }
     Ok(out)
+}
+
+/// Standard base64 (RFC 4648, with padding) — what a browser's `atob` reads.
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+#[cfg(test)]
+mod base64_tests {
+    #[test]
+    fn matches_the_rfc_examples() {
+        for (input, want) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(super::base64(input.as_bytes()), want);
+        }
+    }
 }
