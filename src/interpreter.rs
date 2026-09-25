@@ -61,6 +61,7 @@ impl Interpreter {
     fn build(database: Database) -> Self {
         let global = env::root();
         builtins::register(&global);
+        crate::bytes::register(&global);
 
         let reg = Rc::new(RefCell::new(Agendas::new(agenda::agenda_name_from_path(database.path()))));
         let db = Rc::new(RefCell::new(database));

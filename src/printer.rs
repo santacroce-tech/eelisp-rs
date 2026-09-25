@@ -61,6 +61,16 @@ pub fn print_value(v: &Value, readable: bool) -> String {
                 if fv.is_standalone { " standalone" } else { "" }
             )
         }
+        // A short buffer shows its bytes; a long one (a machine's RAM) just its size.
+        Value::Bytes(b) => {
+            let b = b.borrow();
+            if b.len() <= 16 {
+                let hex: Vec<String> = b.iter().map(|x| format!("{x:02x}")).collect();
+                format!("#<bytes {}: {}>", b.len(), hex.join(" "))
+            } else {
+                format!("#<bytes {}>", b.len())
+            }
+        }
     }
 }
 

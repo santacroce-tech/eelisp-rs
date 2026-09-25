@@ -43,6 +43,7 @@ pub fn to_json(v: &Value) -> J {
                 "isStandalone": fv.is_standalone,
             }
         }),
+        Value::Bytes(b) => json!({ "$bytes": crate::bytes::base64(&b.borrow()) }),
         Value::Function(f) => json!({ "$fn": f.name.clone().unwrap_or_else(|| "anonymous".into()) }),
         Value::Builtin(b) => json!({ "$builtin": b.name }),
         Value::Macro(m) => json!({ "$macro": m.name.clone().unwrap_or_else(|| "anonymous".into()) }),

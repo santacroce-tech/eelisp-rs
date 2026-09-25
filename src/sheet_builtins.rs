@@ -22,6 +22,7 @@ use crate::host::to_json;
 use crate::printer::print_value;
 use crate::sheet::*;
 use crate::sheet_ref::*;
+use crate::bytes::{base64, unbase64};
 use crate::value::*;
 
 type Registry = Rc<RefCell<Sheets>>;
@@ -665,74 +666,4 @@ fn format_changes(d: &OrderedDict) -> Result<Map<String, J>, LispError> {
         }
     }
     Ok(out)
-}
-
-/// Standard base64 (RFC 4648, with padding) — what a browser's `atob` reads.
-fn base64(bytes: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
-/// Bytes from standard base64; None when it isn't.
-fn unbase64(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let clean: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if clean.len() % 4 != 0 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(clean.len() / 4 * 3);
-    for q in clean.chunks(4) {
-        let pad = q.iter().rev().take_while(|&&c| c == b'=').count();
-        if pad > 2 {
-            return None;
-        }
-        let mut n = 0u32;
-        for (i, &c) in q.iter().enumerate() {
-            n |= if i >= 4 - pad { 0 } else { val(c)? } << (18 - 6 * i);
-        }
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Some(out)
-}
-
-#[cfg(test)]
-mod base64_tests {
-    #[test]
-    fn decodes_what_it_encodes_and_refuses_what_isnt_base64() {
-        for input in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
-            assert_eq!(super::unbase64(&super::base64(input.as_bytes())).unwrap(), input.as_bytes());
-        }
-        assert!(super::unbase64("abc").is_none());
-        assert!(super::unbase64("ab!d").is_none());
-    }
-
-    #[test]
-    fn matches_the_rfc_examples() {
-        for (input, want) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
-            assert_eq!(super::base64(input.as_bytes()), want);
-        }
-    }
 }

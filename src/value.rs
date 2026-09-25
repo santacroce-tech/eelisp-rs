@@ -4,6 +4,7 @@
 //! `Rc<Vec<Value>>` (cheap clone). Dicts preserve insertion order. Equality matches EELisp:
 //! atoms/lists/dicts compare structurally; functions/builtins/macros are never equal.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -34,6 +35,9 @@ pub enum Value {
     // Interactive views (ANALYSIS §5) — the structured host/UI contract.
     TableView(Rc<TableView>),
     FormView(Rc<FormView>),
+    // Raw memory — the one mutable value: `bset` changes the buffer every holder sees. For the
+    // things that are bytes at heart (a machine's RAM, a file's contents), not for data.
+    Bytes(Rc<RefCell<Vec<u8>>>),
 }
 
 /// Insertion-ordered map — load-bearing for record/dict/form ordering (ANALYSIS §4.1).
@@ -224,6 +228,7 @@ impl PartialEq for Value {
             (Null, Null) => true,
             (List(a), List(b)) => a == b,
             (Dict(a), Dict(b)) => a == b,
+            (Bytes(a), Bytes(b)) => *a.borrow() == *b.borrow(),
             _ => false, // functions / builtins / macros are never equal
         }
     }
@@ -253,6 +258,7 @@ pub fn type_name(v: &Value) -> String {
         Value::Item(_) => "item",
         Value::TableView(_) => "table-view",
         Value::FormView(_) => "form-view",
+        Value::Bytes(_) => "bytes",
     }
     .to_string()
 }

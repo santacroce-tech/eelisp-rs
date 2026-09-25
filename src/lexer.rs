@@ -39,6 +39,21 @@ fn is_delim(c: char) -> bool {
     c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | '\'' | '`' | ',')
 }
 
+/// `0x4000`, `0xff`, `-0x10` — hex integer literals. Anything else (`0x`, `0xg1`) stays a symbol.
+/// Up to 13 hex digits, so the value is always an exact `f64` integer.
+fn parse_hex(atom: &str) -> Option<f64> {
+    let (neg, body) = match atom.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, atom),
+    };
+    let digits = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X"))?;
+    if digits.is_empty() || digits.len() > 13 {
+        return None;
+    }
+    let v = i64::from_str_radix(digits, 16).ok()? as f64;
+    Some(if neg { -v } else { v })
+}
+
 /// Tokens only — the parser's fast path and every existing caller.
 pub fn lex(src: &str) -> Result<Vec<Token>, LispError> {
     Ok(lex_spanned(src)?.into_iter().map(|s| s.tok).collect())
@@ -144,6 +159,8 @@ pub fn lex_spanned(src: &str) -> Result<Vec<Spanned>, LispError> {
                 if let Some(rest) = atom.strip_prefix(':') {
                     Token::Kw(rest.to_string())
                 } else if let Ok(num) = atom.parse::<f64>() {
+                    Token::Num(num)
+                } else if let Some(num) = parse_hex(&atom) {
                     Token::Num(num)
                 } else {
                     Token::Sym(atom)

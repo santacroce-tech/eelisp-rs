@@ -31,7 +31,7 @@ pub struct Entry {
 }
 
 /// The manual, in reading order: core language, database, agenda, sheets, editor RPC.
-pub static TABLES: &[&[Entry]] = &[CORE, DATABASE, AGENDA, SHEETS, EDITOR];
+pub static TABLES: &[&[Entry]] = &[CORE, BYTES, DATABASE, AGENDA, SHEETS, EDITOR];
 
 pub fn builtins() -> impl Iterator<Item = &'static Entry> {
     TABLES.iter().flat_map(|t| t.iter())
@@ -760,6 +760,27 @@ pub static AGENDA: &[Entry] = &[
          "(export-agenda \"backup.json\")"),
     doc!("import-agenda", "(import-agenda \"f.json\") → number", "Reads items back from JSON, in one transaction.",
          "(import-agenda \"backup.json\")"),
+];
+
+/// Raw memory: byte buffers (the one mutable value — `bset` changes it for everyone holding it) and
+/// bitwise operations on exact integers. Hex literals (`0xff`) read as ordinary numbers.
+pub static BYTES: &[Entry] = &[
+    doc!("band", "(band a b) → number", "Bitwise AND of two integers.", "(band 0xf0 0x3c)   ; → 48"),
+    doc!("bor", "(bor a b) → number", "Bitwise OR of two integers.", "(bor 0xf0 0x0f)   ; → 255"),
+    doc!("bxor", "(bxor a b) → number", "Bitwise exclusive OR of two integers.", "(bxor 0xff 0x0f)   ; → 240"),
+    doc!("bnot", "(bnot a) → number", "Bitwise NOT (two's complement: -a - 1). Mask it for a byte: (band (bnot a) 0xff).", "(band (bnot 0x0f) 0xff)   ; → 240"),
+    doc!("shl", "(shl a n) → number", "a shifted left n bits. An error past 2^53, where numbers stop being exact.", "(shl 1 8)   ; → 256"),
+    doc!("shr", "(shr a n) → number", "a shifted right n bits, keeping the sign.", "(shr 0x4000 8)   ; → 64"),
+    doc!("make-bytes", "(make-bytes n [fill]) → bytes", "A mutable buffer of n bytes, all 0 (or fill). Up to 16 MB.", "(make-bytes 65536)"),
+    doc!("bytes-len", "(bytes-len b) → number", "The size of a buffer.", "(bytes-len (make-bytes 8))   ; → 8"),
+    doc!("bget", "(bget b i) → number", "The byte at index i, 0 to 255.", "(bget (list->bytes '(7 8 9)) 1)   ; → 8"),
+    doc!("bset", "(bset b i v) → number", "Stores v & 0xff at index i, in place, and returns the byte stored.", "(bset ram 0x4000 0xff)"),
+    doc!("bfill", "(bfill b start len v) → nil", "Sets len bytes from start to v.", "(bfill ram 0x4000 6144 0)"),
+    doc!("bcopy", "(bcopy dst di src si len) → nil", "Copies len bytes from src at si to dst at di. dst and src may be the same buffer, overlapping.", "(bcopy ram 0x8000 prog 0 (bytes-len prog))"),
+    doc!("list->bytes", "(list->bytes lst) → bytes", "A buffer holding a list of integers, each taken & 0xff.", "(list->bytes '(0x3e 0x02 0x76))"),
+    doc!("bytes->list", "(bytes->list b) → list", "A buffer's bytes as a list of numbers.", "(bytes->list (make-bytes 3 1))   ; → (1 1 1)"),
+    doc!("bytes->base64", "(bytes->base64 b [start len]) → string", "A buffer, or a run of it, as standard base64 — how bytes cross to a host.", "(bytes->base64 ram 0x4000 6912)"),
+    doc!("base64->bytes", "(base64->bytes s) → bytes", "A new buffer from standard base64. An error if s isn't base64.", "(bytes->list (base64->bytes \"AQID\"))   ; → (1 2 3)"),
 ];
 
 /// Sheets: a grid whose formulas are EELisp, each sheet a `.eesheet` file. A sheet is named
