@@ -7,7 +7,7 @@ produces is exactly what the evaluator runs and what a macro receives.
 ## Atoms
 
 ```lisp
-42        -3.5      1e3        ; numbers — one type, a 64-bit float
+42        -3.5      1e3   0xff ; numbers — one type, a 64-bit float
 "hello"   "a\tb\n"             ; strings, with \n \t \r \\ \" escapes
 true      false                ; booleans
 nil                            ; nothing
@@ -25,6 +25,7 @@ of operators from numbers, so:
 | `-` | the symbol `-` (subtraction) |
 | `(- 1 3)` | a call: −2 |
 | `1e3` | the number 1000 |
+| `0xff`, `0x4000`, `-0x10` | hex whole numbers: 255, 16384, −16 (up to 13 digits, so always exact) |
 | `a.b`, `->string`, `even?`, `set!` | ordinary symbols |
 
 Whole numbers print without a decimal point: `(* 2 21)` prints `42`, and `(/ 7 2)` prints `3.5`.

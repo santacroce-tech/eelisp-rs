@@ -42,6 +42,7 @@ CHAPTERS = [
 TABLE_TITLES = {
     "SPECIAL_FORMS": "Special forms",
     "CORE": None,  # split by its `// ── section ──` comments
+    "BYTES": "Bytes and bits",
     "DATABASE": "Database",
     "AGENDA": "Agenda",
     "SHEETS": "Sheets",
