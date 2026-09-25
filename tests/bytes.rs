@@ -44,6 +44,8 @@ fn bitwise_on_integers() {
     assert_eq!(s(&it, "(shl 1 15)"), "32768");
     assert_eq!(s(&it, "(shr 0x4000 8)"), "64");
     assert_eq!(s(&it, "(shr -16 2)"), "-4");
+    assert_eq!(s(&it, "(bor 1 2 4 0x80)"), "135");
+    assert_eq!(s(&it, "(band 0xff 0x0f 0x03)"), "3");
 }
 
 #[test]

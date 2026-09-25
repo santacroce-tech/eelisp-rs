@@ -85,18 +85,21 @@ pub(crate) fn new_bytes(v: Vec<u8>) -> Value {
 
 pub fn register(env: &Env) {
     // ── bitwise ──
-    define(env, "band", |a, _| {
-        arity("band", a, 2, 2)?;
-        num("band", int("band", &a[0])? & int("band", &a[1])?)
-    });
-    define(env, "bor", |a, _| {
-        arity("bor", a, 2, 2)?;
-        num("bor", int("bor", &a[0])? | int("bor", &a[1])?)
-    });
-    define(env, "bxor", |a, _| {
-        arity("bxor", a, 2, 2)?;
-        num("bxor", int("bxor", &a[0])? ^ int("bxor", &a[1])?)
-    });
+    // `band`/`bor`/`bxor` fold any number of arguments: flag arithmetic ORs four or five terms,
+    // and one call is cheaper than nested ones.
+    fn fold(name: &'static str, a: &[Value], op: fn(i64, i64) -> i64) -> Result<Value, LispError> {
+        if a.len() < 2 {
+            return Err(LispError::Arity { func: name.into(), expected: "2 or more".into(), got: a.len() });
+        }
+        let mut acc = int(name, &a[0])?;
+        for v in &a[1..] {
+            acc = op(acc, int(name, v)?);
+        }
+        num(name, acc)
+    }
+    define(env, "band", |a, _| fold("band", a, |x, y| x & y));
+    define(env, "bor", |a, _| fold("bor", a, |x, y| x | y));
+    define(env, "bxor", |a, _| fold("bxor", a, |x, y| x ^ y));
     define(env, "bnot", |a, _| {
         arity("bnot", a, 1, 1)?;
         num("bnot", !int("bnot", &a[0])?)

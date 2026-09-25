@@ -765,9 +765,9 @@ pub static AGENDA: &[Entry] = &[
 /// Raw memory: byte buffers (the one mutable value — `bset` changes it for everyone holding it) and
 /// bitwise operations on exact integers. Hex literals (`0xff`) read as ordinary numbers.
 pub static BYTES: &[Entry] = &[
-    doc!("band", "(band a b) → number", "Bitwise AND of two integers.", "(band 0xf0 0x3c)   ; → 48"),
-    doc!("bor", "(bor a b) → number", "Bitwise OR of two integers.", "(bor 0xf0 0x0f)   ; → 255"),
-    doc!("bxor", "(bxor a b) → number", "Bitwise exclusive OR of two integers.", "(bxor 0xff 0x0f)   ; → 240"),
+    doc!("band", "(band a b …) → number", "Bitwise AND of the integers.", "(band 0xf0 0x3c)   ; → 48"),
+    doc!("bor", "(bor a b …) → number", "Bitwise OR of the integers.", "(bor 0xf0 0x0f)   ; → 255"),
+    doc!("bxor", "(bxor a b …) → number", "Bitwise exclusive OR of the integers.", "(bxor 0xff 0x0f)   ; → 240"),
     doc!("bnot", "(bnot a) → number", "Bitwise NOT (two's complement: -a - 1). Mask it for a byte: (band (bnot a) 0xff).", "(band (bnot 0x0f) 0xff)   ; → 240"),
     doc!("shl", "(shl a n) → number", "a shifted left n bits. An error past 2^53, where numbers stop being exact.", "(shl 1 8)   ; → 256"),
     doc!("shr", "(shr a n) → number", "a shifted right n bits, keeping the sign.", "(shr 0x4000 8)   ; → 64"),
