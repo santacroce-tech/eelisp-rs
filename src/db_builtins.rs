@@ -102,7 +102,7 @@ pub fn register(env: &Env, db: Shared) {
         let db = db.clone();
         define_db(env, "tables", ArgMode::Eval, move |_, _| {
             Ok(Value::List(Rc::new(
-                db.borrow().list_tables().into_iter().map(Value::Symbol).collect(),
+                db.borrow().list_tables().into_iter().map(|t| Value::Symbol(t.into())).collect(),
             )))
         });
     }
@@ -229,7 +229,8 @@ pub fn register_info(env: &Env, db: Shared, error: Rc<RefCell<Option<String>>>) 
 
 fn sym_or_str(v: &Value) -> Option<String> {
     match v {
-        Value::Str(s) | Value::Symbol(s) => Some(s.clone()),
+        Value::Symbol(s) => Some(s.to_string()),
+        Value::Str(s) => Some(s.clone()),
         _ => None,
     }
 }
@@ -249,7 +250,8 @@ fn kw<'a>(args: &'a [Value], key: &str) -> Option<&'a Value> {
 
 fn table_name(v: Option<&Value>) -> Result<String, LispError> {
     match v {
-        Some(Value::Symbol(s)) | Some(Value::Str(s)) => Ok(s.clone()),
+        Some(Value::Symbol(s)) => Ok(s.to_string()),
+        Some(Value::Str(s)) => Ok(s.clone()),
         _ => Err(LispError::InvalidSyntax("expected a table name".into())),
     }
 }
@@ -288,7 +290,8 @@ fn as_record(v: Option<&Value>) -> Result<Rc<Record>, LispError> {
 /// a plain string, which is what code handling a row it was given as data naturally has.
 fn as_key(v: Option<&Value>) -> Result<String, LispError> {
     match v {
-        Some(Value::Keyword(k)) | Some(Value::Symbol(k)) | Some(Value::Str(k)) => Ok(k.clone()),
+        Some(Value::Symbol(k)) => Ok(k.to_string()),
+        Some(Value::Keyword(k)) | Some(Value::Str(k)) => Ok(k.clone()),
         _ => Err(LispError::InvalidSyntax("expected a field name (a keyword or a string)".into())),
     }
 }
@@ -318,7 +321,7 @@ fn parse_field(v: &Value) -> Result<FieldDef, LispError> {
         // long form:  (name :type T :required B :default V :choices (...))
         Value::List(l) => {
             let name = match l.first() {
-                Some(Value::Symbol(s)) => s.clone(),
+                Some(Value::Symbol(s)) => s.to_string(),
                 _ => return Err(LispError::InvalidSyntax("bad field def".into())),
             };
             let mut fd =
@@ -329,8 +332,10 @@ fn parse_field(v: &Value) -> Result<FieldDef, LispError> {
                     let val = &l[i + 1];
                     match k.as_str() {
                         "type" => {
-                            if let Value::Symbol(t) | Value::Str(t) = val {
-                                fd.ftype = FieldType::parse(t);
+                            match val {
+                                Value::Symbol(t) => fd.ftype = FieldType::parse(t),
+                                Value::Str(t) => fd.ftype = FieldType::parse(t),
+                                _ => {}
                             }
                         }
                         "required" => fd.required = is_truthy(val),
@@ -340,7 +345,8 @@ fn parse_field(v: &Value) -> Result<FieldDef, LispError> {
                                 fd.choices = cs
                                     .iter()
                                     .filter_map(|c| match c {
-                                        Value::Str(s) | Value::Symbol(s) => Some(s.clone()),
+                                        Value::Symbol(s) => Some(s.to_string()),
+                                        Value::Str(s) => Some(s.clone()),
                                         _ => None,
                                     })
                                     .collect();
@@ -392,7 +398,7 @@ fn parse_computed(v: Option<&Value>) -> Vec<ComputedField> {
                 if let Value::List(pair) = p {
                     if let Some(Value::Symbol(n)) = pair.first() {
                         return Some(ComputedField {
-                            name: n.clone(),
+                            name: n.to_string(),
                             ftype: FieldType::Number,
                             expression: pair.get(1).cloned().unwrap_or(Value::Null),
                         });
@@ -447,7 +453,8 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
                     }
                 }
                 "order" => match val {
-                    Some(Value::Str(s)) | Some(Value::Symbol(s)) => q.order = Some(s.clone()),
+                    Some(Value::Symbol(s)) => q.order = Some(s.to_string()),
+                    Some(Value::Str(s)) => q.order = Some(s.clone()),
                     _ => {}
                 },
                 "asc" => {
@@ -470,7 +477,8 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
                         q.select = Some(
                             l.iter()
                                 .filter_map(|x| match x {
-                                    Value::Symbol(s) | Value::Str(s) | Value::Keyword(s) => Some(s.clone()),
+                                    Value::Symbol(s) => Some(s.to_string()),
+                                    Value::Str(s) | Value::Keyword(s) => Some(s.clone()),
                                     _ => None,
                                 })
                                 .collect(),

@@ -247,7 +247,8 @@ fn date_add_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let date = as_str(&args[0], "date-add")?;
     let amount = as_num(&args[1])? as i64;
     let unit = match args.get(2) {
-        Some(Value::Keyword(k)) | Some(Value::Symbol(k)) => k.as_str(),
+        Some(Value::Symbol(k)) => &**k,
+        Some(Value::Keyword(k)) => k.as_str(),
         Some(Value::Str(s)) => s.as_str(),
         _ => "days",
     };
@@ -684,7 +685,8 @@ fn dictf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 /// Key of a dict access — accepts either a keyword or a plain string (json dicts use string keys).
 fn dict_key(v: &Value) -> Option<&str> {
     match v {
-        Value::Keyword(k) | Value::Str(k) | Value::Symbol(k) => Some(k.as_str()),
+        Value::Symbol(k) => Some(&**k),
+        Value::Keyword(k) | Value::Str(k) => Some(k.as_str()),
         _ => None,
     }
 }
@@ -909,7 +911,8 @@ fn value_to_natural(v: &Value) -> serde_json::Value {
         Value::Str(s) => J::String(s.clone()),
         Value::Bool(b) => J::Bool(*b),
         Value::Null => J::Null,
-        Value::Keyword(k) | Value::Symbol(k) => J::String(k.clone()),
+        Value::Symbol(k) => J::String(k.to_string()),
+        Value::Keyword(k) => J::String(k.clone()),
         Value::List(l) => J::Array(l.iter().map(value_to_natural).collect()),
         Value::Dict(d) => {
             let mut m = serde_json::Map::new(); // BTreeMap → sorted keys, matching EELisp

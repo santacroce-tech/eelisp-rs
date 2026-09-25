@@ -15,7 +15,7 @@ pub fn to_json(v: &Value) -> J {
         Value::Str(s) => json!(s),
         Value::Bool(b) => json!(b),
         Value::Null => J::Null,
-        Value::Symbol(s) => json!({ "$sym": s }),
+        Value::Symbol(s) => json!({ "$sym": &**s }),
         Value::Keyword(k) => json!({ "$kw": k }),
         Value::List(l) => J::Array(l.iter().map(to_json).collect()),
         Value::Dict(d) => json!({ "$dict": ordered_pairs(d) }),
@@ -107,7 +107,7 @@ pub fn from_tagged_json(j: &J) -> Value {
         J::Array(a) => Value::List(std::rc::Rc::new(a.iter().map(from_tagged_json).collect())),
         J::Object(m) if m.len() == 1 => {
             if let Some(s) = m.get("$sym").and_then(|v| v.as_str()) {
-                return Value::Symbol(s.to_string());
+                return Value::Symbol(s.into());
             }
             if let Some(k) = m.get("$kw").and_then(|v| v.as_str()) {
                 return Value::Keyword(k.to_string());

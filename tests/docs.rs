@@ -256,7 +256,7 @@ fn the_manual_and_the_environment_agree() {
         .vars
         .iter()
         .filter(|(_, v)| matches!(v, Value::Builtin(_)))
-        .map(|(k, _)| k.clone())
+        .map(|(k, _)| k.to_string())
         .collect();
 
     let mut undocumented: Vec<&String> =

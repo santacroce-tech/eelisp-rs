@@ -5,7 +5,7 @@ use crate::value::*;
 
 pub fn print_value(v: &Value, readable: bool) -> String {
     match v {
-        Value::Symbol(s) => s.clone(),
+        Value::Symbol(s) => s.to_string(),
         Value::Str(s) => {
             if readable {
                 format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))

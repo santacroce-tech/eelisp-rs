@@ -748,7 +748,8 @@ fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> 
     let props = item.properties.clone();
     env::define(&e, "get", make_builtin("get", move |args, _| {
         let key = match args.first() {
-            Some(Value::Keyword(k)) | Some(Value::Symbol(k)) => k.clone(),
+            Some(Value::Symbol(k)) => k.to_string(),
+            Some(Value::Keyword(k)) => k.clone(),
             _ => return Ok(Value::Null),
         };
         Ok(props.get(&key).cloned().unwrap_or(Value::Null))
@@ -757,7 +758,8 @@ fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> 
     let cats = item.categories.clone();
     env::define(&e, "has-category", make_builtin("has-category", move |args, _| {
         let path = match args.first() {
-            Some(Value::Str(s)) | Some(Value::Symbol(s)) => s.clone(),
+            Some(Value::Symbol(s)) => s.to_string(),
+            Some(Value::Str(s)) => s.clone(),
             _ => return Ok(Value::Bool(false)),
         };
         let prefix = format!("{}/", path);

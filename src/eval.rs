@@ -28,7 +28,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
 
                 // ---- special forms (head is a bare symbol) ----
                 if let Value::Symbol(head) = &items[0] {
-                    match head.as_str() {
+                    match &**head {
                         "quote" => return Ok(items.get(1).cloned().unwrap_or(Value::Null)),
                         "quasiquote" => {
                             return quasiquote(items.get(1).unwrap_or(&Value::Null), &env)
@@ -79,7 +79,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                     while i + 1 < binds.len() {
                                         if let Value::Symbol(name) = &binds[i] {
                                             let v = eval(binds[i + 1].clone(), scope.clone())?;
-                                            env::define(&scope, name, v);
+                                            env::define_sym(&scope, name, v);
                                         }
                                         i += 2;
                                     }
@@ -88,7 +88,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                         if let Value::List(pair) = b {
                                             if let Value::Symbol(name) = &pair[0] {
                                                 let v = eval(pair[1].clone(), scope.clone())?;
-                                                env::define(&scope, name, v);
+                                                env::define_sym(&scope, name, v);
                                             }
                                         }
                                     }
@@ -109,7 +109,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             let mut chosen: Option<Value> = None;
                             let mut i = 1;
                             while i + 1 < items.len() {
-                                let is_catch_all = matches!(&items[i], Value::Symbol(s) if s == "true" || s == "else" || s == "otherwise");
+                                let is_catch_all = matches!(&items[i], Value::Symbol(s) if matches!(&**s, "true" | "else" | "otherwise"));
                                 let test = if is_catch_all {
                                     Value::Bool(true)
                                 } else {
@@ -132,13 +132,13 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                         "loop" => {
                             // Clojure-style: (loop (v1 i1 v2 i2 …) body). `recur` re-enters with new values.
                             let scope = env::child(&env);
-                            let mut names: Vec<String> = Vec::new();
+                            let mut names: Vec<Sym> = Vec::new();
                             if let Value::List(binds) = &items[1] {
                                 let mut j = 0;
                                 while j + 1 < binds.len() {
                                     if let Value::Symbol(name) = &binds[j] {
                                         let v = eval(binds[j + 1].clone(), scope.clone())?;
-                                        env::define(&scope, name, v);
+                                        env::define_sym(&scope, name, v);
                                         names.push(name.clone());
                                     }
                                     j += 2;
@@ -150,7 +150,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                     Ok(v) => return Ok(v),
                                     Err(LispError::Recur(vals)) => {
                                         for (n, v) in names.iter().zip(vals.into_iter()) {
-                                            env::define(&scope, n, v);
+                                            env::define_sym(&scope, n, v);
                                         }
                                     }
                                     Err(e) => return Err(e),
@@ -196,7 +196,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 if let Value::List(l) = lst {
                                     for item in l.iter() {
                                         let scope = env::child(&env);
-                                        env::define(&scope, var, item.clone());
+                                        env::define_sym(&scope, var, item.clone());
                                         for e in &items[3..] {
                                             eval(e.clone(), scope.clone())?;
                                         }
@@ -302,7 +302,7 @@ pub fn apply_value(f: &Value, args: &[Value], env: &Env) -> Result<Value, LispEr
 fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
     let scope = env::child(&f.closure);
     for (i, p) in f.params.iter().enumerate() {
-        env::define(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
+        env::define_sym(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
     }
     if let Some(rest) = &f.rest {
         let extra = if args.len() > f.params.len() {
@@ -310,7 +310,7 @@ fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
         } else {
             vec![]
         };
-        env::define(&scope, rest, Value::List(Rc::new(extra)));
+        env::define_sym(&scope, rest, Value::List(Rc::new(extra)));
     }
     Ok(scope)
 }
@@ -318,7 +318,7 @@ fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
 fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
     let scope = env::child(&m.closure);
     for (i, p) in m.params.iter().enumerate() {
-        env::define(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
+        env::define_sym(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
     }
     if let Some(rest) = &m.rest {
         let extra = if args.len() > m.params.len() {
@@ -326,7 +326,7 @@ fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
         } else {
             vec![]
         };
-        env::define(&scope, rest, Value::List(Rc::new(extra)));
+        env::define_sym(&scope, rest, Value::List(Rc::new(extra)));
     }
     let mut result = Value::Null;
     for e in &m.body {
@@ -337,13 +337,13 @@ fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
 
 /// Parse a param spec into (positional, rest) — `(a b . rest)`. Shared by fn/defn/defmacro,
 /// which is why macro rest params work here (the Swift version's bug is fixed).
-fn parse_params(spec: &[Value]) -> Result<(Vec<Symbol>, Option<Symbol>), LispError> {
+fn parse_params(spec: &[Value]) -> Result<(Vec<Sym>, Option<Sym>), LispError> {
     let mut params = Vec::new();
     let mut rest = None;
     let mut i = 0;
     while i < spec.len() {
         match &spec[i] {
-            Value::Symbol(s) if s == "." => {
+            Value::Symbol(s) if &**s == "." => {
                 match spec.get(i + 1) {
                     Some(Value::Symbol(r)) => rest = Some(r.clone()),
                     _ => return Err(LispError::InvalidSyntax("expected symbol after . ".into())),
@@ -367,7 +367,7 @@ fn parse_params(spec: &[Value]) -> Result<(Vec<Symbol>, Option<Symbol>), LispErr
 /// (`defun` for `defn`, `lambda` for `fn`) should be named the way it was written.
 fn head_of<'a>(items: &'a [Value], fallback: &'a str) -> &'a str {
     match items.first() {
-        Some(Value::Symbol(s)) => s.as_str(),
+        Some(Value::Symbol(s)) => &**s,
         _ => fallback,
     }
 }
@@ -379,7 +379,7 @@ fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
     match &items[1] {
         Value::Symbol(name) => {
             let v = eval(items[2].clone(), env.clone())?;
-            env::define(env, name, v.clone());
+            env::define_sym(env, name, v.clone());
             Ok(v)
         }
         Value::List(sig) => {
@@ -387,14 +387,14 @@ fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
             if let Some(Value::Symbol(name)) = sig.first() {
                 let (params, rest) = parse_params(&sig[1..])?;
                 let f = Function {
-                    name: Some(name.clone()),
+                    name: Some(name.to_string()),
                     params,
                     rest,
                     body: items[2..].to_vec(),
                     closure: env.clone(),
                 };
                 let val = Value::Function(Rc::new(f));
-                env::define(env, name, val.clone());
+                env::define_sym(env, name, val.clone());
                 Ok(val)
             } else {
                 Err(LispError::InvalidSyntax("bad def".into()))
@@ -412,14 +412,14 @@ fn eval_defn(items: &[Value], env: &Env) -> Result<Value, LispError> {
     if let (Value::Symbol(name), Value::List(spec)) = (&items[1], &items[2]) {
         let (params, rest) = parse_params(spec)?;
         let f = Function {
-            name: Some(name.clone()),
+            name: Some(name.to_string()),
             params,
             rest,
             body: items[3..].to_vec(),
             closure: env.clone(),
         };
         let val = Value::Function(Rc::new(f));
-        env::define(env, name, val.clone());
+        env::define_sym(env, name, val.clone());
         Ok(val)
     } else {
         // Name the form the user actually wrote (`defn` or `defun`).
@@ -453,14 +453,14 @@ fn eval_defmacro(items: &[Value], env: &Env) -> Result<Value, LispError> {
     if let (Value::Symbol(name), Value::List(spec)) = (&items[1], &items[2]) {
         let (params, rest) = parse_params(spec)?;
         let m = Macro {
-            name: Some(name.clone()),
+            name: Some(name.to_string()),
             params,
             rest,
             body: items[3..].to_vec(),
             closure: env.clone(),
         };
         let val = Value::Macro(Rc::new(m));
-        env::define(env, name, val.clone());
+        env::define_sym(env, name, val.clone());
         Ok(val)
     } else {
         Err(LispError::InvalidSyntax("bad defmacro".into()))
@@ -474,7 +474,7 @@ fn quasiquote(expr: &Value, env: &Env) -> Result<Value, LispError> {
             // (unquote x)
             if items.len() == 2 {
                 if let Value::Symbol(s) = &items[0] {
-                    if s == "unquote" {
+                    if &**s == "unquote" {
                         return eval(items[1].clone(), env.clone());
                     }
                 }
@@ -484,7 +484,7 @@ fn quasiquote(expr: &Value, env: &Env) -> Result<Value, LispError> {
                 if let Value::List(inner) = it {
                     if inner.len() == 2 {
                         if let Value::Symbol(s) = &inner[0] {
-                            if s == "unquote-splicing" {
+                            if &**s == "unquote-splicing" {
                                 let spliced = eval(inner[1].clone(), env.clone())?;
                                 match spliced {
                                     Value::List(l) => {

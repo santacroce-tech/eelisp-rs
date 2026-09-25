@@ -35,7 +35,8 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             _ => return Err(LispError::InvalidSyntax("every expects a number".into())),
         };
         let unit = match args.get(1) {
-            Some(Value::Keyword(k)) | Some(Value::Symbol(k)) => k.clone(),
+            Some(Value::Symbol(k)) => k.to_string(),
+            Some(Value::Keyword(k)) => k.clone(),
             _ => "days".into(),
         };
         Ok(Value::Str(format!("every:{}:{}", n, unit)))
@@ -521,7 +522,8 @@ fn str_val(v: &Value) -> Option<String> {
 
 fn sym_or_str(v: &Value) -> Option<String> {
     match v {
-        Value::Str(s) | Value::Symbol(s) => Some(s.clone()),
+        Value::Symbol(s) => Some(s.to_string()),
+        Value::Str(s) => Some(s.clone()),
         _ => None,
     }
 }
@@ -535,7 +537,8 @@ fn int_val(v: &Value) -> Option<i64> {
 
 fn recur_val(v: &Value) -> Option<String> {
     match v {
-        Value::Keyword(k) | Value::Symbol(k) => Some(k.clone()),
+        Value::Symbol(k) => Some(k.to_string()),
+        Value::Keyword(k) => Some(k.clone()),
         Value::Str(s) => Some(s.clone()),
         _ => None,
     }

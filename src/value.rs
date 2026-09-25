@@ -12,10 +12,13 @@ use std::rc::Rc;
 use crate::env::Env;
 
 pub type Symbol = String;
+/// A symbol as the evaluator holds it: cloning one is a reference-count bump, not an allocation
+/// — symbols are cloned every time code runs.
+pub type Sym = Rc<str>;
 
 #[derive(Clone)]
 pub enum Value {
-    Symbol(Symbol),
+    Symbol(Sym),
     Str(String),
     Number(f64),
     Bool(bool),
@@ -67,16 +70,16 @@ impl PartialEq for OrderedDict {
 
 pub struct Function {
     pub name: Option<String>,
-    pub params: Vec<Symbol>,
-    pub rest: Option<Symbol>,
+    pub params: Vec<Sym>,
+    pub rest: Option<Sym>,
     pub body: Vec<Value>,
     pub closure: Env,
 }
 
 pub struct Macro {
     pub name: Option<String>,
-    pub params: Vec<Symbol>,
-    pub rest: Option<Symbol>, // fixed vs Swift: macros DO carry a rest param
+    pub params: Vec<Sym>,
+    pub rest: Option<Sym>, // fixed vs Swift: macros DO carry a rest param
     pub body: Vec<Value>,
     pub closure: Env,
 }

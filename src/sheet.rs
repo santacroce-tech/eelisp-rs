@@ -316,8 +316,8 @@ fn collect_refs(v: &Value, out: &mut Vec<(String, RefSym)>) {
     match v {
         Value::Symbol(s) => {
             if let Some(r) = classify(s) {
-                if !out.iter().any(|(name, _)| name == s) {
-                    out.push((s.clone(), r));
+                if !out.iter().any(|(name, _)| **name == **s) {
+                    out.push((s.to_string(), r));
                 }
             }
         }

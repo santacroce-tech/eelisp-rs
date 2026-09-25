@@ -88,17 +88,17 @@ fn defined_name(form: &Value) -> Option<String> {
         _ => return None,
     };
     let head = match items.first() {
-        Some(Value::Symbol(s)) => s.as_str(),
+        Some(Value::Symbol(s)) => &**s,
         _ => return None,
     };
     if !matches!(head, "def" | "defn" | "defun" | "defmacro") {
         return None;
     }
     match items.get(1) {
-        Some(Value::Symbol(name)) => Some(name.clone()),
+        Some(Value::Symbol(name)) => Some(name.to_string()),
         // (def (name params…) body…)
         Some(Value::List(sig)) => match sig.first() {
-            Some(Value::Symbol(name)) => Some(name.clone()),
+            Some(Value::Symbol(name)) => Some(name.to_string()),
             _ => None,
         },
         _ => None,
@@ -117,12 +117,12 @@ fn kind_of(v: &Value) -> Option<&'static str> {
 }
 
 /// `(name a b . rest)` — a parameter list read back as a call.
-fn params_sig(name: &str, params: &[Symbol], rest: &Option<Symbol>) -> String {
+fn params_sig(name: &str, params: &[Sym], rest: &Option<Sym>) -> String {
     let mut parts = vec![name.to_string()];
-    parts.extend(params.iter().cloned());
+    parts.extend(params.iter().map(|p| p.to_string()));
     if let Some(r) = rest {
         parts.push(".".to_string());
-        parts.push(r.clone());
+        parts.push(r.to_string());
     }
     format!("({})", parts.join(" "))
 }
@@ -148,7 +148,7 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
         let parent = {
             let s = scope.borrow();
             for (k, v) in s.vars.iter() {
-                out.entry(k.clone()).or_insert_with(|| v.clone());
+                out.entry(k.to_string()).or_insert_with(|| v.clone());
             }
             s.parent.clone()
         };
@@ -159,17 +159,17 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
 
 /// The filter argument of `(functions …)`: a string, symbol or keyword, all read as plain text.
 fn filter_text(v: Option<&Value>) -> Option<String> {
-    match v {
-        None | Some(Value::Null) => None,
-        Some(Value::Str(s)) | Some(Value::Symbol(s)) | Some(Value::Keyword(s)) => {
-            let t = s.trim();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t.to_lowercase())
-            }
-        }
-        Some(other) => Some(print_value(other, false).to_lowercase()),
+    let s: &str = match v {
+        None | Some(Value::Null) => return None,
+        Some(Value::Symbol(s)) => s,
+        Some(Value::Str(s)) | Some(Value::Keyword(s)) => s,
+        Some(other) => return Some(print_value(other, false).to_lowercase()),
+    };
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_lowercase())
     }
 }
 
@@ -177,11 +177,12 @@ fn filter_text(v: Option<&Value>) -> Option<String> {
 /// so a bare `(source map)` works; `'map` and `"map"` are accepted too.
 fn name_arg(v: Option<&Value>) -> Option<String> {
     match v {
-        Some(Value::Symbol(s)) | Some(Value::Str(s)) | Some(Value::Keyword(s)) => Some(s.clone()),
+        Some(Value::Symbol(s)) => Some(s.to_string()),
+        Some(Value::Str(s)) | Some(Value::Keyword(s)) => Some(s.clone()),
         Some(Value::List(l)) => match (l.first(), l.get(1)) {
             // (quote x) — what 'x reads as
-            (Some(Value::Symbol(q)), Some(Value::Symbol(s))) if q == "quote" => Some(s.clone()),
-            (Some(Value::Symbol(q)), Some(Value::Str(s))) if q == "quote" => Some(s.clone()),
+            (Some(Value::Symbol(q)), Some(Value::Symbol(s))) if &**q == "quote" => Some(s.to_string()),
+            (Some(Value::Symbol(q)), Some(Value::Str(s))) if &**q == "quote" => Some(s.clone()),
             _ => None,
         },
         _ => None,
@@ -288,10 +289,10 @@ fn reconstruct(name: &str, v: &Value) -> Option<String> {
         Value::Macro(m) => ("defmacro", &m.params, &m.rest, &m.body),
         _ => return None,
     };
-    let mut spec: Vec<String> = params.to_vec();
+    let mut spec: Vec<String> = params.iter().map(|p| p.to_string()).collect();
     if let Some(r) = rest {
         spec.push(".".to_string());
-        spec.push(r.clone());
+        spec.push(r.to_string());
     }
     let mut out = format!("({} {} ({})", head, name, spec.join(" "));
     for e in body {
@@ -438,7 +439,8 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
         let f = move |args: &[Value], env: &Env| -> Result<Value, LispError> {
             // Evaluated, unlike `source`: a program hands it a name it holds in a variable.
             let name = match args.first() {
-                Some(Value::Symbol(s)) | Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
+                Some(Value::Symbol(s)) => s.to_string(),
+                Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
                 _ => {
                     return Err(LispError::InvalidSyntax(
                         "source-text expects a name, e.g. (source-text \"map\")".into(),

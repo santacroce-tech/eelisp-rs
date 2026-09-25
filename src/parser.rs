@@ -65,7 +65,7 @@ impl Parser {
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),
                 "nil" => Value::Null,
-                _ => Value::Symbol(s),
+                _ => Value::Symbol(s.into()),
             }),
             Token::RParen | Token::RBracket | Token::RBrace => {
                 Err(LispError::Parse("unexpected closing delimiter".into()))
