@@ -34,7 +34,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             return quasiquote(items.get(1).unwrap_or(&Value::Null), &env)
                         }
                         "if" => {
-                            let c = eval(items[1].clone(), env.clone())?;
+                            let c = eval_arg(&items[1], &env)?;
                             expr = if is_truthy(&c) {
                                 items[2].clone()
                             } else {
@@ -47,7 +47,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Null);
                             }
                             for e in &items[1..items.len() - 1] {
-                                eval(e.clone(), env.clone())?;
+                                eval_arg(&e, &env)?;
                             }
                             expr = items[items.len() - 1].clone();
                             continue;
@@ -78,7 +78,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                     let mut i = 0;
                                     while i + 1 < binds.len() {
                                         if let Value::Symbol(name) = &binds[i] {
-                                            let v = eval(binds[i + 1].clone(), scope.clone())?;
+                                            let v = eval_arg(&binds[i + 1], &scope)?;
                                             env::define_sym(&scope, name, v);
                                         }
                                         i += 2;
@@ -87,7 +87,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                     for b in binds.iter() {
                                         if let Value::List(pair) = b {
                                             if let Value::Symbol(name) = &pair[0] {
-                                                let v = eval(pair[1].clone(), scope.clone())?;
+                                                let v = eval_arg(&pair[1], &scope)?;
                                                 env::define_sym(&scope, name, v);
                                             }
                                         }
@@ -137,7 +137,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 let mut j = 0;
                                 while j + 1 < binds.len() {
                                     if let Value::Symbol(name) = &binds[j] {
-                                        let v = eval(binds[j + 1].clone(), scope.clone())?;
+                                        let v = eval_arg(&binds[j + 1], &scope)?;
                                         env::define_sym(&scope, name, v);
                                         names.push(name.clone());
                                     }
@@ -160,7 +160,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                         "recur" => {
                             let mut vals = Vec::with_capacity(items.len().saturating_sub(1));
                             for a in &items[1..] {
-                                vals.push(eval(a.clone(), env.clone())?);
+                                vals.push(eval_arg(&a, &env)?);
                             }
                             return Err(LispError::Recur(vals));
                         }
@@ -169,7 +169,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Bool(true));
                             }
                             for e in &items[1..items.len() - 1] {
-                                let v = eval(e.clone(), env.clone())?;
+                                let v = eval_arg(&e, &env)?;
                                 if !is_truthy(&v) {
                                     return Ok(v);
                                 }
@@ -182,7 +182,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Bool(false));
                             }
                             for e in &items[1..items.len() - 1] {
-                                let v = eval(e.clone(), env.clone())?;
+                                let v = eval_arg(&e, &env)?;
                                 if is_truthy(&v) {
                                     return Ok(v);
                                 }
@@ -210,7 +210,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                 }
 
                 // ---- application ----
-                let head_val = eval(items[0].clone(), env.clone())?;
+                let head_val = eval_arg(&items[0], &env)?;
                 if let Value::Macro(m) = &head_val {
                     expr = expand_macro(m, &items[1..])?;
                     continue;
@@ -223,7 +223,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             let mut buf: [Value; 4] = [Value::Null, Value::Null, Value::Null, Value::Null];
                             let n = items.len() - 1;
                             for (slot, a) in buf.iter_mut().zip(&items[1..]) {
-                                *slot = eval(a.clone(), env.clone())?;
+                                *slot = eval_arg(&a, &env)?;
                             }
                             return (b.func)(&buf[..n], &env);
                         }
@@ -236,7 +236,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             Vec::with_capacity(f.params.len() + f.rest.is_some() as usize);
                         let mut extra = Vec::new();
                         for (i, a) in items[1..].iter().enumerate() {
-                            let v = eval(a.clone(), env.clone())?;
+                            let v = eval_arg(&a, &env)?;
                             match f.params.get(i) {
                                 Some(p) => locals.push((p.clone(), v)),
                                 None => extra.push(v),
@@ -272,13 +272,25 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
     }
 }
 
+/// Evaluate a form that is usually a symbol or a constant — an argument, a test, a binding's
+/// value — without cloning it and its environment into the full evaluator: a symbol is looked
+/// up, a constant is itself, and only a list takes the full path.
+#[inline]
+fn eval_arg(expr: &Value, env: &Env) -> Result<Value, LispError> {
+    match expr {
+        Value::Symbol(s) => env::get(env, s),
+        Value::List(_) | Value::Dict(_) => eval(expr.clone(), env.clone()),
+        other => Ok(other.clone()),
+    }
+}
+
 /// Evaluate a builtin call's arguments according to its `ArgMode` (dBASE selective evaluation).
 fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<Value>, LispError> {
     match mode {
         ArgMode::Eval => {
             let mut a = Vec::with_capacity(items.len().saturating_sub(1));
             for x in &items[1..] {
-                a.push(eval(x.clone(), env.clone())?);
+                a.push(eval_arg(&x, &env)?);
             }
             Ok(a)
         }
@@ -295,7 +307,7 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
                 });
             }
             for x in items.iter().skip(2) {
-                a.push(eval(x.clone(), env.clone())?);
+                a.push(eval_arg(&x, &env)?);
             }
             Ok(a)
         }
