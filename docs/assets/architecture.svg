@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 560" role="img" aria-labelledby="arch-title arch-desc" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title id="arch-title">EELisp engine architecture</title>
+  <desc id="arch-desc">Hosts call the Interpreter API, which drives the language core. The core reaches the database, agenda and sheet layers, which store their data in SQLite files.</desc>
+  <style>
+    .ar-bg { fill: #fcfbf9; }
+    .ar-band { fill: #f4f2ee; stroke: #e3dfd7; }
+    .ar-box { fill: #ffffff; stroke: #d6d1c6; }
+    .ar-key { fill: #e8f2ef; stroke: #1f6f5c; }
+    .ar-t { fill: #1b1a17; font-size: 13px; font-weight: 600; }
+    .ar-s { fill: #6b675e; font-size: 11px; }
+    .ar-l { fill: #1f6f5c; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+    .ar-a { stroke: #8a857a; stroke-width: 1.4; fill: none; }
+    .ar-ah { fill: #8a857a; }
+    @media (prefers-color-scheme: dark) {
+      .ar-bg { fill: #14130f; }
+      .ar-band { fill: #1b1a15; stroke: #302d26; }
+      .ar-box { fill: #22201a; stroke: #3a362d; }
+      .ar-key { fill: #16241f; stroke: #5cc4a7; }
+      .ar-t { fill: #ece8e0; }
+      .ar-s { fill: #a09a8d; }
+      .ar-l { fill: #5cc4a7; }
+      .ar-a { stroke: #7d776b; }
+      .ar-ah { fill: #7d776b; }
+    }
+  </style>
+  <defs>
+    <marker id="ar-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="ar-ah" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="ar-bg" x="0" y="0" width="880" height="560"/>
+
+  <!-- Hosts -->
+  <rect class="ar-band" x="16" y="16" width="848" height="92" rx="10"/>
+  <text class="ar-l" x="32" y="38">HOSTS</text>
+  <g>
+    <rect class="ar-box" x="32" y="48" width="152" height="48" rx="7"/>
+    <text class="ar-t" x="108" y="69" text-anchor="middle">eelisp CLI</text>
+    <text class="ar-s" x="108" y="86" text-anchor="middle">REPL · file · -e</text>
+    <rect class="ar-box" x="196" y="48" width="152" height="48" rx="7"/>
+    <text class="ar-t" x="272" y="69" text-anchor="middle">eelisp --serve</text>
+    <text class="ar-s" x="272" y="86" text-anchor="middle">JSON lines on stdio</text>
+    <rect class="ar-box" x="360" y="48" width="152" height="48" rx="7"/>
+    <text class="ar-t" x="436" y="69" text-anchor="middle">EngineHandle</text>
+    <text class="ar-s" x="436" y="86" text-anchor="middle">thread · Send + Sync</text>
+    <rect class="ar-box" x="524" y="48" width="152" height="48" rx="7"/>
+    <text class="ar-t" x="600" y="69" text-anchor="middle">eelisp-web</text>
+    <text class="ar-s" x="600" y="86" text-anchor="middle">WebAssembly Engine</text>
+    <rect class="ar-box" x="688" y="48" width="160" height="48" rx="7"/>
+    <text class="ar-t" x="768" y="69" text-anchor="middle">Your Rust program</text>
+    <text class="ar-s" x="768" y="86" text-anchor="middle">Interpreter directly</text>
+  </g>
+
+  <path class="ar-a" d="M440 108 L440 128" marker-end="url(#ar-arrow)"/>
+
+  <!-- Interpreter API -->
+  <rect class="ar-key" x="16" y="132" width="848" height="62" rx="10"/>
+  <text class="ar-l" x="32" y="154">INTERPRETER</text>
+  <text class="ar-t" x="32" y="178">eval_str · eval_all · eval_host → {ok, result, output} · eval_json · open_database · import/export</text>
+
+  <path class="ar-a" d="M440 194 L440 214" marker-end="url(#ar-arrow)"/>
+
+  <!-- Language core -->
+  <rect class="ar-band" x="16" y="218" width="848" height="118" rx="10"/>
+  <text class="ar-l" x="32" y="240">LANGUAGE CORE</text>
+  <rect class="ar-box" x="32" y="252" width="112" height="70" rx="7"/>
+  <text class="ar-t" x="88" y="282" text-anchor="middle">lexer</text>
+  <text class="ar-s" x="88" y="300" text-anchor="middle">tokens + spans</text>
+  <path class="ar-a" d="M144 287 L164 287" marker-end="url(#ar-arrow)"/>
+  <rect class="ar-box" x="168" y="252" width="112" height="70" rx="7"/>
+  <text class="ar-t" x="224" y="282" text-anchor="middle">parser</text>
+  <text class="ar-s" x="224" y="300" text-anchor="middle">values + comments</text>
+  <path class="ar-a" d="M280 287 L300 287" marker-end="url(#ar-arrow)"/>
+  <rect class="ar-key" x="304" y="252" width="136" height="70" rx="7"/>
+  <text class="ar-t" x="372" y="282" text-anchor="middle">eval</text>
+  <text class="ar-s" x="372" y="300" text-anchor="middle">TCO trampoline · env</text>
+  <rect class="ar-box" x="456" y="252" width="118" height="70" rx="7"/>
+  <text class="ar-t" x="515" y="282" text-anchor="middle">builtins</text>
+  <text class="ar-s" x="515" y="300" text-anchor="middle">Rust functions</text>
+  <rect class="ar-box" x="586" y="252" width="118" height="70" rx="7"/>
+  <text class="ar-t" x="645" y="282" text-anchor="middle">prelude</text>
+  <text class="ar-s" x="645" y="300" text-anchor="middle">EELisp source</text>
+  <rect class="ar-box" x="716" y="252" width="132" height="70" rx="7"/>
+  <text class="ar-t" x="782" y="275" text-anchor="middle">docs · printer</text>
+  <text class="ar-s" x="782" y="293" text-anchor="middle">manual, source index</text>
+  <text class="ar-s" x="782" y="308" text-anchor="middle">host JSON · output</text>
+
+  <path class="ar-a" d="M440 336 L440 356" marker-end="url(#ar-arrow)"/>
+
+  <!-- Domains -->
+  <rect class="ar-band" x="16" y="360" width="848" height="108" rx="10"/>
+  <text class="ar-l" x="32" y="382">DOMAINS</text>
+  <rect class="ar-box" x="32" y="392" width="196" height="62" rx="7"/>
+  <text class="ar-t" x="130" y="417" text-anchor="middle">database</text>
+  <text class="ar-s" x="130" y="435" text-anchor="middle">tables · queries · views</text>
+  <rect class="ar-box" x="240" y="392" width="196" height="62" rx="7"/>
+  <text class="ar-t" x="338" y="417" text-anchor="middle">agenda</text>
+  <text class="ar-s" x="338" y="435" text-anchor="middle">items · rules · smart parser · dates</text>
+  <rect class="ar-box" x="448" y="392" width="196" height="62" rx="7"/>
+  <text class="ar-t" x="546" y="417" text-anchor="middle">sheets</text>
+  <text class="ar-s" x="546" y="435" text-anchor="middle">A1 refs · plan · recalculation</text>
+  <rect class="ar-box" x="656" y="392" width="192" height="62" rx="7"/>
+  <text class="ar-t" x="752" y="417" text-anchor="middle">editor bridge</text>
+  <text class="ar-s" x="752" y="435" text-anchor="middle">host-installed callbacks</text>
+
+  <path class="ar-a" d="M130 454 L130 486" marker-end="url(#ar-arrow)"/>
+  <path class="ar-a" d="M338 454 L338 486" marker-end="url(#ar-arrow)"/>
+  <path class="ar-a" d="M546 454 L546 486" marker-end="url(#ar-arrow)"/>
+  <path class="ar-a" d="M752 454 L752 486" marker-end="url(#ar-arrow)"/>
+
+  <!-- Storage -->
+  <rect class="ar-band" x="16" y="490" width="848" height="54" rx="10"/>
+  <text class="ar-l" x="32" y="512">STORAGE</text>
+  <text class="ar-t" x="32" y="532">SQLite, compiled in: a .db file or :memory: for tables and agenda · one .eesheet file per sheet</text>
+  <text class="ar-s" x="752" y="522" text-anchor="middle">the host's editor</text>
+</svg>

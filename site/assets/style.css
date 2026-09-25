@@ -60,7 +60,7 @@ section:first-of-type { border-top: 0; }
   border-bottom: 1px solid var(--line);
 }
 .nav-inner { display: flex; align-items: center; gap: 20px; padding: 12px 24px; max-width: 1080px; margin: 0 auto; }
-.brand { font-weight: 660; letter-spacing: -.02em; text-decoration: none; color: var(--fg); font-size: 1.05rem; }
+.brand { font-weight: 660; letter-spacing: -.02em; text-decoration: none; color: var(--fg); font-size: 1.05rem; white-space: nowrap; flex-shrink: 0; }
 .brand .lam { color: var(--accent); }
 .nav-links { margin-left: auto; display: flex; gap: 20px; flex-wrap: wrap; }
 .nav-links a { color: var(--muted); text-decoration: none; font-size: .93rem; }
