@@ -7,8 +7,13 @@ index.html      what EELisp is, and why
 guide.html      the language, in order, with runnable examples
 reference.html  every special form and function
 embed.html      using the engine from Rust or over JSON
+docs.html       the full documentation on one page — generated, don't edit it here
 assets/style.css   every page's styles — edit here, not in the pages
 ```
+
+`docs.html` is built from the chapters in `docs/` by `python3 scripts/build-docs.py`, which also
+regenerates `docs/reference.md` from the engine's manual. Edit the Markdown, rebuild, and commit
+both. It carries its own styles and inline diagrams, so it doesn't use `assets/style.css`.
 
 ## Editing
 

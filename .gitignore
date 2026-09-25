@@ -4,3 +4,6 @@
 
 # where the site deploys to — the server, its user and key — kept local (scripts/deploy-site.sh)
 .deploy.env
+
+# graphify knowledge-graph output (generated locally)
+graphify-out/
