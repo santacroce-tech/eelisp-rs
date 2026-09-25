@@ -300,7 +300,7 @@ pub fn apply_value(f: &Value, args: &[Value], env: &Env) -> Result<Value, LispEr
 }
 
 fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
-    let scope = env::child(&f.closure);
+    let scope = env::child_with(&f.closure, f.params.len() + f.rest.is_some() as usize);
     for (i, p) in f.params.iter().enumerate() {
         env::define_sym(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
     }

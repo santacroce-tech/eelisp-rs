@@ -147,7 +147,7 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
     while let Some(scope) = cur {
         let parent = {
             let s = scope.borrow();
-            for (k, v) in s.vars.iter() {
+            for (k, v) in s.bindings() {
                 out.entry(k.to_string()).or_insert_with(|| v.clone());
             }
             s.parent.clone()

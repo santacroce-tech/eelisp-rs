@@ -55,41 +55,92 @@ impl Hasher for FxHasher {
 
 pub type Vars = HashMap<Sym, Value, BuildHasherDefault<FxHasher>>;
 
+/// One scope. The global scope holds hundreds of names in `vars`, a hash map. Every other scope
+/// — a call's parameters, a `let`, a `loop` — holds a handful, and is made and dropped on every
+/// call: those live in `local`, a short vector searched front to back, which costs no hashing
+/// and allocates nothing until the first binding.
 pub struct Scope {
     pub vars: Vars,
+    pub local: Vec<(Sym, Value)>,
     pub parent: Option<Env>,
+}
+
+impl Scope {
+    #[inline]
+    fn lookup(&self, name: &str) -> Option<&Value> {
+        if self.parent.is_none() {
+            return self.vars.get(name);
+        }
+        self.local.iter().find(|(k, _)| k.len() == name.len() && **k == *name).map(|(_, v)| v)
+    }
+
+    #[inline]
+    fn lookup_mut(&mut self, name: &str) -> Option<&mut Value> {
+        if self.parent.is_none() {
+            return self.vars.get_mut(name);
+        }
+        self.local.iter_mut().find(|(k, _)| k.len() == name.len() && **k == *name).map(|(_, v)| v)
+    }
+
+    fn bind(&mut self, name: Sym, val: Value) {
+        if self.parent.is_none() {
+            self.vars.insert(name, val);
+        } else if let Some(slot) = self.lookup_mut(&name) {
+            *slot = val;
+        } else {
+            self.local.push((name, val));
+        }
+    }
+
+    /// Every binding in this one scope (not its parents).
+    pub fn bindings(&self) -> Box<dyn Iterator<Item = (&Sym, &Value)> + '_> {
+        Box::new(self.vars.iter().chain(self.local.iter().map(|(k, v)| (k, v))))
+    }
 }
 
 pub type Env = Rc<RefCell<Scope>>;
 
 pub fn root() -> Env {
-    Rc::new(RefCell::new(Scope { vars: Vars::default(), parent: None }))
+    Rc::new(RefCell::new(Scope { vars: Vars::default(), local: Vec::new(), parent: None }))
 }
 
 pub fn child(parent: &Env) -> Env {
-    Rc::new(RefCell::new(Scope { vars: Vars::default(), parent: Some(parent.clone()) }))
+    Rc::new(RefCell::new(Scope { vars: Vars::default(), local: Vec::new(), parent: Some(parent.clone()) }))
+}
+
+/// A child scope with room for `n` bindings — a call knows how many parameters it binds.
+pub fn child_with(parent: &Env, n: usize) -> Env {
+    Rc::new(RefCell::new(Scope {
+        vars: Vars::default(),
+        local: Vec::with_capacity(n),
+        parent: Some(parent.clone()),
+    }))
 }
 
 pub fn define(env: &Env, name: &str, val: Value) {
-    env.borrow_mut().vars.insert(Sym::from(name), val);
+    env.borrow_mut().bind(Sym::from(name), val);
 }
 
 /// `define` for a name the caller already holds as a `Sym` — no allocation.
 pub fn define_sym(env: &Env, name: &Sym, val: Value) {
-    env.borrow_mut().vars.insert(name.clone(), val);
+    env.borrow_mut().bind(name.clone(), val);
 }
 
+/// Walks the chain by reference — no `Rc` clone and no borrow guard per level. Nothing runs
+/// between a lookup's start and end, so no scope can be mutably borrowed meanwhile; the
+/// unguarded borrow still checks that, and a violation is reported rather than undefined.
 pub fn get(env: &Env, name: &str) -> Result<Value, LispError> {
-    let mut cur = env.clone();
+    let mut cur: &RefCell<Scope> = env;
     loop {
-        let next = {
-            let scope = cur.borrow();
-            if let Some(v) = scope.vars.get(name) {
-                return Ok(v.clone());
-            }
-            scope.parent.clone()
-        };
-        match next {
+        // SAFETY: the reference lives only for this iteration and no `borrow_mut` of any scope
+        // can start while `get` runs (it calls nothing that could); `try_borrow_unguarded`
+        // refuses if one is already active.
+        let scope = unsafe { cur.try_borrow_unguarded() }
+            .map_err(|_| LispError::Runtime(format!("{name}: its scope is being changed")))?;
+        if let Some(v) = scope.lookup(name) {
+            return Ok(v.clone());
+        }
+        match &scope.parent {
             Some(p) => cur = p,
             None => return Err(LispError::UndefinedSymbol(name.to_string())),
         }
@@ -101,7 +152,7 @@ pub fn set(env: &Env, name: &str, val: Value) -> Result<(), LispError> {
     loop {
         let next = {
             let mut scope = cur.borrow_mut();
-            if let Some(slot) = scope.vars.get_mut(name) {
+            if let Some(slot) = scope.lookup_mut(name) {
                 *slot = val;
                 return Ok(());
             }
