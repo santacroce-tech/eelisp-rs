@@ -217,15 +217,38 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                 }
                 match head_val {
                     Value::Builtin(b) => {
+                        // Up to four evaluated arguments live on the stack: most builtin calls
+                        // (bget, band, +, =…) then allocate nothing for their arguments.
+                        if matches!(b.arg_mode, ArgMode::Eval) && items.len() <= 5 {
+                            let mut buf: [Value; 4] = [Value::Null, Value::Null, Value::Null, Value::Null];
+                            let n = items.len() - 1;
+                            for (slot, a) in buf.iter_mut().zip(&items[1..]) {
+                                *slot = eval(a.clone(), env.clone())?;
+                            }
+                            return (b.func)(&buf[..n], &env);
+                        }
                         let args = eval_builtin_args(&b.arg_mode, &items, &env)?;
                         return (b.func)(&args, &env);
                     }
                     Value::Function(f) => {
-                        let mut args = Vec::with_capacity(items.len().saturating_sub(1));
-                        for a in &items[1..] {
-                            args.push(eval(a.clone(), env.clone())?);
+                        // Arguments are evaluated straight into the new scope's bindings.
+                        let mut locals: Vec<(Sym, Value)> =
+                            Vec::with_capacity(f.params.len() + f.rest.is_some() as usize);
+                        let mut extra = Vec::new();
+                        for (i, a) in items[1..].iter().enumerate() {
+                            let v = eval(a.clone(), env.clone())?;
+                            match f.params.get(i) {
+                                Some(p) => locals.push((p.clone(), v)),
+                                None => extra.push(v),
+                            }
                         }
-                        let scope = bind_params(&f, &args)?;
+                        for p in f.params.iter().skip(items.len() - 1) {
+                            locals.push((p.clone(), Value::Null));
+                        }
+                        if let Some(rest) = &f.rest {
+                            locals.push((rest.clone(), Value::List(Rc::new(extra))));
+                        }
+                        let scope = env::child_from(&f.closure, locals);
                         if f.body.is_empty() {
                             return Ok(Value::Null);
                         }

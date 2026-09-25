@@ -117,6 +117,11 @@ pub fn child_with(parent: &Env, n: usize) -> Env {
     }))
 }
 
+/// A child scope holding these bindings already — how a call binds its parameters.
+pub fn child_from(parent: &Env, local: Vec<(Sym, Value)>) -> Env {
+    Rc::new(RefCell::new(Scope { vars: Vars::default(), local, parent: Some(parent.clone()) }))
+}
+
 pub fn define(env: &Env, name: &str, val: Value) {
     env.borrow_mut().bind(Sym::from(name), val);
 }
