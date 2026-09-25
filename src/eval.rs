@@ -12,7 +12,7 @@ use crate::value::*;
 pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
     loop {
         match expr {
-            Value::Symbol(s) => return env::get(&env, &s),
+            Value::Symbol(s) => return env::get_sym(&env, &s),
             Value::Dict(d) => {
                 // dict literals evaluate each value (keys unchanged)
                 let mut nd = OrderedDict::default();
@@ -278,7 +278,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
 #[inline]
 fn eval_arg(expr: &Value, env: &Env) -> Result<Value, LispError> {
     match expr {
-        Value::Symbol(s) => env::get(env, s),
+        Value::Symbol(s) => env::get_sym(env, s),
         Value::List(_) | Value::Dict(_) => eval(expr.clone(), env.clone()),
         other => Ok(other.clone()),
     }

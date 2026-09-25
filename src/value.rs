@@ -12,9 +12,88 @@ use std::rc::Rc;
 use crate::env::Env;
 
 pub type Symbol = String;
-/// A symbol as the evaluator holds it: cloning one is a reference-count bump, not an allocation
-/// — symbols are cloned every time code runs.
-pub type Sym = Rc<str>;
+/// A symbol as the evaluator holds it. **Interned**: every `Sym` with a given name is the same
+/// allocation, so cloning one is a reference-count bump, comparing two is a pointer comparison,
+/// and hashing one hashes its address — which is what makes a variable lookup cheap. The only
+/// way to make one is through the interner (`Sym::new`, `From`), so that holds by construction.
+#[derive(Clone)]
+pub struct Sym(Rc<str>);
+
+thread_local! {
+    // Interned names are never freed; there are only as many as the program has names.
+    static INTERNED: std::cell::RefCell<std::collections::HashSet<Rc<str>>> = Default::default();
+}
+
+impl Sym {
+    pub fn new(name: &str) -> Sym {
+        INTERNED.with(|set| {
+            let mut set = set.borrow_mut();
+            if let Some(rc) = set.get(name) {
+                return Sym(rc.clone());
+            }
+            let rc: Rc<str> = Rc::from(name);
+            set.insert(rc.clone());
+            Sym(rc)
+        })
+    }
+
+    /// The symbol for `name` if one has ever been made — a name that was never interned can't
+    /// be bound anywhere, so a lookup can stop there.
+    pub fn existing(name: &str) -> Option<Sym> {
+        INTERNED.with(|set| set.borrow().get(name).map(|rc| Sym(rc.clone())))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Sym {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq for Sym {
+    fn eq(&self, other: &Sym) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Sym {}
+
+impl std::hash::Hash for Sym {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        h.write_usize(Rc::as_ptr(&self.0) as *const u8 as usize);
+    }
+}
+
+impl From<&str> for Sym {
+    fn from(s: &str) -> Sym {
+        Sym::new(s)
+    }
+}
+impl From<String> for Sym {
+    fn from(s: String) -> Sym {
+        Sym::new(&s)
+    }
+}
+impl From<&String> for Sym {
+    fn from(s: &String) -> Sym {
+        Sym::new(s)
+    }
+}
+
+impl fmt::Display for Sym {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl fmt::Debug for Sym {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &*self.0)
+    }
+}
 
 #[derive(Clone)]
 pub enum Value {

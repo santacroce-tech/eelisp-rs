@@ -67,19 +67,19 @@ pub struct Scope {
 
 impl Scope {
     #[inline]
-    fn lookup(&self, name: &str) -> Option<&Value> {
+    fn lookup(&self, name: &Sym) -> Option<&Value> {
         if self.parent.is_none() {
             return self.vars.get(name);
         }
-        self.local.iter().find(|(k, _)| k.len() == name.len() && **k == *name).map(|(_, v)| v)
+        self.local.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
 
     #[inline]
-    fn lookup_mut(&mut self, name: &str) -> Option<&mut Value> {
+    fn lookup_mut(&mut self, name: &Sym) -> Option<&mut Value> {
         if self.parent.is_none() {
             return self.vars.get_mut(name);
         }
-        self.local.iter_mut().find(|(k, _)| k.len() == name.len() && **k == *name).map(|(_, v)| v)
+        self.local.iter_mut().find(|(k, _)| k == name).map(|(_, v)| v)
     }
 
     fn bind(&mut self, name: Sym, val: Value) {
@@ -131,14 +131,21 @@ pub fn define_sym(env: &Env, name: &Sym, val: Value) {
     env.borrow_mut().bind(name.clone(), val);
 }
 
-/// Walks the chain by reference — no `Rc` clone and no borrow guard per level. Nothing runs
-/// between a lookup's start and end, so no scope can be mutably borrowed meanwhile; the
-/// unguarded borrow still checks that, and a violation is reported rather than undefined.
+/// Look a name up by its text. A name that was never interned can't be bound.
 pub fn get(env: &Env, name: &str) -> Result<Value, LispError> {
+    match Sym::existing(name) {
+        Some(sym) => get_sym(env, &sym),
+        None => Err(LispError::UndefinedSymbol(name.to_string())),
+    }
+}
+
+/// Walks the chain by reference — no `Rc` clone and no borrow guard per level, and each level
+/// compares pointers (symbols are interned). This is the lookup every evaluated symbol makes.
+pub fn get_sym(env: &Env, name: &Sym) -> Result<Value, LispError> {
     let mut cur: &RefCell<Scope> = env;
     loop {
         // SAFETY: the reference lives only for this iteration and no `borrow_mut` of any scope
-        // can start while `get` runs (it calls nothing that could); `try_borrow_unguarded`
+        // can start while `get_sym` runs (it calls nothing that could); `try_borrow_unguarded`
         // refuses if one is already active.
         let scope = unsafe { cur.try_borrow_unguarded() }
             .map_err(|_| LispError::Runtime(format!("{name}: its scope is being changed")))?;
@@ -153,11 +160,14 @@ pub fn get(env: &Env, name: &str) -> Result<Value, LispError> {
 }
 
 pub fn set(env: &Env, name: &str, val: Value) -> Result<(), LispError> {
+    let Some(name) = Sym::existing(name) else {
+        return Err(LispError::UndefinedSymbol(name.to_string()));
+    };
     let mut cur = env.clone();
     loop {
         let next = {
             let mut scope = cur.borrow_mut();
-            if let Some(slot) = scope.lookup_mut(name) {
+            if let Some(slot) = scope.lookup_mut(&name) {
                 *slot = val;
                 return Ok(());
             }
