@@ -1378,7 +1378,7 @@ The same parse as `add`, without storing anything.
 
 `(items :search … :category … :priority … :when-before … :when-after …) → list`
 
-The items matching a filter; no filter means all of them.
+The items matching a filter; no filter means all of them. A category takes in its children.
 
 ```lisp
 (items :category "work" :when-before "2026-10-01")
@@ -1466,19 +1466,20 @@ A recurrence — :days, :weeks or :months — for an item's :recurrence property
 
 ### defcategory
 
-`(defcategory work/calls) → list`
+`(defcategory work/calls) → string`
 
-Defines a category. Paths are hierarchical and the parents are implied.
+Defines a category. Paths are hierarchical and the parents are implied. The name is taken as written; a call there is evaluated.
 
 ```lisp
 (defcategory work/calls)
+(defcategory (str "work/" name))
 ```
 
 ### assign
 
 `(assign id "path") → item`
 
-Files an item under a category.
+Files an item under a category, defining the category if it's new.
 
 ```lisp
 (assign 3 "work/calls")
@@ -1528,7 +1529,7 @@ Runs the rules over one item, or over all of them with no id. Returns how many c
 
 `(auto-categorize on) → bool`
 
-Whether new items get the rules applied as they arrive.
+Whether new items get the rules applied as they arrive — `add` and `add-item` then return the item as the rules left it.
 
 ```lisp
 (auto-categorize true)
@@ -1597,22 +1598,22 @@ Deletes a saved view.
 
 ### deftemplate
 
-`(deftemplate name (…)) → dict`
+`(deftemplate name :text … :notes … :category … :priority … :recur …) → string`
 
-A template of item properties to stamp out repeatedly.
+A template of item properties to stamp out repeatedly. Defining it again replaces it.
 
 ```lisp
-(deftemplate standup (:priority 2 :category "work"))
+(deftemplate standup :priority 2 :category "work")
 ```
 
 ### from-template
 
-`(from-template name text) → item`
+`(from-template name text :when … :priority … :category … :notes …) → item`
 
-Adds an item from a template.
+Adds an item from a template, with this text (the template's :text when none is given); keywords override the template.
 
 ```lisp
-(from-template standup "monday standup")
+(from-template standup "monday standup" :when "2026-10-05")
 ```
 
 ### templates
