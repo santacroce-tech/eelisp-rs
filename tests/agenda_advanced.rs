@@ -150,3 +150,49 @@ fn an_item_without_a_date_is_never_overdue() {
     s(&it, "(defview late :filter (overdue?))");
     assert_eq!(s(&it, "(length (records (show late)))"), "1");
 }
+
+#[test]
+fn items_by_category_take_in_children() {
+    let it = Interpreter::new();
+    it.eval_str("(add-item \"a\")").unwrap();
+    it.eval_str("(add-item \"b\")").unwrap();
+    it.eval_str("(add-item \"c\")").unwrap();
+    it.eval_str("(assign 1 \"work/calls\")").unwrap();
+    it.eval_str("(assign 2 \"work\")").unwrap();
+    it.eval_str("(assign 3 \"workshop\")").unwrap();
+    assert_eq!(s(&it, "(length (records (items :category \"work\")))"), "2");
+    assert_eq!(s(&it, "(length (records (items :category \"work/calls\")))"), "1");
+}
+
+#[test]
+fn assign_defines_the_category() {
+    let it = Interpreter::new();
+    it.eval_str("(add-item \"task\")").unwrap();
+    it.eval_str("(assign 1 \"home/garden\")").unwrap();
+    let tree = s(&it, "(categories)");
+    assert!(tree.contains("home\n"), "{}", tree);
+    assert!(tree.contains("home/garden"), "{}", tree);
+}
+
+#[test]
+fn defcategory_evaluates_a_call_but_not_a_symbol() {
+    let it = Interpreter::new();
+    it.eval_str("(def room \"kitchen\")").unwrap();
+    it.eval_str("(defcategory (str \"home/\" room))").unwrap();
+    it.eval_str("(defcategory room)").unwrap();
+    let tree = s(&it, "(categories)");
+    assert!(tree.contains("home/kitchen"), "{}", tree);
+    assert!(tree.lines().any(|l| l.trim() == "room"), "{}", tree);
+    // the raw forms still work
+    it.eval_str("(defcategory priority :exclusive true :children (high low))").unwrap();
+    assert!(s(&it, "(categories)").contains("priority/low"));
+}
+
+#[test]
+fn auto_categorize_returns_the_item_the_rules_left() {
+    let it = Interpreter::new();
+    it.eval_str("(defrule bills :when (str-contains text \"invoice\") :assign \"money\")").unwrap();
+    it.eval_str("(auto-categorize true)").unwrap();
+    assert_eq!(s(&it, "(dict-get (item->dict (add \"pay the invoice\")) :categories)"), "(money)");
+    assert_eq!(s(&it, "(dict-get (item->dict (add-item \"invoice two\")) :categories)"), "(money)");
+}

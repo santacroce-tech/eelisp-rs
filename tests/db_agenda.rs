@@ -340,3 +340,29 @@ fn agenda_export_import_roundtrip() {
 
     let _ = std::fs::remove_file(tmp);
 }
+
+#[test]
+fn agenda_from_template_takes_its_text() {
+    let it = Interpreter::new();
+    it.eval_str("(deftemplate errand :category \"errands\" :priority 3 :notes \"on the way home\")").unwrap();
+    it.eval_str("(from-template errand \"buy stamps\")").unwrap();
+    it.eval_str("(from-template errand \"buy milk\" :when \"2026-10-05\")").unwrap();
+    it.eval_str("(from-template errand :text \"post the letter\")").unwrap();
+    let d = s(&it, "(item->dict (item-get 2))");
+    assert!(d.contains(":text buy milk") && d.contains(":when 2026-10-05") && d.contains("errands"), "{}", d);
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 1)) :text)"), "buy stamps");
+    assert_eq!(s(&it, "(dict-get (item->dict (item-get 3)) :text)"), "post the letter");
+    // no text given: the template's own
+    it.eval_str("(deftemplate standup :text \"Daily standup\")").unwrap();
+    assert_eq!(s(&it, "(dict-get (item->dict (from-template standup)) :text)"), "Daily standup");
+}
+
+#[test]
+fn agenda_deftemplate_again_replaces() {
+    let it = Interpreter::new();
+    it.eval_str("(deftemplate errand :category \"errands\")").unwrap();
+    it.eval_str("(deftemplate errand :category \"shop\" :text \"errand\")").unwrap();
+    let listing = s(&it, "(templates)");
+    assert_eq!(listing.matches("errand —").count(), 1, "{}", listing);
+    assert_eq!(s(&it, "(dict-get (item->dict (from-template errand \"x\")) :categories)"), "(shop)");
+}

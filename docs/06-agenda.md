@@ -80,11 +80,13 @@ without storing anything:
 ## Categories
 
 Categories are paths. Filing an item under `work/calls` also puts it under `work` as far as
-filters are concerned. `(has-category "work")` is true for it.
+filters are concerned: `(has-category "work")` is true for it, and `(items :category "work")`
+finds it.
 
 ```lisp
 (defcategory work/calls)
-(assign 3 "work/calls")
+(defcategory (str "home/" room))   ; a call in the name's place is evaluated
+(assign 3 "work/calls")            ; assigning defines the category if it's new
 (unassign 3 "work/calls")
 (categories)          ; → "work\n  work/calls" — an indented tree
 ```
@@ -119,7 +121,8 @@ item, with the item's fields bound as variables.
 
 (apply-rules)          ; every item → how many changed
 (apply-rules 7)        ; just item 7
-(auto-categorize true) ; from now on, run the rules on each new item as it's added
+(auto-categorize true) ; from now on, run the rules on each new item as it's added —
+                       ; add and add-item return the item with what the rules assigned
 (rules)                ; → "calls: (str-matches text \"call|phone|ring\")\n…"
 (drop-rule "calls")
 ```
@@ -188,8 +191,9 @@ as a rule condition:
 ## Templates
 
 ```lisp
-(deftemplate standup :text "standup" :priority 2 :category "work")
+(deftemplate standup :text "standup" :priority 2 :category "work")   ; again → replaces it
 (from-template standup :when "2026-09-28")      ; a new item, template values filled in
+(from-template standup "planning standup")      ; …with its own text
 (templates)                                     ; → "standup — standup"
 (drop-template standup)
 ```

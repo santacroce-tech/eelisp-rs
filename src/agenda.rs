@@ -313,8 +313,10 @@ pub fn items(db: &Database, f: &ItemFilter) -> Result<Value, LispError> {
         params.push(Value::Str(format!("%{}%", s)));
     }
     if let Some(c) = &f.category {
-        clauses.push("categories LIKE ?".into());
+        // A category takes in its children: "work" finds an item filed under "work/calls".
+        clauses.push("(categories LIKE ? OR categories LIKE ?)".into());
         params.push(Value::Str(format!("%\"{}\"%", c)));
+        params.push(Value::Str(format!("%\"{}/%", c)));
     }
     if let Some(p) = f.priority {
         clauses.push("properties LIKE ?".into());
@@ -392,6 +394,10 @@ pub struct TemplateInput {
 }
 
 pub fn deftemplate(db: &Database, t: TemplateInput) -> Result<Value, LispError> {
+    // Defining a template again replaces it — a second row of the same name would never be used.
+    for old in template_rows(db, &t.name)? {
+        db.delete("_templates", old.id)?;
+    }
     let props = props_from_input(&None, t.priority, &t.recur);
     let cats: Vec<String> = t.category.into_iter().collect();
     let now = iso_now();
@@ -407,22 +413,32 @@ pub fn deftemplate(db: &Database, t: TemplateInput) -> Result<Value, LispError> 
     Ok(Value::Str(format!("Template defined: {}", t.name)))
 }
 
-/// (from-template name :when .. :priority .. :category .. :notes ..)
-pub fn from_template(db: &Database, name: &str, overrides: &[(String, Value)]) -> Result<Value, LispError> {
+fn template_rows(db: &Database, name: &str) -> Result<Vec<Record>, LispError> {
     let q = Query {
         table: "_templates".into(),
         where_: Some("name = ?".into()),
         params: vec![Value::Str(name.to_string())],
         order: None,
         ascending: true,
-        limit: Some(1),
+        limit: None,
         select: None,
     };
-    let row = match db.query_rows(&q)?.into_iter().next() {
+    db.query_rows(&q)
+}
+
+/// (from-template name "text" :when .. :priority .. :category .. :notes ..) — the text given is the
+/// item's; without one, the template's own :text.
+pub fn from_template(
+    db: &Database,
+    name: &str,
+    text: Option<String>,
+    overrides: &[(String, Value)],
+) -> Result<Value, LispError> {
+    let row = match template_rows(db, name)?.into_iter().next() {
         Some(r) => r,
         None => return Err(LispError::Runtime(format!("Template not found: {}", name))),
     };
-    let text = sval(&row.data, "text_template");
+    let text = text.filter(|t| !t.is_empty()).unwrap_or_else(|| sval(&row.data, "text_template"));
     let notes = sval(&row.data, "notes");
     let mut cats = parse_cats(&sval(&row.data, "categories"));
     let mut props = parse_props(&sval(&row.data, "properties"));
@@ -675,6 +691,8 @@ fn enforce_exclusivity(db: &Database, item: &mut Item, cat: &str) -> Result<(), 
 
 pub fn assign(db: &Database, id: i64, cat: &str) -> Result<Value, LispError> {
     let mut item = read_item(db, id)?.ok_or_else(|| LispError::Runtime(format!("Item not found: {}", id)))?;
+    // Filing under a category makes it one: it shows in (categories), parents included.
+    ensure_category(db, cat)?;
     enforce_exclusivity(db, &mut item, cat)?;
     if !item.categories.iter().any(|c| c == cat) {
         item.categories.push(cat.to_string());

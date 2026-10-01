@@ -56,8 +56,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                 recur: kw(args, "recur").and_then(recur_val),
             };
             let result = agenda::add_item(&db.borrow(), input)?;
-            maybe_auto_categorize(&db, &reg, ev, &result)?;
-            Ok(result)
+            maybe_auto_categorize(&db, &reg, ev, result)
         });
     }
     {
@@ -73,8 +72,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                 recur: kw(args, "recur").and_then(recur_val),
             };
             let result = agenda::add_item(&db.borrow(), input)?;
-            maybe_auto_categorize(&db, &reg, ev, &result)?;
-            Ok(result)
+            maybe_auto_categorize(&db, &reg, ev, result)
         });
     }
     {
@@ -178,8 +176,14 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
         defb(env, "from-template", ArgMode::TableFirst, move |args, _| {
             let name = sym_or_str(args.first().unwrap_or(&Value::Null))
                 .ok_or_else(|| LispError::InvalidSyntax("from-template needs a name".into()))?;
-            let overrides = collect_kw_pairs(&args[1.min(args.len())..]);
-            agenda::from_template(&db.borrow(), &name, &overrides)
+            // (from-template name "text" :when …) — the text is the item's; :text says the same.
+            let (text, rest) = match args.get(1) {
+                Some(Value::Str(t)) => (Some(t.clone()), &args[2..]),
+                _ => (None, &args[1.min(args.len())..]),
+            };
+            let overrides = collect_kw_pairs(rest);
+            let text = text.or_else(|| overrides.iter().find(|(k, _)| k == "text").and_then(|(_, v)| as_text(v)));
+            agenda::from_template(&db.borrow(), &name, text, &overrides)
         });
     }
     {
@@ -198,8 +202,15 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
     // ── categories ──
     {
         let db = db.clone();
-        defb(env, "defcategory", ArgMode::AllRaw, move |args, _| {
-            let name = sym_or_str(args.first().unwrap_or(&Value::Null))
+        defb(env, "defcategory", ArgMode::AllRaw, move |args, ev| {
+            // The arguments are raw so `work/calls` and `:children (high low)` need no quoting. A call
+            // in the name's place is evaluated, as with a table name: `(defcategory (str "work/" c))`.
+            let first = match args.first() {
+                Some(Value::List(l)) if !l.is_empty() => crate::eval::eval(args[0].clone(), ev.clone())?,
+                Some(v) => v.clone(),
+                None => Value::Null,
+            };
+            let name = sym_or_str(&first)
                 .ok_or_else(|| LispError::InvalidSyntax("defcategory needs a name".into()))?;
             let parent = kw(args, "parent").and_then(sym_or_str);
             let exclusive = kw(args, "exclusive").map(is_truthy).unwrap_or(false);
@@ -317,8 +328,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
         let reg = reg.clone();
         defb(env, "add", ArgMode::Eval, move |args, ev| {
             let result = agenda::add_smart(&db.borrow(), &str_arg(args.first(), "add")?)?;
-            maybe_auto_categorize(&db, &reg, ev, &result)?;
-            Ok(result)
+            maybe_auto_categorize(&db, &reg, ev, result)
         });
     }
     defb(env, "smart-parse", ArgMode::Eval, |args, _| {
@@ -453,13 +463,17 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
 
 // ── argument helpers ──────────────────────────────────────────────────
 
-fn maybe_auto_categorize(db: &Db, reg: &Reg, env: &Env, result: &Value) -> Result<(), LispError> {
+/// With auto-categorize on, run the rules over a new item — and hand back the item as they left it,
+/// not the copy made before they ran (which had none of the categories they assigned).
+fn maybe_auto_categorize(db: &Db, reg: &Reg, env: &Env, result: Value) -> Result<Value, LispError> {
     if reg.borrow().auto_categorize {
-        if let Value::Item(it) = result {
-            agenda::apply_rules(db, env, Some(it.id))?;
+        if let Value::Item(it) = &result {
+            let id = it.id;
+            agenda::apply_rules(db, env, Some(id))?;
+            return agenda::item_get(&db.borrow(), id);
         }
     }
-    Ok(())
+    Ok(result)
 }
 
 fn assign_action(cat: &str) -> Value {
@@ -511,6 +525,13 @@ fn collect_kw_pairs(args: &[Value]) -> Vec<(String, Value)> {
         }
     }
     out
+}
+
+fn as_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Str(s) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 fn str_val(v: &Value) -> Option<String> {

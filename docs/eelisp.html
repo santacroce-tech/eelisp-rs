@@ -567,9 +567,10 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 <span class="p">(</span>item-done <span class="n">1</span><span class="p">)</span>       <span class="c">; the item is closed and a copy appears with :when &quot;2026-11-01&quot;</span></code></pre>
 <p><code>(every n unit)</code> takes <code>:days</code>, <code>:weeks</code> or <code>:months</code>, and returns a recurrence string such as <code>&quot;every:1:months&quot;</code>.</p>
 <h2 id="06-agenda-categories">Categories<a class="anchor" href="#06-agenda-categories" aria-label="Link to this section">#</a></h2>
-<p>Categories are paths. Filing an item under <code>work/calls</code> also puts it under <code>work</code> as far as filters are concerned. <code>(has-category &quot;work&quot;)</code> is true for it.</p>
+<p>Categories are paths. Filing an item under <code>work/calls</code> also puts it under <code>work</code> as far as filters are concerned: <code>(has-category &quot;work&quot;)</code> is true for it, and <code>(items :category &quot;work&quot;)</code> finds it.</p>
 <pre class="lisp"><code><span class="p">(</span><span class="f">defcategory</span> work/calls<span class="p">)</span>
-<span class="p">(</span>assign <span class="n">3</span> <span class="s">&quot;work/calls&quot;</span><span class="p">)</span>
+<span class="p">(</span><span class="f">defcategory</span> <span class="p">(</span>str <span class="s">&quot;home/&quot;</span> room<span class="p">)</span><span class="p">)</span>   <span class="c">; a call in the name&#x27;s place is evaluated</span>
+<span class="p">(</span>assign <span class="n">3</span> <span class="s">&quot;work/calls&quot;</span><span class="p">)</span>            <span class="c">; assigning defines the category if it&#x27;s new</span>
 <span class="p">(</span>unassign <span class="n">3</span> <span class="s">&quot;work/calls&quot;</span><span class="p">)</span>
 <span class="p">(</span>categories<span class="p">)</span>          <span class="c">; → &quot;work\n  work/calls&quot; — an indented tree</span></code></pre>
 <p>An <strong>exclusive</strong> parent allows only one of its children per item. Assigning a sibling replaces the old one. That's how you model states that can't overlap:</p>
@@ -592,7 +593,8 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 
 <span class="p">(</span>apply-rules<span class="p">)</span>          <span class="c">; every item → how many changed</span>
 <span class="p">(</span>apply-rules <span class="n">7</span><span class="p">)</span>        <span class="c">; just item 7</span>
-<span class="p">(</span>auto-categorize <span class="n">true</span><span class="p">)</span> <span class="c">; from now on, run the rules on each new item as it&#x27;s added</span>
+<span class="p">(</span>auto-categorize <span class="n">true</span><span class="p">)</span> <span class="c">; from now on, run the rules on each new item as it&#x27;s added —</span>
+                       <span class="c">; add and add-item return the item with what the rules assigned</span>
 <span class="p">(</span>rules<span class="p">)</span>                <span class="c">; → &quot;calls: (str-matches text \&quot;call|phone|ring\&quot;)\n…&quot;</span>
 <span class="p">(</span>drop-rule <span class="s">&quot;calls&quot;</span><span class="p">)</span></code></pre>
 <p><code>:assign</code> and <code>:action</code> may each appear more than once. Inside <code>:when</code> and <code>:action</code>, these names are bound:</p>
@@ -611,8 +613,9 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 <span class="p">(</span>views<span class="p">)</span>                <span class="c">; the saved views&#x27; names</span>
 <span class="p">(</span>drop-view <span class="s">&quot;late&quot;</span><span class="p">)</span></code></pre>
 <h2 id="06-agenda-templates">Templates<a class="anchor" href="#06-agenda-templates" aria-label="Link to this section">#</a></h2>
-<pre class="lisp"><code><span class="p">(</span><span class="f">deftemplate</span> standup <span class="k">:text</span> <span class="s">&quot;standup&quot;</span> <span class="k">:priority</span> <span class="n">2</span> <span class="k">:category</span> <span class="s">&quot;work&quot;</span><span class="p">)</span>
+<pre class="lisp"><code><span class="p">(</span><span class="f">deftemplate</span> standup <span class="k">:text</span> <span class="s">&quot;standup&quot;</span> <span class="k">:priority</span> <span class="n">2</span> <span class="k">:category</span> <span class="s">&quot;work&quot;</span><span class="p">)</span>   <span class="c">; again → replaces it</span>
 <span class="p">(</span>from-template standup <span class="k">:when</span> <span class="s">&quot;2026-09-28&quot;</span><span class="p">)</span>      <span class="c">; a new item, template values filled in</span>
+<span class="p">(</span>from-template standup <span class="s">&quot;planning standup&quot;</span><span class="p">)</span>      <span class="c">; …with its own text</span>
 <span class="p">(</span>templates<span class="p">)</span>                                     <span class="c">; → &quot;standup — standup&quot;</span>
 <span class="p">(</span>drop-template standup<span class="p">)</span></code></pre>
 <h2 id="06-agenda-several-agendas">Several agendas<a class="anchor" href="#06-agenda-several-agendas" aria-label="Link to this section">#</a></h2>
@@ -1529,7 +1532,7 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <pre class="lisp"><code><span class="p">(</span>smart-parse <span class="s">&quot;lunch friday @ana&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-items">items<a class="anchor" href="#reference-items" aria-label="Link to this section">#</a></h3>
 <p><code>(items :search … :category … :priority … :when-before … :when-after …) → list</code></p>
-<p>The items matching a filter; no filter means all of them.</p>
+<p>The items matching a filter; no filter means all of them. A category takes in its children.</p>
 <pre class="lisp"><code><span class="p">(</span>items <span class="k">:category</span> <span class="s">&quot;work&quot;</span> <span class="k">:when-before</span> <span class="s">&quot;2026-10-01&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-items-on">items-on<a class="anchor" href="#reference-items-on" aria-label="Link to this section">#</a></h3>
 <p><code>(items-on date) → list</code></p>
@@ -1564,12 +1567,13 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <p>A recurrence — :days, :weeks or :months — for an item's :recurrence property.</p>
 <pre class="lisp"><code><span class="p">(</span>add-item <span class="s">&quot;rent&quot;</span> <span class="k">:recurrence</span> <span class="p">(</span>every <span class="n">1</span> <span class="k">:months</span><span class="p">)</span><span class="p">)</span></code></pre>
 <h3 id="reference-defcategory">defcategory<a class="anchor" href="#reference-defcategory" aria-label="Link to this section">#</a></h3>
-<p><code>(defcategory work/calls) → list</code></p>
-<p>Defines a category. Paths are hierarchical and the parents are implied.</p>
-<pre class="lisp"><code><span class="p">(</span><span class="f">defcategory</span> work/calls<span class="p">)</span></code></pre>
+<p><code>(defcategory work/calls) → string</code></p>
+<p>Defines a category. Paths are hierarchical and the parents are implied. The name is taken as written; a call there is evaluated.</p>
+<pre class="lisp"><code><span class="p">(</span><span class="f">defcategory</span> work/calls<span class="p">)</span>
+<span class="p">(</span><span class="f">defcategory</span> <span class="p">(</span>str <span class="s">&quot;work/&quot;</span> name<span class="p">)</span><span class="p">)</span></code></pre>
 <h3 id="reference-assign">assign<a class="anchor" href="#reference-assign" aria-label="Link to this section">#</a></h3>
 <p><code>(assign id &quot;path&quot;) → item</code></p>
-<p>Files an item under a category.</p>
+<p>Files an item under a category, defining the category if it's new.</p>
 <pre class="lisp"><code><span class="p">(</span>assign <span class="n">3</span> <span class="s">&quot;work/calls&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-unassign">unassign<a class="anchor" href="#reference-unassign" aria-label="Link to this section">#</a></h3>
 <p><code>(unassign id &quot;path&quot;) → item</code></p>
@@ -1589,7 +1593,7 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <pre class="lisp"><code><span class="p">(</span>apply-rules<span class="p">)</span>   <span class="r">→ 4</span></code></pre>
 <h3 id="reference-auto-categorize">auto-categorize<a class="anchor" href="#reference-auto-categorize" aria-label="Link to this section">#</a></h3>
 <p><code>(auto-categorize on) → bool</code></p>
-<p>Whether new items get the rules applied as they arrive.</p>
+<p>Whether new items get the rules applied as they arrive — <code>add</code> and <code>add-item</code> then return the item as the rules left it.</p>
 <pre class="lisp"><code><span class="p">(</span>auto-categorize <span class="n">true</span><span class="p">)</span></code></pre>
 <h3 id="reference-rules">rules<a class="anchor" href="#reference-rules" aria-label="Link to this section">#</a></h3>
 <p><code>(rules) → string</code></p>
@@ -1617,13 +1621,13 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <p>Deletes a saved view.</p>
 <pre class="lisp"><code><span class="p">(</span>drop-view <span class="s">&quot;today&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-deftemplate">deftemplate<a class="anchor" href="#reference-deftemplate" aria-label="Link to this section">#</a></h3>
-<p><code>(deftemplate name (…)) → dict</code></p>
-<p>A template of item properties to stamp out repeatedly.</p>
-<pre class="lisp"><code><span class="p">(</span><span class="f">deftemplate</span> standup <span class="p">(</span><span class="k">:priority</span> <span class="n">2</span> <span class="k">:category</span> <span class="s">&quot;work&quot;</span><span class="p">)</span><span class="p">)</span></code></pre>
+<p><code>(deftemplate name :text … :notes … :category … :priority … :recur …) → string</code></p>
+<p>A template of item properties to stamp out repeatedly. Defining it again replaces it.</p>
+<pre class="lisp"><code><span class="p">(</span><span class="f">deftemplate</span> standup <span class="k">:priority</span> <span class="n">2</span> <span class="k">:category</span> <span class="s">&quot;work&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-from-template">from-template<a class="anchor" href="#reference-from-template" aria-label="Link to this section">#</a></h3>
-<p><code>(from-template name text) → item</code></p>
-<p>Adds an item from a template.</p>
-<pre class="lisp"><code><span class="p">(</span>from-template standup <span class="s">&quot;monday standup&quot;</span><span class="p">)</span></code></pre>
+<p><code>(from-template name text :when … :priority … :category … :notes …) → item</code></p>
+<p>Adds an item from a template, with this text (the template's :text when none is given); keywords override the template.</p>
+<pre class="lisp"><code><span class="p">(</span>from-template standup <span class="s">&quot;monday standup&quot;</span> <span class="k">:when</span> <span class="s">&quot;2026-10-05&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-templates">templates<a class="anchor" href="#reference-templates" aria-label="Link to this section">#</a></h3>
 <p><code>(templates) → list</code></p>
 <p>Every template.</p>
