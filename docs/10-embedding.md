@@ -156,7 +156,7 @@ engine.eval("(str-len (buffer-text))");     // → 5
 |---|---|
 | `buffer_text` | `(buffer-text)` |
 | `current_file` | `(current-file)` |
-| `current_dir` | `(current-dir)`, which is also where sheet names resolve |
+| `current_dir` | `(current-dir)`, which is also where sheet names resolve and where `(notes)` / `(read-note path)` read |
 | `cursor_pos` / `set_cursor` | `(cursor-pos)` / `(set-cursor n)` |
 | `selection` | `(selection)` → `(from to)` |
 | `insert_at` | `(insert-at pos text)` |
