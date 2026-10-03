@@ -102,6 +102,43 @@ fn editor_reads_are_inert_without_a_host() {
     assert_eq!(s(&it, "(current-file)"), "");
 }
 
+/// `notes` / `read-note` read the workspace on disk: every note, by workspace-relative path,
+/// without hidden folders, and never a file outside the workspace.
+#[test]
+fn notes_are_read_from_the_workspace() {
+    let dir = std::env::temp_dir().join(format!("eelisp-notes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for d in ["reviews", ".eeditor", "assets"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    std::fs::write(dir.join("inbox.md"), "# Inbox\n- [ ] call Ana").unwrap();
+    std::fs::write(dir.join("reviews/week.md"), "done").unwrap();
+    std::fs::write(dir.join("reviews/Notes.MARKDOWN"), "x").unwrap();
+    std::fs::write(dir.join(".eeditor/hidden.md"), "no").unwrap();
+    std::fs::write(dir.join("assets/a.png"), [0u8, 1, 2]).unwrap();
+    std::fs::write(dir.join("Budget.eesheet"), "not a note").unwrap();
+
+    let it = Interpreter::new();
+    let root = dir.display().to_string();
+    it.editor.borrow_mut().current_dir = Some(Box::new(move || root.clone()));
+
+    assert_eq!(s(&it, "(notes)"), "(inbox.md reviews/Notes.MARKDOWN reviews/week.md)");
+    assert_eq!(s(&it, "(notes \"reviews\")"), "(reviews/Notes.MARKDOWN reviews/week.md)");
+    assert_eq!(s(&it, "(notes \"nowhere\")"), "()");
+    assert_eq!(s(&it, "(read-note \"inbox.md\")"), "# Inbox\n- [ ] call Ana");
+    assert_eq!(s(&it, "(read-note \"reviews/../inbox.md\")"), "# Inbox\n- [ ] call Ana");
+    assert_eq!(s(&it, "(read-note \"missing.md\")"), "nil");
+    // every note, swept in one expression
+    assert_eq!(s(&it, "(length (filter (fn (p) (str-contains (read-note p) \"[ ]\")) (notes)))"), "1");
+
+    for bad in ["\"../secret.md\"", "\"reviews/../../x.md\"", "\"/etc/hosts\""] {
+        let e = it.eval_str(&format!("(read-note {bad})")).unwrap_err().to_string();
+        assert!(e.contains("workspace"), "{bad}: {e}");
+    }
+    assert!(it.eval_str("(read-note \"assets/a.png\")").is_ok(), "bytes that are UTF-8 read as text");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn editor_mutation_callback() {
     let it = Interpreter::new();
