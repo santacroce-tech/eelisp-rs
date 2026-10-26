@@ -103,6 +103,9 @@ pub fn register(env: &Env) {
     b!("eval", evalf);
     b!("apply", applyf);
     b!("error", errorf);
+    b!("csv-parse", csv_parse);
+    b!("csv-stringify", csv_stringify);
+    b!("csv-records", csv_records);
     b!("json-parse", json_parse);
     b!("json-stringify", json_stringify);
     b!("http-get", http_get);
@@ -813,6 +816,139 @@ fn errorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn applyf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let list = as_list(&args[1])?;
     apply_value(&args[0], &list, env)
+}
+
+// ── CSV — the same rules as the app's reader (src/core/sheet.ts fromDelimited / toDelimited) ──
+
+fn csv_sep(v: Option<&Value>, name: &str) -> Result<char, LispError> {
+    match v {
+        None | Some(Value::Null) => Ok(','),
+        Some(Value::Str(s)) if s.chars().count() == 1 => Ok(s.chars().next().unwrap()),
+        _ => Err(LispError::InvalidSyntax(format!("{name}: the separator is one character, like \",\" or \"\\t\""))),
+    }
+}
+
+/// Rows of cells. Quotes, doubled quotes inside them, separators and line breaks inside quotes;
+/// \n or \r\n between rows; a trailing newline doesn't make an extra row.
+pub fn parse_delimited(text: &str, sep: char) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut quoted = false;
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if quoted {
+            if c != '"' {
+                cell.push(c);
+            } else if chars.get(i + 1) == Some(&'"') {
+                cell.push('"');
+                i += 1;
+            } else {
+                quoted = false;
+            }
+        } else if c == '"' && cell.is_empty() {
+            quoted = true;
+        } else if c == sep {
+            row.push(std::mem::take(&mut cell));
+        } else if c == '\n' || c == '\r' {
+            if c == '\r' && chars.get(i + 1) == Some(&'\n') {
+                i += 1;
+            }
+            row.push(std::mem::take(&mut cell));
+            rows.push(std::mem::take(&mut row));
+        } else {
+            cell.push(c);
+        }
+        i += 1;
+    }
+    if !cell.is_empty() || !row.is_empty() {
+        row.push(cell);
+        rows.push(row);
+    }
+    rows
+}
+
+fn csv_text(text: &Value, name: &str) -> Result<String, LispError> {
+    match text {
+        Value::Str(s) => Ok(s.to_string()),
+        other => Err(LispError::TypeMismatch { expected: format!("text ({name})"), got: type_name(other) }),
+    }
+}
+
+fn csv_parse(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let text = csv_text(args.first().unwrap_or(&Value::Null), "csv-parse")?;
+    let sep = csv_sep(args.get(1), "csv-parse")?;
+    let rows = parse_delimited(&text, sep)
+        .into_iter()
+        .map(|r| Value::List(Rc::new(r.into_iter().map(|c| Value::Str(c.into())).collect())))
+        .collect();
+    Ok(Value::List(Rc::new(rows)))
+}
+
+/// A header row, then the data: a list of dicts keyed by the header's names. A cell that reads as a
+/// number is one; an empty cell is nil; anything else stays text.
+fn csv_records(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let text = csv_text(args.first().unwrap_or(&Value::Null), "csv-records")?;
+    let sep = csv_sep(args.get(1), "csv-records")?;
+    let mut rows = parse_delimited(&text, sep).into_iter();
+    let header: Vec<String> = match rows.next() {
+        Some(h) => h.into_iter().map(|c| c.trim().to_string()).collect(),
+        None => return Ok(Value::List(Rc::new(vec![]))),
+    };
+    let out = rows
+        .map(|r| {
+            let mut d = OrderedDict::default();
+            for (i, name) in header.iter().enumerate() {
+                let raw = r.get(i).map(|s| s.as_str()).unwrap_or("");
+                let t = raw.trim();
+                let v = if t.is_empty() {
+                    Value::Null
+                } else if crate::sheet::looks_numeric(t) {
+                    t.parse::<f64>().map(Value::Number).unwrap_or_else(|_| Value::Str(raw.into()))
+                } else {
+                    Value::Str(raw.into())
+                };
+                d.insert(name.as_str().into(), v);
+            }
+            Value::Dict(Rc::new(d))
+        })
+        .collect();
+    Ok(Value::List(Rc::new(out)))
+}
+
+fn csv_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let rows = match args.first() {
+        Some(Value::List(l)) => l.clone(),
+        other => {
+            return Err(LispError::TypeMismatch {
+                expected: "a list of rows".into(),
+                got: other.map(type_name).unwrap_or_else(|| "nothing".into()),
+            })
+        }
+    };
+    let sep = csv_sep(args.get(1), "csv-stringify")?;
+    let cell = |v: &Value| -> String {
+        let s = match v {
+            Value::Null => String::new(),
+            Value::Str(s) => s.to_string(),
+            other => crate::printer::print_value(other, false),
+        };
+        if s.contains(sep) || s.contains('\n') || s.contains('\r') || s.contains('"') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            s
+        }
+    };
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|r| match r {
+            Value::List(cells) => cells.iter().map(cell).collect::<Vec<_>>().join(&sep.to_string()),
+            one => cell(one),
+        })
+        .collect();
+    Ok(Value::Str(lines.join("\n").into()))
 }
 
 // ── JSON (ANALYSIS §4.11) — plain JSON ⇄ Value; objects↔dicts, arrays↔lists ──
