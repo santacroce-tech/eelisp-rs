@@ -155,6 +155,7 @@ impl Database {
                 return Err(db_err(format!("Field not found: {} in {}", k, table)));
             }
         }
+        check_choices(&def, table, data)?;
         let cols = data.keys.clone();
         let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("?{}", i)).collect();
         let sql = format!(
@@ -239,6 +240,7 @@ impl Database {
                 return Err(db_err(format!("Field not found: {} in {}", k, table)));
             }
         }
+        check_choices(&def, table, data)?;
         let sets: Vec<String> =
             data.keys.iter().enumerate().map(|(i, c)| format!("{} = ?{}", c, i + 1)).collect();
         let sql = format!(
@@ -334,6 +336,32 @@ fn sql_default(v: &Value) -> String {
         Value::Bool(b) => if *b { "1".into() } else { "0".into() },
         _ => "NULL".into(),
     }
+}
+
+/// A field with `:choices` takes one of them — or nil, which `:required` is for. The forms enforce
+/// it on screen; this is the same rule for everything else that writes the table.
+fn check_choices(def: &TableDef, table: &str, data: &OrderedDict) -> Result<(), LispError> {
+    for k in &data.keys {
+        let Some(f) = def.field(k) else { continue };
+        if f.choices.is_empty() {
+            continue;
+        }
+        let ok = match &data.map[k] {
+            Value::Null => true,
+            Value::Str(s) => f.choices.iter().any(|c| c == &**s),
+            other => f.choices.iter().any(|c| c == &crate::printer::print_value(other, false)),
+        };
+        if !ok {
+            return Err(db_err(format!(
+                "{}.{} must be one of {}, not {}",
+                table,
+                k,
+                f.choices.join(", "),
+                crate::printer::print_value(&data.map[k], true)
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ── schema JSON (defaults & choices survive a reload) ─────────────

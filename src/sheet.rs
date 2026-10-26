@@ -643,6 +643,13 @@ impl Sheet {
         self.clip(range).map_or(0, |r| r.len())
     }
 
+    /// The cells in `area` that hold something, row by row — what clearing it has to touch.
+    pub fn cells_in(&self, area: Range) -> Vec<CellRef> {
+        let mut out: Vec<CellRef> = self.cells.keys().filter(|at| area.contains(**at)).copied().collect();
+        out.sort();
+        out
+    }
+
     /// The first failed cell in `area`, row by row.
     pub fn first_error_in(&self, area: Range) -> Option<(CellRef, &str)> {
         self.cells

@@ -184,6 +184,22 @@ pub fn register(env: &Env, db: Shared) {
     }
 
     // ── record accessors — ordinary evaluated builtins ──
+    // A row as a plain dict — its id and every field — for json-stringify, dict-get and friends.
+    define_db(env, "record->dict", ArgMode::Eval, |args, _| match args.first() {
+        Some(Value::Record(r)) => {
+            let mut d = OrderedDict::default();
+            d.insert("id".into(), Value::Number(r.id as f64));
+            for k in &r.data.keys {
+                d.insert(k.clone(), r.data.map[k].clone());
+            }
+            Ok(Value::Dict(Rc::new(d)))
+        }
+        other => Err(LispError::TypeMismatch {
+            expected: "a record (a row from query)".into(),
+            got: other.map(type_name).unwrap_or_else(|| "nil".into()),
+        }),
+    });
+
     define_db(env, "field-get", ArgMode::Eval, |args, _| {
         let rec = as_record(args.first())?;
         let key = as_key(args.get(1))?;
@@ -473,7 +489,12 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
                     }
                 }
                 "select" => {
-                    if let Some(Value::List(l)) = val {
+                    // a list — (name amount) — or the same as text: "name, amount"
+                    if let Some(Value::Str(text)) = val {
+                        q.select = Some(
+                            text.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect(),
+                        );
+                    } else if let Some(Value::List(l)) = val {
                         q.select = Some(
                             l.iter()
                                 .filter_map(|x| match x {
