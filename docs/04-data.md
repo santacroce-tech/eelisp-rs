@@ -155,6 +155,23 @@ Format patterns follow the Unicode convention:
 
 JSON objects become dicts, with their keys sorted. Arrays become lists, and `null` becomes `nil`.
 
+## CSV
+
+```lisp
+(csv-parse "symbol,price\nAAPL,231.5\nMSFT,412")
+; → (("symbol" "price") ("AAPL" "231.5") ("MSFT" "412"))
+(csv-records "symbol,price\nAAPL,231.5\nMSFT,412")
+; → ({:symbol "AAPL" :price 231.5} {:symbol "MSFT" :price 412})
+(csv-stringify '(("name" "note") ("Ada" "first, and best")))
+; → "name,note\nAda,\"first, and best\""
+```
+
+`csv-parse` gives rows of text; `csv-records` reads the first row as names and gives one dict per
+row, with numbers as numbers and empty cells as `nil`. Both follow the usual quoting — a cell in
+quotes may hold the separator, a line break, or a quote written twice — and take the separator as a
+second argument: `"\t"` for tab-separated text. They read exactly what EEditor's *Import as sheet*
+reads.
+
 ## The network
 
 ```lisp
