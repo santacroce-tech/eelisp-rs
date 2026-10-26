@@ -118,12 +118,14 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
 
     def("sheet-rows", |reg, host, args, _| {
         let path = resolve(host, str_arg(args, 0, "sheet-rows", "a sheet name")?)?;
-        let area = area_arg(args, 1, "sheet-rows")?;
-        if area.len() > MAX_RANGE_CELLS {
-            return Err(fail(format!("{} is {} cells — too many to read at once", area.a1(), area.len())));
-        }
+        let asked = area_arg(args, 1, "sheet-rows")?;
         let mut sheets = reg.borrow_mut();
         let sheet = sheets.sheet(&path)?;
+        // whole columns read down to their last filled row
+        let Some(area) = sheet.clip(asked) else { return Ok(Value::List(Rc::new(vec![]))) };
+        if area.len() > MAX_RANGE_CELLS {
+            return Err(fail(format!("{} is {} cells — too many to read at once", asked.a1(), area.len())));
+        }
         if let Some((at, e)) = sheet.first_error_in(area) {
             return Err(fail(format!("{}: {}", at.a1(), e)));
         }
@@ -449,13 +451,14 @@ fn read_externals(reg: &Registry, from: &Path, externals: Vec<External>) -> Resu
                 None => sheet.value_at(c),
             },
             RefSym::Range(range) => {
-                if range.len() > MAX_RANGE_CELLS {
-                    return Err(format!("{symbol} is {} cells — more than a formula can read", range.len()));
+                let len = sheet.read_len(range);
+                if len > MAX_RANGE_CELLS {
+                    return Err(format!("{symbol} is {len} cells — more than a formula can read"));
                 }
                 if let Some((c, e)) = sheet.first_error_in(range) {
                     return Err(format!("{name}!{} has an error — {e}", c.a1()));
                 }
-                Value::List(Rc::new(range.cells().map(|c| sheet.value_at(c)).collect()))
+                sheet.range_value(range)
             }
             _ => Value::Null,
         };

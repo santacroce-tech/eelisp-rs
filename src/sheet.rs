@@ -611,6 +611,38 @@ impl Sheet {
         out
     }
 
+    /// The cells a range actually reads. Whole columns (`E:E`) stop at the last row anything is
+    /// in, so they read what is there rather than a million blanks; `None` when they are empty.
+    pub fn clip(&self, range: Range) -> Option<Range> {
+        if !range.is_columns() {
+            return Some(range);
+        }
+        let (c0, c1) = (range.start.col, range.end.col);
+        let last = self.cells.keys().filter(|at| (c0..=c1).contains(&at.col)).map(|at| at.row).max()?;
+        Some(Range::new(range.start, CellRef::new(last, c1)))
+    }
+
+    /// What a formula sees for a range: one row or one column is a flat list, anything wider and
+    /// taller a list of rows — so a lookup can tell where a row ends. Blanks are `nil`.
+    pub fn range_value(&self, range: Range) -> Value {
+        let Some(area) = self.clip(range) else { return Value::List(Rc::new(vec![])) };
+        if range.is_line() {
+            return Value::List(Rc::new(area.cells().map(|c| self.value_at(c)).collect()));
+        }
+        let rows = (area.start.row..=area.end.row)
+            .map(|r| {
+                let row = (area.start.col..=area.end.col).map(|c| self.value_at(CellRef::new(r, c))).collect();
+                Value::List(Rc::new(row))
+            })
+            .collect();
+        Value::List(Rc::new(rows))
+    }
+
+    /// How many cells a range reads once clipped — what `MAX_RANGE_CELLS` is checked against.
+    pub fn read_len(&self, range: Range) -> u64 {
+        self.clip(range).map_or(0, |r| r.len())
+    }
+
     /// The first failed cell in `area`, row by row.
     pub fn first_error_in(&self, area: Range) -> Option<(CellRef, &str)> {
         self.cells
@@ -726,17 +758,18 @@ impl Sheet {
                     self.value_at(*c)
                 }
                 RefSym::Range(range) => {
-                    if range.len() > MAX_RANGE_CELLS {
+                    let len = self.read_len(*range);
+                    if len > MAX_RANGE_CELLS {
                         return Some(Prepared::Fail(format!(
                             "{} is {} cells — more than a formula can read",
                             range.a1(),
-                            range.len()
+                            len
                         )));
                     }
                     if let Some((c, e)) = self.first_error_in(*range) {
                         return Some(Prepared::Fail(propagated(c, e)));
                     }
-                    Value::List(Rc::new(range.cells().map(|c| self.value_at(c)).collect()))
+                    self.range_value(*range)
                 }
                 // Another sheet's cells: only the registry can read those, so they are handed back
                 // to be resolved between formulas, where borrowing another sheet is safe.

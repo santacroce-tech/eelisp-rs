@@ -53,7 +53,9 @@ format already set on the cell wins over the guess.
 | You write | It means |
 |---|---|
 | `B1` | the value in B1 (capitals only, since `b1` is an ordinary name) |
-| `B1:B9` | the range as a flat list, with blanks as `nil` |
+| `B1:B9` | the range as a flat list, with blanks as `nil` (one row or one column) |
+| `A1:C9` | a block wider and taller than one: a list of rows, `(("apple" 3) ("pear" 5) …)` |
+| `E:E`, `B:D` | whole columns, read down to the last filled row — `E:E` flat, `B:D` as rows |
 | `$B$1`, `B$1`, `$B1` | pinned whole, by row, or by column |
 | `Rates!A1`, `Rates!A1:A9` | a cell or range in the sheet named `Rates`, in the same folder |
 | `#REF!` | what a reference turns into when its cell is deleted |
@@ -62,12 +64,15 @@ format already set on the cell wins over the guess.
 =(sum B1:B9)
 =(round (/ B1 $B$3) 2)                         ; a share of the total; the pin survives filling
 =(sum (filter (fn (x) (> x 400)) B1:B3))
+=(length (filter (fn (x) (= x "Work")) E:E))   ; how many rows say Work
 =(* B2 Rates!A1)                               ; another sheet
 =(date-format (today) "yyyy-MM-dd")
 =(count-records people :where "city = ?" :params '("Lisbon"))
 ```
 
-`sum`, `avg`, `min` and `max` skip blanks and text, so a range with labels in it still adds up.
+`sum`, `avg`, `min` and `max` skip blanks and text, so a range with labels in it still adds up —
+and they reach into a block's rows, so `(sum A1:C9)` adds every number in it. A formula inside the
+column it reads (`=(sum E:E)` in E5) is a circular reference, as it would be anywhere else.
 
 ## Recalculation
 
