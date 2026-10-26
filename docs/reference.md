@@ -1678,22 +1678,22 @@ Every open agenda, the current one first.
 
 ### export-agenda
 
-`(export-agenda "f.json") → number`
+`(export-agenda name :format :json :path path) → string`
 
-Writes the agenda to JSON and returns how many items went.
+Writes an agenda — its items, categories, rules, views and templates — to a JSON file, and says where. `name` is the agenda's, as `(agendas)` lists it. The file's folder must exist.
 
 ```lisp
-(export-agenda "backup.json")
+(export-agenda "eeditor" :format :json :path "/tmp/agenda.json")
 ```
 
 ### import-agenda
 
-`(import-agenda "f.json") → number`
+`(import-agenda path) → string`
 
-Reads items back from JSON, in one transaction.
+Reads an exported agenda back into the current one, in one transaction, and says how many items and templates came in.
 
 ```lisp
-(import-agenda "backup.json")
+(import-agenda "/tmp/agenda.json")   → "Imported 12 items, 0 templates"
 ```
 
 ## Bytes and bits
