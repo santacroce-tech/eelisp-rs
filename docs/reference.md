@@ -1108,19 +1108,19 @@ Writes a value as JSON.
 
 ### http-get
 
-`(http-get url) → dict`
+`(http-get url :timeout s :headers {…}) → dict`
 
-A synchronous GET: `{:status 200 :body "…"}`. A 4xx/5xx answer is returned the same way, with its status; no answer at all (offline, 30 s timeout) is an error. With `http-post`, the only network access in the language.
+A synchronous GET: `{:status 200 :body "…"}`. A 4xx/5xx answer is returned the same way, with its status; no answer at all (offline, or `:timeout` seconds — 30 unless given, at most 300) is an error. `:headers` sends a dict of header → value. With `http-post`, the only network access in the language.
 
 ```lisp
-(json-parse (dict-get (http-get "https://example.com/api") :body))
+(json-parse (dict-get (http-get "https://example.com/api" :timeout 5 :headers {"x-api-key" key}) :body))
 ```
 
 ### http-post
 
-`(http-post url body) → dict`
+`(http-post url body :timeout s :headers {…} :content-type t) → dict`
 
-A synchronous POST; returns `{:status … :body …}` like `http-get`.
+A synchronous POST; returns `{:status … :body …}` like `http-get`, takes the same options, and `:content-type` (application/json unless given).
 
 ```lisp
 (dict-get (http-post "https://example.com/api" "{}") :status)   → 200
