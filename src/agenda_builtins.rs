@@ -447,7 +447,11 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             } else {
                 return Err(LispError::Runtime(format!("Agenda not found: {}", name)));
             };
-            std::fs::write(&path, json).map_err(|e| LispError::Runtime(e.to_string()))?;
+            // the folder too, if it isn't there yet — a backup goes into backup/<date>/
+            if let Some(dir) = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).map_err(|e| LispError::Runtime(format!("{}: {}", dir.display(), e)))?;
+            }
+            std::fs::write(&path, json).map_err(|e| LispError::Runtime(format!("{path}: {e}")))?;
             Ok(Value::Str(format!("Exported agenda '{}' to {}", name, path)))
         });
     }

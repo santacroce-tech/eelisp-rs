@@ -219,6 +219,20 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         change(reg, &path, env, |sheet| Ok((sheet.formula_cells(), vec![])))
     });
 
+    // Empty an area — values and formulas; formats stay. Whole columns work: "A:C".
+    def("sheet-clear", |reg, host, args, env| {
+        let path = resolve(host, str_arg(args, 0, "sheet-clear", "a sheet name")?)?;
+        let area = area_arg(args, 1, "sheet-clear")?;
+        writable(reg, "sheet-clear")?;
+        change(reg, &path, env, |sheet| {
+            let cells = sheet.cells_in(area);
+            for at in &cells {
+                sheet.stage_input(*at, String::new());
+            }
+            Ok((cells.clone(), cells))
+        })
+    });
+
     def("sheet-format", |reg, host, args, env| {
         let path = resolve(host, str_arg(args, 0, "sheet-format", "a sheet name")?)?;
         let area = area_arg(args, 1, "sheet-format")?;

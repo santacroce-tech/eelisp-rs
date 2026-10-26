@@ -78,7 +78,9 @@ pub fn parse(input: &str, today: &str) -> SmartResult {
     }
     text = strip(&text, r"@[A-Za-z]\w*");
 
-    let verb = Regex::new(r"(?i)\b(?:call|email|meet|text|with|for|from)\s+([A-Z][a-z]+)\b").unwrap();
+    // The verb in any case; the name only with a capital — `(?i)` scoped to the verbs, or "call
+    // the bank" files a person called "the".
+    let verb = Regex::new(r"\b(?i:call|email|meet|text|with|for|from)\s+([A-Z][a-z]+)\b").unwrap();
     let scan = text.clone();
     for c in verb.captures_iter(&scan) {
         let name = c[1].to_string();

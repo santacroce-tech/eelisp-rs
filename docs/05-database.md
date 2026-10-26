@@ -31,7 +31,10 @@ The long form describes each field with keywords:
 
 The field types are `string`, `number`, `bool`, `date`, `memo` and `choice`. `:default` fills a
 field that an insert leaves out. `:required` and `:choices` are part of the schema a host reads
-to build its forms. The engine itself doesn't reject a row that breaks them.
+to build its forms, and the engine holds a row to them too: a row without a required field is
+refused (*NOT NULL constraint failed*), and `insert` or `update` with a value outside a field's
+choices is refused, naming the field and its choices. Leaving a choice field empty (`nil`) is
+allowed — that's what `:required` is for.
 
 ```lisp
 (tables)               ; → (_categories _items _rules _templates _views books tasks)
@@ -93,7 +96,7 @@ prints as a grid:
 | `:order "field"` | sort by a field |
 | `:asc true` / `:desc true` | the sort direction |
 | `:limit n` | at most `n` rows |
-| `:select (list "a" "b")` | only these columns |
+| `:select (list "a" "b")` or `:select "a, b"` | only these columns |
 
 Always pass values through `:params` rather than pasting them into `:where`. The engine binds
 them as SQL parameters.
