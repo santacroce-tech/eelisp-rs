@@ -762,10 +762,10 @@ pub static AGENDA: &[Entry] = &[
     doc!("use-agenda", "(use-agenda name) → string", "Switches which open agenda the item functions act on.", "(use-agenda work)"),
     doc!("close-agenda", "(close-agenda name) → bool", "Closes an open agenda.", "(close-agenda work)"),
     doc!("agendas", "(agendas) → list", "Every open agenda, the current one first.", "(agendas)"),
-    doc!("export-agenda", "(export-agenda \"f.json\") → number", "Writes the agenda to JSON and returns how many items went.",
-         "(export-agenda \"backup.json\")"),
-    doc!("import-agenda", "(import-agenda \"f.json\") → number", "Reads items back from JSON, in one transaction.",
-         "(import-agenda \"backup.json\")"),
+    doc!("export-agenda", "(export-agenda name :format :json :path path) → string", "Writes an agenda — its items, categories, rules, views and templates — to a JSON file, and says where. `name` is the agenda's, as `(agendas)` lists it. The file's folder must exist.",
+         "(export-agenda \"eeditor\" :format :json :path \"/tmp/agenda.json\")"),
+    doc!("import-agenda", "(import-agenda path) → string", "Reads an exported agenda back into the current one, in one transaction, and says how many items and templates came in.",
+         "(import-agenda \"/tmp/agenda.json\")   → \"Imported 12 items, 0 templates\""),
 ];
 
 /// Raw memory: byte buffers (the one mutable value — `bset` changes it for everyone holding it) and

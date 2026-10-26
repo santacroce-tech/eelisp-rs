@@ -213,4 +213,9 @@ act on the *current* agenda.
 (import-agenda "backup.json")    ; → "Imported 2 items, 0 templates" — in one transaction
 ```
 
+`memory` is the engine's own database when it runs with none of its own — the command line. A host
+names its agenda: in EEditor, the folder's agenda is `eeditor`, so a backup from there is
+`(export-agenda "eeditor" :format :json :path …)`. The export holds the agenda — items, categories,
+rules, views, templates — not your own tables, and the folder in `:path` must already exist.
+
 Continue with [Sheets](07-sheets.md).

@@ -644,6 +644,7 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 
 <span class="p">(</span>export-agenda <span class="s">&quot;memory&quot;</span> <span class="k">:format</span> <span class="k">:json</span> <span class="k">:path</span> <span class="s">&quot;backup.json&quot;</span><span class="p">)</span>
 <span class="p">(</span>import-agenda <span class="s">&quot;backup.json&quot;</span><span class="p">)</span>    <span class="c">; → &quot;Imported 2 items, 0 templates&quot; — in one transaction</span></code></pre>
+<p><code>memory</code> is the engine's own database when it runs with none of its own — the command line. A host names its agenda: in EEditor, the folder's agenda is <code>eeditor</code>, so a backup from there is <code>(export-agenda &quot;eeditor&quot; :format :json :path …)</code>. The export holds the agenda — items, categories, rules, views, templates — not your own tables, and the folder in <code>:path</code> must already exist.</p>
 <p>Continue with <a href="#07-sheets">Sheets</a>.</p></section>
 <section id="sec-07-sheets"><h1 id="07-sheets">7. Sheets<a class="anchor" href="#07-sheets" aria-label="Link to this section">#</a></h1>
 <p>A sheet is a spreadsheet whose formulas are EELisp. There's no separate formula language. A formula is one expression after <code>=</code>, and inside it <code>B1</code> is a cell's value and <code>B1:B9</code> is a list of values. Everything in the rest of these pages works inside a formula: <code>map</code>, <code>filter</code>, <code>date-add</code>, even <code>count-records</code> against the database.</p>
@@ -1679,13 +1680,13 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <p>Every open agenda, the current one first.</p>
 <pre class="lisp"><code><span class="p">(</span>agendas<span class="p">)</span></code></pre>
 <h3 id="reference-export-agenda">export-agenda<a class="anchor" href="#reference-export-agenda" aria-label="Link to this section">#</a></h3>
-<p><code>(export-agenda &quot;f.json&quot;) → number</code></p>
-<p>Writes the agenda to JSON and returns how many items went.</p>
-<pre class="lisp"><code><span class="p">(</span>export-agenda <span class="s">&quot;backup.json&quot;</span><span class="p">)</span></code></pre>
+<p><code>(export-agenda name :format :json :path path) → string</code></p>
+<p>Writes an agenda — its items, categories, rules, views and templates — to a JSON file, and says where. <code>name</code> is the agenda's, as <code>(agendas)</code> lists it. The file's folder must exist.</p>
+<pre class="lisp"><code><span class="p">(</span>export-agenda <span class="s">&quot;eeditor&quot;</span> <span class="k">:format</span> <span class="k">:json</span> <span class="k">:path</span> <span class="s">&quot;/tmp/agenda.json&quot;</span><span class="p">)</span></code></pre>
 <h3 id="reference-import-agenda">import-agenda<a class="anchor" href="#reference-import-agenda" aria-label="Link to this section">#</a></h3>
-<p><code>(import-agenda &quot;f.json&quot;) → number</code></p>
-<p>Reads items back from JSON, in one transaction.</p>
-<pre class="lisp"><code><span class="p">(</span>import-agenda <span class="s">&quot;backup.json&quot;</span><span class="p">)</span></code></pre>
+<p><code>(import-agenda path) → string</code></p>
+<p>Reads an exported agenda back into the current one, in one transaction, and says how many items and templates came in.</p>
+<pre class="lisp"><code><span class="p">(</span>import-agenda <span class="s">&quot;/tmp/agenda.json&quot;</span><span class="p">)</span>   <span class="r">→ &quot;Imported 12 items, 0 templates&quot;</span></code></pre>
 <h2 id="reference-bytes-and-bits">Bytes and bits<a class="anchor" href="#reference-bytes-and-bits" aria-label="Link to this section">#</a></h2>
 <h3 id="reference-band">band<a class="anchor" href="#reference-band" aria-label="Link to this section">#</a></h3>
 <p><code>(band a b …) → number</code></p>
