@@ -81,6 +81,7 @@ impl Interpreter {
 
         // sheets — their names resolve against the host's (current-dir)
         let sheets = Rc::new(RefCell::new(crate::sheet::Sheets::default()));
+        sheets.borrow_mut().database = Some(db.clone());
         sheet_builtins::register(&global, ed.clone(), sheets.clone());
 
         // (functions …) / (source …) — needs the output channel and the definition index
@@ -174,7 +175,9 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut result = Value::Null;
         for f in forms {
-            result = eval::eval(f.value.clone(), self.global.clone())?;
+            let r = eval::eval(f.value.clone(), self.global.clone());
+            self.follow_tables();
+            result = r?;
             self.sources.borrow_mut().record(&f);
         }
         Ok(result)
@@ -185,10 +188,20 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut out = Vec::with_capacity(forms.len());
         for f in forms {
-            out.push(eval::eval(f.value.clone(), self.global.clone())?);
+            let r = eval::eval(f.value.clone(), self.global.clone());
+            self.follow_tables();
+            out.push(r?);
             self.sources.borrow_mut().record(&f);
         }
         Ok(out)
+    }
+
+    /// Tables written by what just ran recalculate the open sheets' formulas that read them —
+    /// once per top-level form, so a loop of inserts recalculates once, at the end. Runs even when
+    /// the form failed: what it wrote before failing is written.
+    fn follow_tables(&self) {
+        let written = self.database.borrow().take_written();
+        crate::sheet_builtins::follow_tables(&self.sheets, &self.global, &written);
     }
 
     // ── host boundary (ANALYSIS §5) ──────────────────────────────────

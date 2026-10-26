@@ -2045,7 +2045,7 @@ Repeats the source over the target area, each copy's references shifted by where
 
 `(sheet-recalc name) → list`
 
-Reruns every formula — for ones that read the database or the clock, and for another sheet that wasn't open at the time, none of which are tracked.
+Reruns every formula — for ones that read the clock, and for another sheet that wasn't open at the time, which aren't tracked. (A formula that reads the database is recalculated when the tables it read are written.)
 
 ```lisp
 (sheet-recalc "Budget")

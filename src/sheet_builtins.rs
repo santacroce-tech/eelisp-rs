@@ -433,7 +433,19 @@ fn recalculate(
                                     for (name, value) in bindings.into_iter().chain(others) {
                                         env::define(&scope, &name, value);
                                     }
-                                    eval::eval(expr, scope).map_err(|e| e.to_string())
+                                    // note the tables it reads, so a write to one recalculates it
+                                    let db = reg.borrow().database.clone();
+                                    if let Some(db) = &db {
+                                        db.borrow().begin_watch();
+                                    }
+                                    let result = eval::eval(expr, scope).map_err(|e| e.to_string());
+                                    if let Some(db) = &db {
+                                        let read: Vec<String> = db.borrow().end_watch().into_iter().collect();
+                                        if reg.borrow_mut().sheet(path)?.set_reads(at, read) {
+                                            save.insert(at);
+                                        }
+                                    }
+                                    result
                                 }
                             }
                         }
@@ -447,6 +459,25 @@ fn recalculate(
     }
     reg.borrow_mut().sheet(path)?.save(&save)?;
     Ok(save)
+}
+
+/// Tables were written: recalculate the formulas of open sheets that read any of them, each sheet
+/// once. Errors stay in the cells, as in any recalculation; one sheet failing to save doesn't stop
+/// the others. Called by the interpreter after each top-level evaluation.
+pub fn follow_tables(reg: &Registry, env: &Env, written: &BTreeSet<String>) {
+    if written.is_empty() || reg.borrow().recalculating > 0 {
+        return;
+    }
+    let paths = reg.borrow().open_paths();
+    for path in paths {
+        let seeds = match reg.borrow_mut().loaded(&path) {
+            Some(sheet) => sheet.cells_reading(written),
+            None => continue,
+        };
+        if !seeds.is_empty() {
+            let _ = recalculate(reg, &path, &seeds, BTreeSet::new(), env);
+        }
+    }
 }
 
 /// Read the cells a formula names in other sheets — `Budget!A1`, `Budget!A1:B3` — opening them as
