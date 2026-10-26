@@ -453,9 +453,10 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 <span class="p">(</span>dict-get <span class="p">(</span>json-parse <span class="s">&quot;{\&quot;name\&quot;:\&quot;Ada\&quot;}&quot;</span><span class="p">)</span> <span class="k">:name</span><span class="p">)</span>   <span class="c">; → &quot;Ada&quot;</span></code></pre>
 <p>JSON objects become dicts, with their keys sorted. Arrays become lists, and <code>null</code> becomes <code>nil</code>.</p>
 <h2 id="04-data-the-network">The network<a class="anchor" href="#04-data-the-network" aria-label="Link to this section">#</a></h2>
-<pre class="lisp"><code><span class="p">(</span>http-get <span class="s">&quot;https://example.com/api&quot;</span><span class="p">)</span>            <span class="c">; → the response body, a string</span>
-<span class="p">(</span>http-post <span class="s">&quot;https://example.com/api&quot;</span> body<span class="p">)</span></code></pre>
-<p>These are the only functions that reach the network, and they're synchronous. A failure is an error that names the URL. The WebAssembly build leaves them out, because a browser has its own <code>fetch</code>. There, the functions say they're unavailable instead of crashing.</p>
+<pre class="lisp"><code><span class="p">(</span>http-get <span class="s">&quot;https://example.com/api&quot;</span><span class="p">)</span>            <span class="c">; → {:status 200 :body &quot;…&quot;}</span>
+<span class="p">(</span>http-post <span class="s">&quot;https://example.com/api&quot;</span> body<span class="p">)</span>      <span class="c">; → {:status … :body …}</span>
+<span class="p">(</span>json-parse <span class="p">(</span>dict-get <span class="p">(</span>http-get url<span class="p">)</span> <span class="k">:body</span><span class="p">)</span><span class="p">)</span>    <span class="c">; a JSON API, read</span></code></pre>
+<p>These are the only functions that reach the network, and they're synchronous. Every answer comes back as a dict — a 404 or a 500 too, with that <code>:status</code>, so check it before reading the <code>:body</code>. Only when nothing answers at all (no connection, or 30 seconds of silence) is there an error, <em>HTTP request failed</em>, naming what went wrong. The WebAssembly build leaves them out, because a browser has its own <code>fetch</code>. There, the functions say they're unavailable instead of crashing.</p>
 <h2 id="04-data-output">Output<a class="anchor" href="#04-data-output" aria-label="Link to this section">#</a></h2>
 <pre class="lisp"><code><span class="p">(</span>print <span class="s">&quot;a&quot;</span> <span class="s">&quot;b&quot;</span><span class="p">)</span>        <span class="c">; writes &quot;a b&quot; with no newline</span>
 <span class="p">(</span>println <span class="s">&quot;total:&quot;</span> <span class="n">42</span><span class="p">)</span>  <span class="c">; writes &quot;total: 42&quot; and a newline</span></code></pre>
@@ -1419,13 +1420,13 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 <p>Writes a value as JSON.</p>
 <pre class="lisp"><code><span class="p">(</span>json-stringify <span class="p">{</span><span class="k">:a</span> <span class="n">1</span><span class="p">}</span><span class="p">)</span>   <span class="r">→ &quot;{\&quot;a\&quot;:1}&quot;</span></code></pre>
 <h3 id="reference-http-get">http-get<a class="anchor" href="#reference-http-get" aria-label="Link to this section">#</a></h3>
-<p><code>(http-get url) → string</code></p>
-<p>A synchronous GET. With <code>http-post</code>, the only network access in the language.</p>
-<pre class="lisp"><code><span class="p">(</span>json-parse <span class="p">(</span>http-get <span class="s">&quot;https://example.com/api&quot;</span><span class="p">)</span><span class="p">)</span></code></pre>
+<p><code>(http-get url) → dict</code></p>
+<p>A synchronous GET: <code>{:status 200 :body &quot;…&quot;}</code>. A 4xx/5xx answer is returned the same way, with its status; no answer at all (offline, 30 s timeout) is an error. With <code>http-post</code>, the only network access in the language.</p>
+<pre class="lisp"><code><span class="p">(</span>json-parse <span class="p">(</span>dict-get <span class="p">(</span>http-get <span class="s">&quot;https://example.com/api&quot;</span><span class="p">)</span> <span class="k">:body</span><span class="p">)</span><span class="p">)</span></code></pre>
 <h3 id="reference-http-post">http-post<a class="anchor" href="#reference-http-post" aria-label="Link to this section">#</a></h3>
-<p><code>(http-post url body) → string</code></p>
-<p>A synchronous POST.</p>
-<pre class="lisp"><code><span class="p">(</span>http-post <span class="s">&quot;https://example.com/api&quot;</span> <span class="s">&quot;{}&quot;</span><span class="p">)</span></code></pre>
+<p><code>(http-post url body) → dict</code></p>
+<p>A synchronous POST; returns <code>{:status … :body …}</code> like <code>http-get</code>.</p>
+<pre class="lisp"><code><span class="p">(</span>dict-get <span class="p">(</span>http-post <span class="s">&quot;https://example.com/api&quot;</span> <span class="s">&quot;{}&quot;</span><span class="p">)</span> <span class="k">:status</span><span class="p">)</span>   <span class="r">→ 200</span></code></pre>
 <h2 id="reference-finding-your-way-around">Finding your way around<a class="anchor" href="#reference-finding-your-way-around" aria-label="Link to this section">#</a></h2>
 <h3 id="reference-functions">functions<a class="anchor" href="#reference-functions" aria-label="Link to this section">#</a></h3>
 <p><code>(functions filter) → nil</code></p>
