@@ -4,7 +4,7 @@
 //! comments the user wrote survive.
 //!
 //! Rows and columns are 0-based here; `A1` is (0, 0). A reference inside a formula is uppercase
-//! (`B3`, `$B$3`, `B3:C9`); lowercase `b3` stays an ordinary symbol.
+//! (`B3`, `$B$3`, `B3:C9`, whole columns `E:E` / `$B:$D`); lowercase `b3` stays an ordinary symbol.
 
 use crate::lexer::{lex_spanned, Token};
 
@@ -58,13 +58,28 @@ impl Range {
     pub fn is_empty(&self) -> bool {
         false // a range always holds at least its one corner
     }
+    /// Every row of the given columns — what `E:E` names.
+    pub fn columns(lo: u32, hi: u32) -> Self {
+        Range::new(CellRef::new(0, lo), CellRef::new(MAX_ROWS - 1, hi))
+    }
+    /// Top to bottom of the sheet: a whole-column range.
+    pub fn is_columns(&self) -> bool {
+        self.start.row == 0 && self.end.row == MAX_ROWS - 1
+    }
+    /// One row or one column — what a formula reads as a flat list. Anything wider and taller is
+    /// read as a list of rows.
+    pub fn is_line(&self) -> bool {
+        self.width() == 1 || self.height() == 1
+    }
     /// Every cell, row by row.
     pub fn cells(&self) -> impl Iterator<Item = CellRef> {
         let (r0, r1, c0, c1) = (self.start.row, self.end.row, self.start.col, self.end.col);
         (r0..=r1).flat_map(move |r| (c0..=c1).map(move |c| CellRef::new(r, c)))
     }
     pub fn a1(&self) -> String {
-        if self.start == self.end {
+        if self.is_columns() {
+            format!("{}:{}", col_name(self.start.col), col_name(self.end.col))
+        } else if self.start == self.end {
             self.start.a1()
         } else {
             format!("{}:{}", self.start.a1(), self.end.a1())
@@ -138,13 +153,46 @@ pub fn parse_range(s: &str) -> Option<Range> {
     Some(Range::new(parse_cell(a)?.cell, parse_cell(b)?.cell))
 }
 
-/// An area named by a host or a caller: `C3` or `A1:C9`, case-insensitive. Formulas are stricter.
+/// A column as written in a whole-column range — `E` or `$E`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct AnchoredCol {
+    col: u32,
+    abs: bool,
+}
+
+impl AnchoredCol {
+    fn print(&self) -> String {
+        format!("{}{}", if self.abs { "$" } else { "" }, col_name(self.col))
+    }
+}
+
+fn parse_col(s: &str) -> Option<AnchoredCol> {
+    let (abs, letters) = match s.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    Some(AnchoredCol { col: col_index(letters)?, abs })
+}
+
+/// `E:E`, `B:D`, `$B:$D` — both sides as written, left then right.
+fn parse_col_pair(s: &str) -> Option<(AnchoredCol, AnchoredCol)> {
+    let (a, b) = s.split_once(':')?;
+    Some((parse_col(a)?, parse_col(b)?))
+}
+
+/// `E:E` or `B:D` (anchors allowed): every row of those columns.
+pub fn parse_columns(s: &str) -> Option<Range> {
+    let (a, b) = parse_col_pair(s)?;
+    Some(Range::columns(a.col.min(b.col), a.col.max(b.col)))
+}
+
+/// An area named by a host or a caller: `C3`, `A1:C9` or `E:E`, case-insensitive. Formulas are
+/// stricter.
 pub fn parse_area(s: &str) -> Option<Range> {
     let up = s.trim().to_ascii_uppercase();
-    match parse_range(&up) {
-        Some(r) => Some(r),
-        None => parse_cell(&up).map(|a| Range::new(a.cell, a.cell)),
-    }
+    parse_range(&up)
+        .or_else(|| parse_columns(&up))
+        .or_else(|| parse_cell(&up).map(|a| Range::new(a.cell, a.cell)))
 }
 
 /// What a symbol inside a formula refers to, if it refers to anything.
@@ -168,13 +216,15 @@ pub fn classify(sym: &str) -> Option<RefSym> {
         if sheet.is_empty() {
             return None;
         }
-        let at = parse_cell(rest).map(|a| RefSym::Cell(a.cell)).or_else(|| parse_range(rest).map(RefSym::Range))?;
+        let at = parse_cell(rest)
+            .map(|a| RefSym::Cell(a.cell))
+            .or_else(|| parse_range(rest).or_else(|| parse_columns(rest)).map(RefSym::Range))?;
         return Some(RefSym::Other { sheet: sheet.to_string(), at: Box::new(at) });
     }
     if let Some(a) = parse_cell(sym) {
         return Some(RefSym::Cell(a.cell));
     }
-    parse_range(sym).map(RefSym::Range)
+    parse_range(sym).or_else(|| parse_columns(sym)).map(RefSym::Range)
 }
 
 // ── inserting and deleting rows / columns ────────────────────────────
@@ -308,6 +358,20 @@ pub fn shift_formula(body: &str, dr: i64, dc: i64) -> Rewrite {
                 }
             });
         }
+        if let Some((a, b)) = parse_col_pair(sym) {
+            // whole columns: only the column moves
+            let col = |c: AnchoredCol| -> Option<AnchoredCol> {
+                let to = if c.abs { c.col as i64 } else { c.col as i64 + dc };
+                (0..MAX_COLS as i64).contains(&to).then_some(AnchoredCol { col: to as u32, ..c })
+            };
+            return Some(match (col(a), col(b)) {
+                (Some(a), Some(b)) => format!("{}:{}", a.print(), b.print()),
+                _ => {
+                    lost = true;
+                    DELETED.to_string()
+                }
+            });
+        }
         let (left, right) = sym.split_once(':')?;
         match (shift(parse_cell(left)?), shift(parse_cell(right)?)) {
             (Some(a), Some(b)) => Some(format!("{}:{}", a.print(), b.print())),
@@ -357,6 +421,23 @@ fn rewrite_symbol(sym: &str, edit: &Edit, resized: &mut bool) -> Option<String> 
                 DELETED.to_string()
             }
         });
+    }
+    if let Some((a, b)) = parse_col_pair(sym) {
+        // Whole columns stay whole: a row edit leaves the spelling alone but changes what is in
+        // them, and a column edit moves, grows or trims them like any range.
+        if edit.axis() == Axis::Rows {
+            *resized = true;
+            return None;
+        }
+        let (lft, rgt) = if a.col <= b.col { (a, b) } else { (b, a) };
+        let Some((lo, hi)) = edit.map_span(lft.col, rgt.col) else {
+            *resized = true;
+            return Some(DELETED.to_string());
+        };
+        if hi - lo != rgt.col - lft.col {
+            *resized = true;
+        }
+        return Some(format!("{}:{}", AnchoredCol { col: lo, ..lft }.print(), AnchoredCol { col: hi, ..rgt }.print()));
     }
     let (left, right) = sym.split_once(':')?;
     let (a, b) = (parse_cell(left)?, parse_cell(right)?);

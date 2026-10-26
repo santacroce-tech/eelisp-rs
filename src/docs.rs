@@ -800,7 +800,7 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-from-bytes \"Copy\" (sheet-bytes \"Budget\"))"),
     doc!("sheet-close", "(sheet-close name) → nil", "Closes the file. Do it before renaming or deleting one.", "(sheet-close \"Budget\")"),
     doc!("sheet-get", "(sheet-get name cell)", "One cell's value. A cell whose formula failed is an error.", "(sheet-get \"Budget\" \"C3\")   → 1650"),
-    doc!("sheet-rows", "(sheet-rows name area) → list", "An area's values as a list of rows.",
+    doc!("sheet-rows", "(sheet-rows name area) → list", "An area's values as a list of rows; whole columns (\"E:E\") stop at the last filled row.",
          "(sheet-rows \"Budget\" \"A1:B2\")   → ((\"rent\" 1200) (\"food\" 450))"),
     doc!("sheet-set", "(sheet-set name cell input) → list", "Types into a cell — `1200`, `rent`, `'42` for text, `=(sum B1:B2)` for a formula — recalculates what depends on it and saves. A number written as one is read as one: `50%` is 0.5 shown as a percentage, `$1,200` and `1.200,50` are money and a thousand two hundred. `2026-09-16` is a date; other spellings of one stay text. Given a list of rows, types a whole block from that corner, as a paste would. Returns the changed cells as `(row col input value error fmt)`.",
          "(sheet-set \"Budget\" \"B2\" \"450\")\n(sheet-set \"Budget\" \"C1\" '((\"=(sum B1:B2)\") (\"=(/ C1 12)\")))"),

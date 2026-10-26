@@ -763,3 +763,95 @@ fn sheet_from_bytes_makes_a_new_file_and_nothing_else() {
     assert!(err(&it, r#"(sheet-from-bytes "Other" "not base64!")"#).contains("isn't base64"));
     assert!(!dir.join("Other.eesheet").exists());
 }
+
+// ── whole columns and 2-D ranges ─────────────────────────────────────
+
+#[test]
+fn a_whole_column_is_a_range_from_top_to_bottom() {
+    assert_eq!(classify("E:E"), Some(RefSym::Range(Range::columns(4, 4))));
+    assert_eq!(classify("$D:B"), Some(RefSym::Range(Range::columns(1, 3))), "anchors, either order");
+    assert!(matches!(classify("Rates!E:E"), Some(RefSym::Other { .. })));
+    assert_eq!(Range::columns(1, 3).a1(), "B:D");
+    for not_a_ref in ["e:e", "E:", ":E", "E:1", "AAAA:A"] {
+        assert_eq!(classify(not_a_ref), None, "{not_a_ref}");
+    }
+    assert_eq!(parse_area("e:e"), Some(Range::columns(4, 4)), "hosts may be casual");
+}
+
+#[test]
+fn a_whole_column_reads_down_to_its_last_filled_row() {
+    let (_, it) = budget("whole-column");
+    ev(&it, r#"(sheet-put "Budget" "E1" '(("Kind") ("Work") ("Home") (nil) ("Work")))"#);
+    set(&it, "G1", "=E:E");
+    assert_eq!(get(&it, "G1"), r#"("Kind" "Work" "Home" nil "Work")"#, "blanks inside, none past the end");
+    set(&it, "G2", r#"=(length (filter (fn (x) (= x "Work")) E:E))"#);
+    assert_eq!(get(&it, "G2"), "2");
+    // a new row at the bottom is seen
+    set(&it, "E9", "Work");
+    assert_eq!(get(&it, "G2"), "3", "recalculated: E9 is inside E:E");
+    // an empty column reads as an empty list
+    set(&it, "G3", "=(length H:H)");
+    assert_eq!(get(&it, "G3"), "0");
+    // and the REPL can read one too
+    assert_eq!(ev(&it, r#"(length (sheet-rows "Budget" "E:E"))"#), "9");
+}
+
+#[test]
+fn a_formula_inside_the_column_it_reads_is_a_cycle() {
+    let (_, it) = budget("column-cycle");
+    set(&it, "E1", "1");
+    set(&it, "E5", "=(sum E:E)");
+    assert!(get_err(&it, "E5").contains("circular"));
+}
+
+#[test]
+fn whole_columns_survive_row_edits_and_follow_column_edits() {
+    let (_, it) = budget("column-edits");
+    ev(&it, r#"(sheet-put "Budget" "B1" '((1) (2) (3)))"#);
+    set(&it, "D1", "=(sum B:B)");
+    ev(&it, r#"(sheet-delete-rows "Budget" 2)"#);
+    assert_eq!(get(&it, "D1"), "4", "recalculated after the row went");
+    ev(&it, r#"(sheet-insert-cols "Budget" "A")"#);
+    let payload = ev(&it, r#"(sheet-open "Budget")"#);
+    assert!(payload.contains(r#""=(sum C:C)""#), "{payload}");
+    ev(&it, r#"(sheet-delete-cols "Budget" "C")"#);
+    assert!(get_err(&it, "D1").contains("#REF!"));
+
+    let rows = rewrite_formula("(sum $B:D)", &Edit::Insert { axis: Axis::Rows, at: 0, n: 3 });
+    assert!(!rows.changed && rows.resized, "the spelling stays, what's in it changed");
+    let cols = rewrite_formula("(sum $B:D)", &Edit::Insert { axis: Axis::Cols, at: 2, n: 1 });
+    assert_eq!(cols.text, "(sum $B:E)");
+    assert!(cols.resized);
+    assert_eq!(shift_formula("(sum $B:D)", 5, 2).text, "(sum $B:F)", "rows don't move it; $ holds a column");
+}
+
+#[test]
+fn a_range_wider_and_taller_than_one_reads_as_rows() {
+    let (_, it) = budget("two-d");
+    ev(&it, r#"(sheet-put "Budget" "A1" '(("apple" 3) ("pear" 5) ("fig" nil)))"#);
+    set(&it, "D1", "=A1:B3");
+    assert_eq!(get(&it, "D1"), r#"(("apple" 3) ("pear" 5) ("fig" nil))"#);
+    set(&it, "D2", "=(length A1:B3)");
+    assert_eq!(get(&it, "D2"), "3", "one item per row");
+    set(&it, "D3", "=(sum A1:B3)");
+    assert_eq!(get(&it, "D3"), "8", "sum still reaches into the rows");
+    // one row or one column stays flat
+    set(&it, "D4", "=A1:B1");
+    assert_eq!(get(&it, "D4"), r#"("apple" 3)"#);
+    // whole columns too: A:B is rows, clipped to the data
+    set(&it, "D5", "=(length A:B)");
+    assert_eq!(get(&it, "D5"), "3");
+}
+
+#[test]
+fn another_sheets_columns_and_blocks_read_the_same_way() {
+    let dir = scratch("other-columns");
+    let it = engine(&dir);
+    ev(&it, r#"(sheet-new "Rates")"#);
+    ev(&it, r#"(sheet-put "Rates" "A1" '(("eur" 1.1) ("gbp" 1.3)))"#);
+    ev(&it, r#"(sheet-new "Budget")"#);
+    set(&it, "A1", "=(length Rates!A:A)");
+    assert_eq!(get(&it, "A1"), "2");
+    set(&it, "A2", "=Rates!A1:B2");
+    assert_eq!(get(&it, "A2"), r#"(("eur" 1.1) ("gbp" 1.3))"#);
+}

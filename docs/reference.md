@@ -1924,7 +1924,7 @@ One cell's value. A cell whose formula failed is an error.
 
 `(sheet-rows name area) → list`
 
-An area's values as a list of rows.
+An area's values as a list of rows; whole columns ("E:E") stop at the last filled row.
 
 ```lisp
 (sheet-rows "Budget" "A1:B2")   → (("rent" 1200) ("food" 450))
