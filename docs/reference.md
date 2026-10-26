@@ -1088,22 +1088,22 @@ Writes a value as JSON.
 
 ### http-get
 
-`(http-get url) → string`
+`(http-get url) → dict`
 
-A synchronous GET. With `http-post`, the only network access in the language.
+A synchronous GET: `{:status 200 :body "…"}`. A 4xx/5xx answer is returned the same way, with its status; no answer at all (offline, 30 s timeout) is an error. With `http-post`, the only network access in the language.
 
 ```lisp
-(json-parse (http-get "https://example.com/api"))
+(json-parse (dict-get (http-get "https://example.com/api") :body))
 ```
 
 ### http-post
 
-`(http-post url body) → string`
+`(http-post url body) → dict`
 
-A synchronous POST.
+A synchronous POST; returns `{:status … :body …}` like `http-get`.
 
 ```lisp
-(http-post "https://example.com/api" "{}")
+(dict-get (http-post "https://example.com/api" "{}") :status)   → 200
 ```
 
 ## Finding your way around

@@ -662,9 +662,9 @@ pub static CORE: &[Entry] = &[
     doc!("apply", "(apply f args)", "Calls f with a list of arguments.", "(apply + '(1 2 3))   → 6"),
     doc!("json-parse", "(json-parse s)", "Reads a JSON string into dicts, lists and scalars.", "(json-parse \"{\\\"a\\\":1}\")   → {:a 1}"),
     doc!("json-stringify", "(json-stringify v) → string", "Writes a value as JSON.", "(json-stringify {:a 1})   → \"{\\\"a\\\":1}\""),
-    doc!("http-get", "(http-get url) → string", "A synchronous GET. With `http-post`, the only network access in the language.",
-         "(json-parse (http-get \"https://example.com/api\"))"),
-    doc!("http-post", "(http-post url body) → string", "A synchronous POST.", "(http-post \"https://example.com/api\" \"{}\")"),
+    doc!("http-get", "(http-get url) → dict", "A synchronous GET: `{:status 200 :body \"…\"}`. A 4xx/5xx answer is returned the same way, with its status; no answer at all (offline, 30 s timeout) is an error. With `http-post`, the only network access in the language.",
+         "(json-parse (dict-get (http-get \"https://example.com/api\") :body))"),
+    doc!("http-post", "(http-post url body) → dict", "A synchronous POST; returns `{:status … :body …}` like `http-get`.", "(dict-get (http-post \"https://example.com/api\" \"{}\") :status)   → 200"),
     // ── functions / source ───────────────────────────────────────────
     doc!("functions", "(functions filter) → nil", "Lists every function, macro and special form in scope; the filter keeps the names containing it.",
          "(functions)          ; everything\n(functions \"date\")   ; just the date ones"),

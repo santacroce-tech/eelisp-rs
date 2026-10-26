@@ -158,12 +158,15 @@ JSON objects become dicts, with their keys sorted. Arrays become lists, and `nul
 ## The network
 
 ```lisp
-(http-get "https://example.com/api")            ; → the response body, a string
-(http-post "https://example.com/api" body)
+(http-get "https://example.com/api")            ; → {:status 200 :body "…"}
+(http-post "https://example.com/api" body)      ; → {:status … :body …}
+(json-parse (dict-get (http-get url) :body))    ; a JSON API, read
 ```
 
-These are the only functions that reach the network, and they're synchronous. A failure is an
-error that names the URL. The WebAssembly build leaves them out, because a browser has its own
+These are the only functions that reach the network, and they're synchronous. Every answer comes
+back as a dict — a 404 or a 500 too, with that `:status`, so check it before reading the `:body`.
+Only when nothing answers at all (no connection, or 30 seconds of silence) is there an error,
+*HTTP request failed*, naming what went wrong. The WebAssembly build leaves them out, because a browser has its own
 `fetch`. There, the functions say they're unavailable instead of crashing.
 
 ## Output
