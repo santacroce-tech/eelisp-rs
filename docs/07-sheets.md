@@ -80,6 +80,24 @@ When a cell changes, the engine works out everything downstream of it and recomp
 formula after the formulas it reads. Results are stored in the file, so **opening a sheet runs no
 formula**. A sheet with ten thousand formulas opens as fast as one with none.
 
+A formula that reads the **database** follows it too. While a formula runs, the engine notes every
+table it reads — through `query`, `count-records`, the agenda's `items`, or a function of yours that
+calls them — and keeps that list with the cell, in the file. When something writes one of those
+tables (`insert`, `update`, `delete`), the formulas of open sheets that read it are recalculated
+once the write's top-level form has finished — a loop of a hundred inserts recalculates once, at
+the end:
+
+```lisp
+(sheet-set "Portfolio" "D2" "=(latest A2)")    ; latest queries the prices table
+(insert prices {:symbol "bitcoin" :price 80121 :at "2026-10-26 09:30"})
+(sheet-get "Portfolio" "D2")                   ; → 80121, nothing pressed
+```
+
+What a formula reads is noted when it runs, and kept in the file, so a sheet just opened — which
+runs nothing — still knows. A sheet last saved by an older engine has no such list yet: its
+formulas learn what they read at its next recalculation (**↻** once does it). Formulas that read the clock, or a sheet that was closed when it
+changed, still need **↻** (`sheet-recalc`).
+
 Formulas that read each other in a circle are found with Tarjan's strongly-connected-components
 algorithm, run without recursion so that a long chain of running totals can't overflow the stack.
 Every cell in the circle gets the same error rather than a wrong number:

@@ -8,7 +8,8 @@
 //! WASM note: this backend links SQLite (C) via rusqlite's `bundled` feature — native only. The
 //! future web build swaps this module for a wa-sqlite/OPFS backend behind the same method surface.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use rusqlite::params;
@@ -23,6 +24,11 @@ pub struct Database {
     defs: HashMap<String, TableDef>,
     /// What it was opened from — a file path, or `:memory:`.
     path: String,
+    /// The tables read while something is being watched — a sheet formula, so it can be
+    /// recalculated when one of them changes. A stack: watching can nest.
+    reads: RefCell<Vec<BTreeSet<String>>>,
+    /// The tables written since the host last asked (`take_written`).
+    written: RefCell<BTreeSet<String>>,
 }
 
 fn db_err(e: impl std::fmt::Display) -> LispError {
@@ -40,6 +46,34 @@ pub struct Query {
 }
 
 impl Database {
+    // ── which tables are read and written ──
+
+    /// Start noting the tables read, until `end_watch` — around one formula.
+    pub fn begin_watch(&self) {
+        self.reads.borrow_mut().push(BTreeSet::new());
+    }
+
+    /// Stop, and say which tables were read since the matching `begin_watch`.
+    pub fn end_watch(&self) -> BTreeSet<String> {
+        self.reads.borrow_mut().pop().unwrap_or_default()
+    }
+
+    fn read_from(&self, table: &str) {
+        for set in self.reads.borrow_mut().iter_mut() {
+            set.insert(table.to_string());
+        }
+    }
+
+    fn wrote_to(&self, table: &str) {
+        self.written.borrow_mut().insert(table.to_string());
+    }
+
+    /// The tables written since the last call, and forget them.
+    pub fn take_written(&self) -> BTreeSet<String> {
+        std::mem::take(&mut *self.written.borrow_mut())
+    }
+
+
     pub fn open(path: &str) -> Result<Self, LispError> {
         let conn = Connection::open(path).map_err(db_err)?;
         Self::from_connection(conn, path)
@@ -75,7 +109,13 @@ impl Database {
             [],
         )
         .map_err(db_err)?;
-        let mut db = Database { conn, defs: HashMap::new(), path: path.to_string() };
+        let mut db = Database {
+            conn,
+            defs: HashMap::new(),
+            path: path.to_string(),
+            reads: RefCell::new(Vec::new()),
+            written: RefCell::new(BTreeSet::new()),
+        };
         db.load_defs()?;
         Ok(db)
     }
@@ -140,6 +180,7 @@ impl Database {
     }
 
     pub fn drop_table(&mut self, table: &str) -> Result<Value, LispError> {
+        self.wrote_to(table);
         self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), []).map_err(db_err)?;
         self.conn
             .execute("DELETE FROM _eelisp_schema WHERE name = ?1", params![table])
@@ -166,6 +207,7 @@ impl Database {
         );
         let vals: Vec<SqlValue> = cols.iter().map(|c| to_sql(&data.map[c])).collect();
         self.conn.execute(&sql, rusqlite::params_from_iter(vals)).map_err(db_err)?;
+        self.wrote_to(table);
         let id = self.conn.last_insert_rowid();
         Ok(Value::Record(Rc::new(Record {
             table: table.to_string(),
@@ -192,6 +234,7 @@ impl Database {
     /// Like `query`, but returns the raw records (the agenda layer builds on this).
     pub fn query_rows(&self, q: &Query) -> Result<Vec<Record>, LispError> {
         let def = self.def_or_err(&q.table)?;
+        self.read_from(&q.table);
         let columns = self.columns_for(q)?;
         let types: Vec<FieldType> = columns
             .iter()
@@ -227,6 +270,7 @@ impl Database {
 
     /// Soft-delete rows matching a raw WHERE clause (used by drop-template / drop-rule / drop-view).
     pub fn soft_delete_where(&self, table: &str, where_: &str, params: &[Value]) -> Result<i64, LispError> {
+        self.wrote_to(table);
         let sql = format!("UPDATE {} SET _deleted = 1 WHERE _deleted = 0 AND ({})", table, where_);
         let vals: Vec<SqlValue> = params.iter().map(to_sql).collect();
         let changed = self.conn.execute(&sql, rusqlite::params_from_iter(vals)).map_err(db_err)?;
@@ -252,16 +296,19 @@ impl Database {
         let mut vals: Vec<SqlValue> = data.keys.iter().map(|c| to_sql(&data.map[c])).collect();
         vals.push(SqlValue::Integer(id));
         let changed = self.conn.execute(&sql, rusqlite::params_from_iter(vals)).map_err(db_err)?;
+        self.wrote_to(table);
         Ok(Value::Number(changed as f64))
     }
 
     pub fn delete(&self, table: &str, id: i64) -> Result<Value, LispError> {
+        self.wrote_to(table);
         let sql = format!("UPDATE {} SET _deleted = 1 WHERE _deleted = 0 AND _id = ?1", table);
         let changed = self.conn.execute(&sql, params![id]).map_err(db_err)?;
         Ok(Value::Number(changed as f64))
     }
 
     pub fn count(&self, table: &str, where_: Option<&str>, params: &[Value]) -> Result<Value, LispError> {
+        self.read_from(table);
         let mut sql = format!("SELECT COUNT(*) FROM {} WHERE _deleted = 0", table);
         if let Some(w) = where_ {
             sql.push_str(&format!(" AND ({})", w));
@@ -275,6 +322,7 @@ impl Database {
     }
 
     pub fn pack(&self, table: &str) -> Result<Value, LispError> {
+        self.wrote_to(table);
         self.conn.execute(&format!("DELETE FROM {} WHERE _deleted = 1", table), []).map_err(db_err)?;
         Ok(Value::Bool(true))
     }

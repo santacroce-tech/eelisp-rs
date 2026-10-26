@@ -824,7 +824,7 @@ pub static SHEETS: &[Entry] = &[
          "(sheet-paste \"Budget\" \"C1\" (sheet-copy \"Budget\" \"B1:B3\") \"B1\")"),
     doc!("sheet-fill", "(sheet-fill name source target) → list", "Repeats the source over the target area, each copy's references shifted by where it lands — filling a column of totals down. The source's own cells are left alone.",
          "(sheet-fill \"Budget\" \"C1\" \"C2:C12\")"),
-    doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the database or the clock, and for another sheet that wasn't open at the time, none of which are tracked.",
+    doc!("sheet-recalc", "(sheet-recalc name) → list", "Reruns every formula — for ones that read the clock, and for another sheet that wasn't open at the time, which aren't tracked. (A formula that reads the database is recalculated when the tables it read are written.)",
          "(sheet-recalc \"Budget\")"),
     doc!("sheet-clear", "(sheet-clear name area) → list", "Empties an area — values and formulas, not formats — and recalculates what read it. Whole columns work: \"A:C\".",
          "(sheet-clear \"Ledger\" \"A:E\")"),
