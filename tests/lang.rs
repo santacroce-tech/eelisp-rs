@@ -378,3 +378,48 @@ fn rewrite_macro_rest_params_and_quasiquote() {
     assert_eq!(s(&i, "(when true 41 42)"), "42");
     assert_eq!(s(&i, "(unless false 99)"), "99");
 }
+
+// ── try / catch, error ───────────────────────────────────────────────
+
+#[test]
+fn try_catches_an_error_and_says_what_it_was() {
+    let it = Interpreter::new();
+    assert_eq!(s(&it, r#"(try (/ 1 0) (catch e (dict-get e :kind)))"#), "division-by-zero");
+    assert_eq!(s(&it, r#"(try (no-such-fn 1) (catch e (dict-get e :kind)))"#), "undefined-symbol");
+    assert_eq!(s(&it, r#"(try (error "no price") (catch e (dict-get e :message)))"#), "no price");
+    assert_eq!(s(&it, r#"(try (str-len 5) (catch e (dict-get e :kind)))"#), "type");
+}
+
+#[test]
+fn try_without_an_error_is_its_body() {
+    let it = Interpreter::new();
+    assert_eq!(s(&it, r#"(try 1 2 (+ 1 2) (catch e "caught"))"#), "3");
+    assert_eq!(s(&it, r#"(try (/ 1 0))"#), "nil", "no catch: the error becomes nil");
+    assert_eq!(s(&it, r#"(try (/ 1 0) (catch e))"#), "nil", "an empty handler is nil too");
+}
+
+#[test]
+fn try_nests_and_the_handler_can_fail_again() {
+    let it = Interpreter::new();
+    assert_eq!(
+        s(&it, r#"(try (try (/ 1 0) (catch e (error "again"))) (catch e (dict-get e :message)))"#),
+        "again"
+    );
+    assert!(it.eval_str(r#"(try (/ 1 0) (catch e (error "out")))"#).is_err(), "a failing handler fails the try");
+}
+
+#[test]
+fn recur_passes_through_try_to_its_loop() {
+    let it = Interpreter::new();
+    assert_eq!(
+        s(&it, r#"(loop (i 0) (if (< i 3) (try (recur (+ i 1)) (catch e "caught")) i))"#),
+        "3",
+        "recur is the loop's signal, not an error"
+    );
+}
+
+#[test]
+fn error_with_a_value_prints_it() {
+    let it = Interpreter::new();
+    assert!(it.eval_str("(error 42)").unwrap_err().to_string().contains("42"));
+}

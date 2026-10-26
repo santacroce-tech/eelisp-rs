@@ -196,9 +196,26 @@ An error stops evaluation and reports one line:
 | `Database error: …` | SQLite refused, for example a bad `:where` clause |
 | `Error: …` | a runtime failure reported by a builtin |
 
-There's no `try`/`catch` in the language. Errors are for the host to handle. The REPL prints them
-and carries on, and the host API returns them as `{"ok": false, "error": "…"}` (see
-[Embedding](10-embedding.md)). Some builtins return `nil` for a missing value instead of failing.
-For example, `(nth lst 99)` is `nil`.
+`try` catches one. Its body runs; if it stops with an error, the `catch` clause binds the error to
+a name and runs instead:
+
+```lisp
+(try (/ 1 0)
+  (catch e (dict-get e :kind)))                ; → "division-by-zero"
+
+(defn price-or-zero (url)
+  (try (dict-get (json-parse (dict-get (http-get url) :body)) :price)
+    (catch e (do (println "no price: " (dict-get e :message)) 0))))
+```
+
+The error is a dict: `:message`, the one line above, and `:kind` — `undefined-symbol`, `type`,
+`arity`, `syntax`, `division-by-zero`, `index`, `parse`, `database` or `runtime`. Without a
+`catch` clause an error makes the `try` nil. `(error "message")` raises one of your own, with
+`:kind` `runtime` and your message exactly as written. A `recur` inside a `try` still reaches its
+`loop` — it's how loops work, not an error.
+
+An error nothing catches stops evaluation. The REPL prints it and carries on, and the host API
+returns it as `{"ok": false, "error": "…"}` (see [Embedding](10-embedding.md)). Some builtins
+return `nil` for a missing value instead of failing. For example, `(nth lst 99)` is `nil`.
 
 Continue with [Working with data](04-data.md).

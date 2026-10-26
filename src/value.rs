@@ -372,6 +372,24 @@ pub enum LispError {
     Recur(Vec<Value>),
 }
 
+impl LispError {
+    /// A short name for the kind of error — what `(try … (catch e …))` puts in `(dict-get e :kind)`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            LispError::UndefinedSymbol(_) => "undefined-symbol",
+            LispError::TypeMismatch { .. } => "type",
+            LispError::Arity { .. } => "arity",
+            LispError::InvalidSyntax(_) => "syntax",
+            LispError::DivisionByZero => "division-by-zero",
+            LispError::IndexOutOfBounds { .. } => "index",
+            LispError::Parse(_) => "parse",
+            LispError::Database(_) => "database",
+            LispError::Runtime(_) => "runtime",
+            LispError::Recur(_) => "recur",
+        }
+    }
+}
+
 impl fmt::Display for LispError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
