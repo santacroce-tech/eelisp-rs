@@ -163,6 +163,16 @@ JSON objects become dicts, with their keys sorted. Arrays become lists, and `nul
 (json-parse (dict-get (http-get url) :body))    ; a JSON API, read
 ```
 
+Both take options after the URL (and a POST's body): `:timeout` in seconds — 30 unless given, at
+most 300 — and `:headers`, a dict sent with the request, which is where most services want their
+key; a POST also takes `:content-type` (`application/json` unless given):
+
+```lisp
+(http-get "https://api.example.com/quote?symbol=AAPL"
+          :timeout 5
+          :headers {"x-api-key" key "accept" "application/json"})
+```
+
 These are the only functions that reach the network, and they're synchronous. Every answer comes
 back as a dict — a 404 or a 500 too, with that `:status`, so check it before reading the `:body`.
 Only when nothing answers at all (no connection, or 30 seconds of silence) is there an error,

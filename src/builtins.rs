@@ -852,7 +852,12 @@ fn http_get(args: &[Value], _: &Env) -> Result<Value, LispError> {
         Some(Value::Str(u)) => u,
         _ => return Err(LispError::InvalidSyntax("http-get expects a URL string".into())),
     };
-    http_result(ureq::get(url).timeout(std::time::Duration::from_secs(30)).call())
+    let opts = http_opts(args, 1, "http-get")?;
+    let mut req = ureq::get(url).timeout(opts.timeout);
+    for (k, v) in &opts.headers {
+        req = req.set(k, v);
+    }
+    http_result(req.call())
 }
 
 /// Built without the `http` feature (the WebAssembly engine): the names exist, so the manual and the
@@ -877,25 +882,63 @@ fn http_post(args: &[Value], _: &Env) -> Result<Value, LispError> {
         Some(Value::Str(b)) => b.clone(),
         _ => String::new(),
     };
-    // optional :content-type keyword
-    let mut content_type = "application/json".to_string();
-    let mut i = 2;
-    while i + 1 < args.len() {
-        if let Value::Keyword(k) = &args[i] {
-            if k == "content-type" {
-                if let Value::Str(ct) = &args[i + 1] {
-                    content_type = ct.clone();
+    let opts = http_opts(args, 2, "http-post")?;
+    let mut req = ureq::post(url)
+        .timeout(opts.timeout)
+        .set("Content-Type", opts.content_type.as_deref().unwrap_or("application/json"));
+    for (k, v) in &opts.headers {
+        req = req.set(k, v);
+    }
+    http_result(req.send_string(&body))
+}
+
+/// The options after the URL (and a POST's body): `:timeout` in seconds (default 30, at most 300),
+/// `:headers` a dict of header → value, and for a POST `:content-type`.
+#[cfg(feature = "http")]
+struct HttpOpts {
+    timeout: std::time::Duration,
+    headers: Vec<(String, String)>,
+    content_type: Option<String>,
+}
+
+#[cfg(feature = "http")]
+fn http_opts(args: &[Value], from: usize, name: &str) -> Result<HttpOpts, LispError> {
+    let mut o = HttpOpts { timeout: std::time::Duration::from_secs(30), headers: Vec::new(), content_type: None };
+    let mut i = from;
+    while i < args.len() {
+        let key = match &args[i] {
+            Value::Keyword(k) => k.to_string(),
+            other => {
+                return Err(LispError::InvalidSyntax(format!(
+                    "{name}: expected an option like :timeout or :headers, got {}",
+                    crate::printer::print_value(other, false)
+                )))
+            }
+        };
+        let val = args.get(i + 1).ok_or_else(|| LispError::InvalidSyntax(format!("{name}: :{key} needs a value")))?;
+        match (key.as_str(), val) {
+            ("timeout", Value::Number(n)) if *n > 0.0 && *n <= 300.0 => {
+                o.timeout = std::time::Duration::from_secs_f64(*n)
+            }
+            ("timeout", _) => {
+                return Err(LispError::InvalidSyntax(format!("{name}: :timeout is a number of seconds, more than 0 and at most 300")))
+            }
+            ("headers", Value::Dict(d)) => {
+                for k in d.keys.iter() {
+                    let v = match &d.map[k] {
+                        Value::Str(s) => s.to_string(),
+                        other => crate::printer::print_value(other, false),
+                    };
+                    o.headers.push((k.to_string(), v));
                 }
             }
+            ("headers", _) => return Err(LispError::InvalidSyntax(format!("{name}: :headers is a dict, like {{\"x-api-key\" key}}"))),
+            ("content-type", Value::Str(ct)) => o.content_type = Some(ct.to_string()),
+            _ => return Err(LispError::InvalidSyntax(format!("{name}: unknown option :{key}"))),
         }
-        i += 1;
+        i += 2;
     }
-    http_result(
-        ureq::post(url)
-            .timeout(std::time::Duration::from_secs(30))
-            .set("Content-Type", &content_type)
-            .send_string(&body),
-    )
+    Ok(o)
 }
 
 fn value_to_natural(v: &Value) -> serde_json::Value {
