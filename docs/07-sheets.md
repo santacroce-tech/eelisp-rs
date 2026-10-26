@@ -94,7 +94,8 @@ the end:
 ```
 
 What a formula reads is noted when it runs, and kept in the file, so a sheet just opened — which
-runs nothing — still knows. Formulas that read the clock, or a sheet that was closed when it
+runs nothing — still knows. A sheet last saved by an older engine has no such list yet: its
+formulas learn what they read at its next recalculation (**↻** once does it). Formulas that read the clock, or a sheet that was closed when it
 changed, still need **↻** (`sheet-recalc`).
 
 Formulas that read each other in a circle are found with Tarjan's strongly-connected-components
