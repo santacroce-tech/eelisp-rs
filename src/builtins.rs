@@ -102,6 +102,7 @@ pub fn register(env: &Env) {
     b!("println", printlnf);
     b!("eval", evalf);
     b!("apply", applyf);
+    b!("error", errorf);
     b!("json-parse", json_parse);
     b!("json-stringify", json_stringify);
     b!("http-get", http_get);
@@ -799,6 +800,16 @@ fn printlnf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn evalf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     eval(args[0].clone(), env.clone())
 }
+/// (error "message") — stop with an error of your own, which `try` can catch.
+fn errorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let msg = match args.first() {
+        Some(Value::Str(s)) => s.to_string(),
+        Some(v) => crate::printer::print_value(v, false),
+        None => "error".to_string(),
+    };
+    Err(LispError::Runtime(msg))
+}
+
 fn applyf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let list = as_list(&args[1])?;
     apply_value(&args[0], &list, env)

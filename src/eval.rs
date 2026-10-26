@@ -157,6 +157,57 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 }
                             }
                         }
+                        "try" => {
+                            // (try body… (catch e handler…)) — the body runs as an ordinary
+                            // evaluation (not a tail call), so an error in it is caught here;
+                            // a `recur` passing through is a loop's signal, not an error, and
+                            // goes on to its loop.
+                            let (body, catch) = match items.last() {
+                                Some(Value::List(c))
+                                    if items.len() > 1
+                                        && matches!(c.first(), Some(Value::Symbol(s)) if &**s == "catch") =>
+                                {
+                                    (&items[1..items.len() - 1], Some(c.clone()))
+                                }
+                                _ => (&items[1..], None),
+                            };
+                            let mut result = Ok(Value::Null);
+                            for e in body {
+                                result = eval(e.clone(), env.clone());
+                                if result.is_err() {
+                                    break;
+                                }
+                            }
+                            match result {
+                                Ok(v) => return Ok(v),
+                                Err(LispError::Recur(vals)) => return Err(LispError::Recur(vals)),
+                                Err(err) => {
+                                    let Some(c) = catch else { return Ok(Value::Null) };
+                                    let scope = env::child(&env);
+                                    if let Some(Value::Symbol(name)) = c.get(1) {
+                                        let mut d = OrderedDict::default();
+                                        // a runtime error's own text — (error "no price") is "no price", without the "Error: " a
+                                        // printed error carries
+                                        let message = match &err {
+                                            LispError::Runtime(m) => m.clone(),
+                                            other => other.to_string(),
+                                        };
+                                        d.insert("message".into(), Value::Str(message.into()));
+                                        d.insert("kind".into(), Value::Str(err.kind().to_string()));
+                                        env::define_sym(&scope, name, Value::Dict(Rc::new(d)));
+                                    }
+                                    if c.len() <= 2 {
+                                        return Ok(Value::Null);
+                                    }
+                                    for e in &c[2..c.len() - 1] {
+                                        eval(e.clone(), scope.clone())?;
+                                    }
+                                    expr = c[c.len() - 1].clone();
+                                    env = scope;
+                                    continue;
+                                }
+                            }
+                        }
                         "recur" => {
                             let mut vals = Vec::with_capacity(items.len().saturating_sub(1));
                             for a in &items[1..] {
