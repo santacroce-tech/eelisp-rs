@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! Port of the Swift EELisp DATABASE and AGENDA tests — all LIVE (roadmap steps 2 & 3).
 //!
 //! Assertions are expressed in pure EELisp where possible (counts via `count-records` /

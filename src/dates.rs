@@ -62,9 +62,25 @@ pub fn now_epoch() -> f64 {
 }
 
 /// In a browser `SystemTime::now()` panics; JavaScript's `Date.now()` is milliseconds.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "js"))]
 pub fn now_epoch() -> f64 {
     js_sys::Date::now() / 1000.0
+}
+
+/// Elsewhere on bare WebAssembly (a game's mod sandbox, say) there's no clock to read: the host
+/// says what time it is with [`set_now`], and until it does it's the start of 1970.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "js")))]
+pub fn now_epoch() -> f64 {
+    f64::from_bits(HOST_NOW.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "js")))]
+static HOST_NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tell the engine the time, in epoch seconds, on a WebAssembly host with no clock of its own.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "js")))]
+pub fn set_now(epoch_secs: f64) {
+    HOST_NOW.store(epoch_secs.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Midnight (UTC) of the current day, in epoch seconds.

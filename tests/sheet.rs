@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! Sheets: a grid whose formulas are EELisp, each sheet a SQLite file. Addressing, what a cell
 //! holds, recalculation order, cycles, errors, persistence — and that opening a sheet runs nothing.
 

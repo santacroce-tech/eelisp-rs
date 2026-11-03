@@ -11,12 +11,16 @@
 //! Still TODO (see ANALYSIS §4.10–4.12): the agenda PIM, dates, HTTP/JSON, and the structured
 //! `.tableView`/`.formView` view values + serde boundary.
 
+#[cfg(feature = "sqlite")]
 pub mod agenda;
+#[cfg(feature = "sqlite")]
 pub mod agenda_builtins;
 pub mod builtins;
 pub mod bytes;
+#[cfg(feature = "sqlite")]
 pub mod database;
 pub mod dates;
+#[cfg(feature = "sqlite")]
 pub mod db_builtins;
 pub mod docs;
 pub mod editor;
@@ -30,11 +34,14 @@ pub mod parser;
 pub mod prelude;
 pub mod printer;
 /// A thread per engine — native hosts only; a browser runs the interpreter on its own thread.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
 pub mod server;
+#[cfg(feature = "sqlite")]
 pub mod sheet;
+#[cfg(feature = "sqlite")]
 pub mod sheet_builtins;
 pub mod sheet_ref;
+#[cfg(feature = "sqlite")]
 pub mod smart_parser;
 pub mod value;
 

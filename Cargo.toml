@@ -16,20 +16,26 @@ path = "src/lib.rs"
 
 [dependencies]
 regex = "1.13.1"
-rusqlite = { version = "0.40.1", features = ["bundled", "serialize"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "serialize"], optional = true }
 serde_json = "1.0.151"
 ureq = { version = "^2", optional = true }
 
-# `http-get`/`http-post`. Off for the WebAssembly build, where a browser has its own `fetch`.
 [features]
-default = ["http"]
+default = ["http", "sqlite"]
+# `http-get`/`http-post`. Off for the WebAssembly build, where a browser has its own `fetch`.
 http = ["dep:ureq"]
+# The database, the agenda and sheets, on SQLite. Off, the engine is the language alone: smaller,
+# and with no C code, so it builds for any WebAssembly host (a game's mod sandbox, say).
+sqlite = ["dep:rusqlite"]
+# In a browser, read the clock from JavaScript's `Date.now()`. Off on wasm32-unknown-unknown, the
+# host sets the time with `eelisp::dates::set_now`.
+js = ["dep:js-sys"]
 
 # In a browser there is no system clock to read: the time comes from JavaScript's Date.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-js-sys = "0.3"
+js-sys = { version = "0.3", optional = true }
 
 [[bin]]
 name = "eelisp"
 path = "src/bin/eelisp.rs"
-required-features = ["http"]
+required-features = ["http", "sqlite"]

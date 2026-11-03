@@ -47,6 +47,7 @@ fn functions_filters_by_name_case_insensitively() {
 }
 
 #[test]
+#[cfg(feature = "sqlite")] // the agenda's functions
 fn functions_filter_matches_anywhere_in_the_name() {
     let it = fresh();
     let listing = out(&it, "(functions \"item\")");

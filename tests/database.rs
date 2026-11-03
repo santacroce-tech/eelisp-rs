@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! The engine's database outlives the process: a host names a file, the tables and agenda live in
 //! it, and a host whose workspace moves can point the running engine at another one.
 

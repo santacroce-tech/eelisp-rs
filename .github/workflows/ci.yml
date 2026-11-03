@@ -19,3 +19,19 @@ jobs:
         run: cargo test --all --verbose
       - name: Release build
         run: cargo build --release --bin eelisp
+
+  # The engine without its default features: the language alone, for a WebAssembly sandbox.
+  language-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Test (no SQLite, no network)
+        run: cargo test --no-default-features
+      - name: Build with SQLite but no network
+        run: cargo build --no-default-features --features sqlite
+      - name: Build for a bare WebAssembly host
+        run: cargo build --no-default-features --target wasm32-unknown-unknown --lib --release
