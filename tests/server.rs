@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! Step 5 — the native binding (`EngineHandle`) + the closed-engine loose ends (HTTP arg
 //! validation, transactional batch ops).
 

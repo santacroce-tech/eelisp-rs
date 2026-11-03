@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! Step-3b agenda features: categories (+ exclusivity), rules (auto + manual + regex `match`),
 //! views, and the smart NLP `add`/`smart-parse`. No Swift counterpart existed, so these lock in
 //! the intended behavior of the reflective engine.

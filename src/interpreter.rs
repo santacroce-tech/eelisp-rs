@@ -3,18 +3,24 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(feature = "sqlite")]
 use crate::agenda::{self, Agendas};
+#[cfg(feature = "sqlite")]
 use crate::database::Database;
 use crate::editor::EditorHost;
 use crate::env::{self, Env};
 use crate::output::OutputState;
 use crate::value::{LispError, Value};
 use crate::docs::{self, SourceIndex};
-use crate::{agenda_builtins, builtins, db_builtins, editor, eval, output, parser, prelude, sheet_builtins};
+use crate::{builtins, editor, eval, output, parser, prelude};
+#[cfg(feature = "sqlite")]
+use crate::{agenda_builtins, db_builtins, sheet_builtins};
 
 pub struct Interpreter {
     pub global: Env,
+    #[cfg(feature = "sqlite")]
     pub database: Rc<RefCell<Database>>,
+    #[cfg(feature = "sqlite")]
     pub agendas: Rc<RefCell<Agendas>>,
     pub output: Rc<RefCell<OutputState>>,
     /// Host-installed editor callbacks (buffer-text / insert-at / …). Empty ⇒ headless.
@@ -23,30 +29,43 @@ pub struct Interpreter {
     pub sources: Rc<RefCell<SourceIndex>>,
     /// Why the database in use isn't the one the host asked for, when it isn't. `(database-info)`
     /// reports it, so a host can tell the user their data is not being saved.
+    #[cfg(feature = "sqlite")]
     pub database_error: Rc<RefCell<Option<String>>>,
     /// The open sheets — shared with the `sheet-*` builtins.
+    #[cfg(feature = "sqlite")]
     pub sheets: Rc<RefCell<crate::sheet::Sheets>>,
 }
 
 impl Interpreter {
     /// In-memory database (the default).
+    #[cfg(feature = "sqlite")]
     pub fn new() -> Self {
         Self::with_database(":memory:")
     }
 
+    /// The language alone: built without the `sqlite` feature there's no database, agenda or
+    /// sheets.
+    #[cfg(not(feature = "sqlite"))]
+    pub fn new() -> Self {
+        Self::build()
+    }
+
     /// Open (or create) a database at `path` — `:memory:` for in-memory. Panics if it can't be
     /// opened; a host that must keep running uses [`Interpreter::with_database_or_memory`].
+    #[cfg(feature = "sqlite")]
     pub fn with_database(path: &str) -> Self {
         Self::try_with_database(path).unwrap_or_else(|e| panic!("failed to open database {}: {}", path, e))
     }
 
     /// Open (or create) a database at `path`, creating its folder if needed.
+    #[cfg(feature = "sqlite")]
     pub fn try_with_database(path: &str) -> Result<Self, LispError> {
         Ok(Self::build(open_database_file(path)?))
     }
 
     /// Open `path`, or — if that fails — run on an in-memory database and remember why, so the
     /// engine still answers and `(database-info)` can say the data isn't being kept.
+    #[cfg(feature = "sqlite")]
     pub fn with_database_or_memory(path: &str) -> Self {
         match Self::try_with_database(path) {
             Ok(it) => it,
@@ -58,18 +77,21 @@ impl Interpreter {
         }
     }
 
-    fn build(database: Database) -> Self {
+    fn build(#[cfg(feature = "sqlite")] database: Database) -> Self {
         let global = env::root();
         builtins::register(&global);
         crate::bytes::register(&global);
 
-        let reg = Rc::new(RefCell::new(Agendas::new(agenda::agenda_name_from_path(database.path()))));
-        let db = Rc::new(RefCell::new(database));
-        let database_error = Rc::new(RefCell::new(None));
-
-        db_builtins::register(&global, db.clone());
-        db_builtins::register_info(&global, db.clone(), database_error.clone());
-        agenda_builtins::register(&global, db.clone(), reg.clone());
+        #[cfg(feature = "sqlite")]
+        let (reg, db, database_error) = {
+            let reg = Rc::new(RefCell::new(Agendas::new(agenda::agenda_name_from_path(database.path()))));
+            let db = Rc::new(RefCell::new(database));
+            let database_error = Rc::new(RefCell::new(None));
+            db_builtins::register(&global, db.clone());
+            db_builtins::register_info(&global, db.clone(), database_error.clone());
+            agenda_builtins::register(&global, db.clone(), reg.clone());
+            (reg, db, database_error)
+        };
 
         // output capture (echo to stdout by default — CLI/REPL) overrides the stdout print/println
         let out = Rc::new(RefCell::new(OutputState { buffer: String::new(), echo: true }));
@@ -80,7 +102,9 @@ impl Interpreter {
         editor::register(&global, ed.clone());
 
         // sheets — their names resolve against the host's (current-dir)
+        #[cfg(feature = "sqlite")]
         let sheets = Rc::new(RefCell::new(crate::sheet::Sheets::default()));
+        #[cfg(feature = "sqlite")]
         sheet_builtins::register(&global, ed.clone(), sheets.clone());
 
         // (functions …) / (source …) — needs the output channel and the definition index
@@ -89,12 +113,16 @@ impl Interpreter {
 
         let it = Interpreter {
             global,
+            #[cfg(feature = "sqlite")]
             database: db,
+            #[cfg(feature = "sqlite")]
             agendas: reg,
             output: out,
             editor: ed,
             sources,
+            #[cfg(feature = "sqlite")]
             database_error,
+            #[cfg(feature = "sqlite")]
             sheets,
         };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
@@ -109,6 +137,7 @@ impl Interpreter {
     ///
     /// If the file can't be opened the engine moves to an in-memory database rather than staying
     /// on the old one: writing into the previous workspace's data would be the worse surprise.
+    #[cfg(feature = "sqlite")]
     pub fn open_database(&self, path: &str) -> Result<(), LispError> {
         let (next, result) = match open_database_file(path) {
             Ok(d) => (d, Ok(())),
@@ -124,6 +153,7 @@ impl Interpreter {
     }
 
     /// The engine's database as the bytes of a SQLite file — tables, items, rules, views.
+    #[cfg(feature = "sqlite")]
     pub fn export_database(&self) -> Result<Vec<u8>, LispError> {
         self.database.borrow().to_bytes()
     }
@@ -131,6 +161,7 @@ impl Interpreter {
     /// Replace the engine's database with one given as bytes (see [`Interpreter::export_database`]).
     /// Like [`Interpreter::open_database`], definitions in the environment stay; the data is the
     /// new one's. Bytes that aren't a SQLite database are refused and the current data kept.
+    #[cfg(feature = "sqlite")]
     pub fn import_database(&self, bytes: &[u8]) -> Result<(), LispError> {
         let mut next = Database::from_bytes(bytes)?;
         agenda::ensure_agenda_tables(&mut next)?;
@@ -144,12 +175,14 @@ impl Interpreter {
 
     /// A sheet given as the bytes of a `.eesheet` file, open from now on under `name` — resolved the
     /// way `(sheet-open name)` resolves it, so the formulas and forms that name it find it.
+    #[cfg(feature = "sqlite")]
     pub fn import_sheet(&self, name: &str, bytes: &[u8]) -> Result<(), LispError> {
         let path = sheet_builtins::resolve(&self.editor, name)?;
         self.sheets.borrow_mut().import(&path, bytes)
     }
 
     /// An open sheet as the bytes of a `.eesheet` file.
+    #[cfg(feature = "sqlite")]
     pub fn export_sheet(&self, name: &str) -> Result<Vec<u8>, LispError> {
         let path = sheet_builtins::resolve(&self.editor, name)?;
         let mut sheets = self.sheets.borrow_mut();
@@ -160,11 +193,13 @@ impl Interpreter {
     }
 
     /// Every open sheet, as `(path, version)` — a version that moved is a sheet to keep again.
+    #[cfg(feature = "sqlite")]
     pub fn sheet_versions(&self) -> Vec<(String, i64)> {
         self.sheets.borrow().versions().into_iter().map(|(p, v)| (p.display().to_string(), v)).collect()
     }
 
     /// Changes to the database's rows since it was opened or imported.
+    #[cfg(feature = "sqlite")]
     pub fn database_changes(&self) -> u64 {
         self.database.borrow().total_changes()
     }
@@ -224,6 +259,7 @@ impl Interpreter {
 
 /// Open a database with the agenda tables in place. A file's folder is created first — a fresh
 /// workspace has no `.eeditor/` yet, and SQLite won't make one.
+#[cfg(feature = "sqlite")]
 fn open_database_file(path: &str) -> Result<Database, LispError> {
     if path != ":memory:" && !path.is_empty() {
         if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {

@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite")]
 //! Small gaps found by writing the Zero to Hero book (eeditor-next docs/ROADMAP.md item 16), each
 //! pinned here so it stays closed.
 

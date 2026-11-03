@@ -31,7 +31,11 @@ pub struct Entry {
 }
 
 /// The manual, in reading order: core language, database, agenda, sheets, editor RPC.
+#[cfg(feature = "sqlite")]
 pub static TABLES: &[&[Entry]] = &[CORE, BYTES, DATABASE, AGENDA, SHEETS, EDITOR];
+/// Without the `sqlite` feature there's no database, agenda or sheets to describe.
+#[cfg(not(feature = "sqlite"))]
+pub static TABLES: &[&[Entry]] = &[CORE, BYTES, EDITOR];
 
 pub fn builtins() -> impl Iterator<Item = &'static Entry> {
     TABLES.iter().flat_map(|t| t.iter())

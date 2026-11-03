@@ -905,7 +905,7 @@ fn csv_records(args: &[Value], _: &Env) -> Result<Value, LispError> {
                 let t = raw.trim();
                 let v = if t.is_empty() {
                     Value::Null
-                } else if crate::sheet::looks_numeric(t) {
+                } else if looks_numeric(t) {
                     t.parse::<f64>().map(Value::Number).unwrap_or_else(|_| Value::Str(raw.into()))
                 } else {
                     Value::Str(raw.into())
@@ -1113,4 +1113,36 @@ fn value_to_natural(v: &Value) -> serde_json::Value {
         }
         other => J::String(crate::printer::print_value(other, false)),
     }
+}
+
+/// `12`, `-3.5`, `.5`, `1e3` — but not `inf`, `NaN` or `0x1F`, which Rust would happily parse.
+pub fn looks_numeric(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let (mut digits, mut dot) = (0, false);
+    while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot)) {
+        if b[i] == b'.' {
+            dot = true;
+        } else {
+            digits += 1;
+        }
+        i += 1;
+    }
+    if digits == 0 {
+        return false;
+    }
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let exp_start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == exp_start {
+            return false;
+        }
+    }
+    i == b.len()
 }

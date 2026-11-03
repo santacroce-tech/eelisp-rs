@@ -14,6 +14,7 @@ fn s(it: &Interpreter, src: &str) -> String {
 // ── structured view values ──
 
 #[test]
+#[cfg(feature = "sqlite")] // tables
 fn browse_returns_table_view() {
     let it = Interpreter::new();
     it.eval_str("(deftable t (x:number))").unwrap();
@@ -42,6 +43,7 @@ fn eval_host_scalar_envelope() {
 }
 
 #[test]
+#[cfg(feature = "sqlite")] // tables
 fn eval_json_tags_structured_values() {
     let it = Interpreter::new();
     it.eval_str("(deftable c (name:string))").unwrap();
