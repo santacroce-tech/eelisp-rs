@@ -246,6 +246,44 @@ impl Interpreter {
         envelope.to_string()
     }
 
+    // ── giving the language new powers ───────────────────────────────
+
+    /// Add a function to the language, written in Rust: how a host lets scripts reach into it (a
+    /// game's `set-block`, an app's `notify`). Its arguments arrive evaluated. It replaces any
+    /// function of the same name.
+    ///
+    /// ```
+    /// use eelisp::{Interpreter, Value};
+    /// let it = Interpreter::new();
+    /// it.define_fn("double", |args| match args.first() {
+    ///     Some(Value::Number(n)) => Ok(Value::Number(n * 2.0)),
+    ///     _ => Err(eelisp::LispError::Runtime("double wants a number".into())),
+    /// });
+    /// assert!(matches!(it.eval_str("(double 21)"), Ok(Value::Number(n)) if n == 42.0));
+    /// ```
+    pub fn define_fn(&self, name: &str, f: impl Fn(&[Value]) -> Result<Value, LispError> + 'static) {
+        env::define(
+            &self.global,
+            name,
+            Value::Builtin(Rc::new(crate::value::Builtin {
+                name: name.into(),
+                arg_mode: crate::value::ArgMode::Eval,
+                func: Box::new(move |args, _| f(args)),
+            })),
+        );
+    }
+
+    /// Call a function the script defined, by name, with these arguments: how a host tells a
+    /// script that something happened (`(on-join player name)`). `None` if there's no such
+    /// function, so a script only defines the handlers it wants.
+    pub fn call(&self, name: &str, args: &[Value]) -> Option<Result<Value, LispError>> {
+        let f = env::get(&self.global, name).ok()?;
+        if !matches!(f, Value::Function(_) | Value::Builtin(_)) {
+            return None;
+        }
+        Some(eval::apply_value(&f, args, &self.global))
+    }
+
     /// Toggle whether captured output also mirrors to stdout (on for CLI, off for a host).
     pub fn set_echo(&self, echo: bool) {
         self.output.borrow_mut().echo = echo;
