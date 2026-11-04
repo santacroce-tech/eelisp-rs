@@ -343,6 +343,11 @@ foo       str-len   a.b        <span class="c">; symbols — names</span>
 <pre class="lisp"><code><span class="p">(</span>parse <span class="s">&quot;(+ 1 2)&quot;</span><span class="p">)</span>                  <span class="c">; → the list (+ 1 2), not evaluated</span>
 <span class="p">(</span>eval <span class="p">(</span>parse <span class="s">&quot;(+ 1 2)&quot;</span><span class="p">)</span><span class="p">)</span>           <span class="c">; → 3</span>
 <span class="p">(</span>eval <span class="p">(</span>list <span class="p">&#x27;</span>* <span class="n">6</span> <span class="n">7</span><span class="p">)</span><span class="p">)</span>               <span class="c">; → 42</span></code></pre>
+<p><code>eval</code> runs its form at the top level. It sees everything defined globally, but not the local variables of the function that calls it, which is the rule in Scheme, Common Lisp and Clojure:</p>
+<pre class="lisp"><code><span class="p">(</span><span class="f">def</span> x <span class="s">&quot;global&quot;</span><span class="p">)</span>
+<span class="p">(</span><span class="f">defn</span> f <span class="p">(</span>x<span class="p">)</span> <span class="p">(</span>eval <span class="p">&#x27;</span>x<span class="p">)</span><span class="p">)</span>
+<span class="p">(</span>f <span class="s">&quot;local&quot;</span><span class="p">)</span>                        <span class="c">; → &quot;global&quot;</span></code></pre>
+<p>To evaluate code that uses a value, put the value in the code: <code>(eval (list &#x27;+ n 1))</code>.</p>
 <p>The agenda's <a href="#06-agenda-rules">rules</a> depend on this. A rule's condition is stored as text in the database, then read back and evaluated against each item.</p>
 <h2 id="03-language-errors">Errors<a class="anchor" href="#03-language-errors" aria-label="Link to this section">#</a></h2>
 <p>An error stops evaluation and reports one line:</p>
@@ -1460,7 +1465,7 @@ cargo build --no-default-features --target wasm32-unknown-unknown --lib   # …f
 <pre class="lisp"><code><span class="p">(</span>println <span class="s">&quot;total:&quot;</span> <span class="n">42</span><span class="p">)</span></code></pre>
 <h3 id="reference-eval">eval<a class="anchor" href="#reference-eval" aria-label="Link to this section">#</a></h3>
 <p><code>(eval form)</code></p>
-<p>Evaluates a value as code — the other half of <code>parse</code>.</p>
+<p>Evaluates a value as code — the other half of <code>parse</code> — at the top level: it sees global definitions, not the caller's local variables.</p>
 <pre class="lisp"><code><span class="p">(</span>eval <span class="p">(</span>parse <span class="s">&quot;(+ 1 2)&quot;</span><span class="p">)</span><span class="p">)</span>   <span class="r">→ 3</span></code></pre>
 <h3 id="reference-apply">apply<a class="anchor" href="#reference-apply" aria-label="Link to this section">#</a></h3>
 <p><code>(apply f args)</code></p>

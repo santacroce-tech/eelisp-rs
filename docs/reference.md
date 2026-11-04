@@ -1060,7 +1060,7 @@ Prints its arguments and a newline.
 
 `(eval form)`
 
-Evaluates a value as code — the other half of `parse`.
+Evaluates a value as code — the other half of `parse` — at the top level: it sees global definitions, not the caller's local variables.
 
 ```lisp
 (eval (parse "(+ 1 2)"))   → 3

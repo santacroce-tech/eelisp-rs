@@ -664,7 +664,7 @@ pub static CORE: &[Entry] = &[
     doc!("print", "(print x …) → nil", "Prints its arguments with no trailing newline. Captured by the host, not written to a terminal.",
          "(print \"a\" \"b\")"),
     doc!("println", "(println x …) → nil", "Prints its arguments and a newline.", "(println \"total:\" 42)"),
-    doc!("eval", "(eval form)", "Evaluates a value as code — the other half of `parse`.", "(eval (parse \"(+ 1 2)\"))   → 3"),
+    doc!("eval", "(eval form)", "Evaluates a value as code — the other half of `parse` — at the top level: it sees global definitions, not the caller's local variables.", "(eval (parse \"(+ 1 2)\"))   → 3"),
     doc!("apply", "(apply f args)", "Calls f with a list of arguments.", "(apply + '(1 2 3))   → 6"),
     doc!("vm-assemble", "(vm-assemble '(proto :params (…) :code (…))) → function", "Turns bytecode, written as a list of instructions, into a function that runs on the virtual machine. It is what the compiler emits; see src/vm.rs for the instructions.",
          "((vm-assemble '(proto :params (a b) :code ((load +) (load a) (load b) (tail-call 2)))) 2 3)   → 5"),

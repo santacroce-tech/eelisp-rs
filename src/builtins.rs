@@ -801,8 +801,11 @@ fn printlnf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     println!("{}", s.join(" "));
     Ok(Value::Null)
 }
+/// `eval` runs its form at the top level, in the global scope: it sees global definitions, never
+/// the local variables of the function that called it. That's the rule in Scheme, Common Lisp and
+/// Clojure, and what lets the compiler keep locals in slots (docs/self-hosting/06-slots.md).
 fn evalf(args: &[Value], env: &Env) -> Result<Value, LispError> {
-    eval(args[0].clone(), env.clone())
+    eval(args[0].clone(), crate::vm::root_of(env))
 }
 /// (error "message") — stop with an error of your own, which `try` can catch.
 fn errorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
