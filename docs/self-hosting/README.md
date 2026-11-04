@@ -11,6 +11,7 @@ become a book.
 | 3 | [A compiler in EELisp](03-a-compiler-in-eelisp.md) | `src/compiler.eel`: compiling each form, macros at compile time, and the differential test that keeps it honest |
 | 4 | [The bootstrap](04-the-bootstrap.md) | The compiler compiling itself, stage 0 and stage 1, and the fixed point that proves it works |
 | 5 | [Measuring](05-measuring.md) | A benchmark from real editor snippets, a compiler that was first slower than the interpreter, what fixed that, and the language decision that real speed needs |
+| 6 | [Locals in slots](06-slots.md) | `eval` joins the Lisp family's rule; the compiler resolves every variable to a slot, a captured cell or a global, keeping the interpreter's meaning exactly |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel` and `src/boot.rs`; the tests that back every claim made here are

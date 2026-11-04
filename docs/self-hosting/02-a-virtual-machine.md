@@ -98,7 +98,7 @@ variable to a numbered slot) but it means compiled code *can't* disagree with in
 about scoping. `def` inside a function defines in the function's scope; builtins receive the
 caller's environment; closures share scopes exactly as before. Faster variable access is an
 optimization the compiler can adopt later, with the interpreter's behavior already pinned down
-by tests.
+by tests. ([Chapter 6](06-slots.md) does exactly that.)
 
 ## Tail calls
 

@@ -123,3 +123,4 @@ With slots, the name `x` no longer exists at run time, so `eval` can't find it. 
 draw the line there (in JavaScript, Python or Clojure an `eval` doesn't see the caller's
 locals, or sees them only in special cases), but EELisp currently doesn't. Deciding where that
 line goes is a decision about the language, not about the compiler, so it comes before the code.
+[Chapter 6](06-slots.md) makes that decision and builds the slots.

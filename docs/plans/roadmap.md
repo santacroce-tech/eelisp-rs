@@ -76,8 +76,13 @@ binary nobody can reproduce), and it is the reference for testing.
   six fixes in the VM (copyable instructions, arguments passed in place, `recur` without the
   error path, builtins called by reference, a fused `def-pop`, reused machines) brought it to
   even: 0.9–1.15×, most real snippets ~1.05×. Big gains need locals in slots, which changes
-  whether `eval` can see a caller's locals: a language decision, pending. See
-  docs/self-hosting/05-measuring.md.
+  whether `eval` can see a caller's locals. See docs/self-hosting/05-measuring.md.
+- **Locals in slots — done.** Decision: `eval` runs at the top level (Scheme / Common Lisp /
+  Clojure rule), a documented clean break. The compiler resolves each variable to a frame slot, a
+  captured cell or a global; the VM's slot mode keeps locals in frames, so calls make no scope.
+  517 differential snippets (75 edge cases, 38 about slots) agree in all four setups; the image is
+  still a fixed point. Compiled code: 1.1–1.4× the interpreter on most workloads; `lists` ~0.95×
+  (time is in shared builtins). See docs/self-hosting/06-slots.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
@@ -87,6 +92,11 @@ Known differences from the interpreter (deliberate for now, each with a test to 
    runs; compiled code needed it when the function was compiled, and stops with "macro … reached
    at run time".
 3. A macro is expanded once, when its caller is compiled, not every time the caller runs.
+4. A `def` made *after* a closure in the same local scope isn't seen by that closure (the
+   interpreter's closure keeps the whole scope and would find it; compiled code resolved the name
+   to the global when it compiled the closure).
+5. A malformed form left to the interpreter (`(set! (f) 1)`…) doesn't see local variables, so its
+   error may read "undefined symbol" instead of the syntax error.
 
 Not yet measured: compiled code still looks variables up by name, like the interpreter, so it
 isn't expected to be much faster until the compiler resolves locals to slots.
