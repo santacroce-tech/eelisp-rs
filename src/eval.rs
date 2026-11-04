@@ -400,7 +400,7 @@ fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
     Ok(scope)
 }
 
-fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
+pub fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
     let scope = env::child(&m.closure);
     for (i, p) in m.params.iter().enumerate() {
         env::define_sym(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));

@@ -37,7 +37,8 @@
 //! | `(dict k…)` | pop one value per key, push a dict |
 //! | `(loop s…)` `(recur n)` `(end-loop)` | `loop`: mark a restart point that rebinds `s…`; `recur` pops `n` values and restarts |
 //! | `(try L)` `(end-try)` | on an error until `end-try`, unwind and jump to `L` with the error dict pushed |
-//! | `(label L)` | a jump target (no instruction) |
+//! | `(interp form)` | push what the interpreter makes of `form` in the current scope — the compiler's fallback for anything it doesn't compile yet |
+//! | `(label L)` | a jump target (no instruction); `L` is a symbol or a number |
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -72,6 +73,7 @@ pub enum Op {
     EndLoop,
     Try(u32),
     EndTry,
+    Interp(u32),
 }
 
 /// A compiled function body, before it closes over an environment.
@@ -99,6 +101,26 @@ pub fn close(proto: &Rc<Proto>, env: &Env) -> Value {
         closure: env.clone(),
         code: Some(proto.clone()),
     }))
+}
+
+/// Run a proto's code directly in `env` — no parameter scope — the way a top-level form runs:
+/// its `def`s land in `env`.
+pub fn run_in(proto: Rc<Proto>, env: Env) -> Result<Value, LispError> {
+    let mut vm = Vm { stack: Vec::new(), frames: Vec::new() };
+    vm.frames.push(Frame::new(proto, env, 0));
+    vm.run()
+}
+
+/// The global scope at the root of `env`'s chain.
+pub fn root_of(env: &Env) -> Env {
+    let mut cur = env.clone();
+    loop {
+        let parent = cur.borrow().parent.clone();
+        match parent {
+            Some(p) => cur = p,
+            None => return cur,
+        }
+    }
 }
 
 /// Call a compiled function with evaluated arguments. `f.code` must be set.
@@ -279,6 +301,11 @@ impl Vm {
                 Op::EndTry => {
                     fr.handlers.pop();
                 }
+                Op::Interp(i) => {
+                    let form = fr.proto.consts[i as usize].clone();
+                    let v = crate::eval::eval(form, fr.env.clone())?;
+                    self.stack.push(v);
+                }
             }
         }
     }
@@ -430,12 +457,12 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
     }
 
     // Pass 1: where each label lands.
-    let mut labels: HashMap<Sym, u32> = HashMap::new();
+    let mut labels: HashMap<String, u32> = HashMap::new();
     let mut at = 0u32;
     for f in code_forms {
         let parts = instr(f)?;
         if &*parts.0 == "label" {
-            let l = sym_of(parts.1.first().unwrap_or(&Value::Null), "a label")?;
+            let l = label_of(parts.1.first())?;
             if labels.insert(l.clone(), at).is_some() {
                 return Err(bad(format!("label {l} defined twice")));
             }
@@ -444,7 +471,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         }
     }
     let target = |v: Option<&Value>| -> Result<u32, LispError> {
-        let l = sym_of(v.unwrap_or(&Value::Null), "a jump target")?;
+        let l = label_of(v)?;
         labels.get(&l).copied().ok_or_else(|| bad(format!("no label {l}")))
     };
 
@@ -524,11 +551,25 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             "end-loop" => Op::EndLoop,
             "try" => Op::Try(target(args.first())?),
             "end-try" => Op::EndTry,
+            "interp" => {
+                arity(1)?;
+                p.consts.push(args[0].clone());
+                Op::Interp(p.consts.len() as u32 - 1)
+            }
             other => return Err(bad(format!("unknown instruction {other}"))),
         };
         p.code.push(o);
     }
     Ok(Rc::new(p))
+}
+
+fn label_of(v: Option<&Value>) -> Result<String, LispError> {
+    match v {
+        Some(Value::Symbol(s)) => Ok(s.to_string()),
+        Some(Value::Number(n)) => Ok(crate::printer::print_value(&Value::Number(*n), false)),
+        Some(Value::Str(s)) => Ok(s.clone()),
+        _ => Err(bad("a label is a symbol, a number or a string")),
+    }
 }
 
 fn instr(f: &Value) -> Result<(Sym, Vec<Value>), LispError> {
@@ -538,17 +579,45 @@ fn instr(f: &Value) -> Result<(Sym, Vec<Value>), LispError> {
     }
 }
 
+fn builtin(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) {
+    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.into(), arg_mode: ArgMode::Eval, func: Box::new(f) })));
+}
+
+fn one<'a>(name: &str, args: &'a [Value]) -> Result<&'a Value, LispError> {
+    match args {
+        [x] => Ok(x),
+        _ => Err(LispError::Arity { func: name.into(), expected: "1".into(), got: args.len() }),
+    }
+}
+
+/// What a global name means to the compiler: "macro" (expand it when compiling), "table-first"
+/// or "raw" (a builtin whose arguments are not all evaluated), or nil (compile an ordinary call).
+fn global_kind(name: &Value, env: &Env) -> Value {
+    let Value::Symbol(s) = name else { return Value::Null };
+    match env::get_sym(&root_of(env), s) {
+        Ok(Value::Macro(_)) => Value::Str("macro".into()),
+        Ok(Value::Builtin(b)) => match b.arg_mode {
+            ArgMode::Eval => Value::Null,
+            ArgMode::TableFirst => Value::Str("table-first".into()),
+            ArgMode::AllRaw => Value::Str("raw".into()),
+        },
+        _ => Value::Null,
+    }
+}
+
 pub fn register(env: &Env) {
-    env::define(
-        env,
-        "vm-assemble",
-        Value::Builtin(Rc::new(Builtin {
-            name: "vm-assemble".into(),
-            arg_mode: ArgMode::Eval,
-            func: Box::new(|args: &[Value], env: &Env| match args {
-                [form] => Ok(close(&assemble(form)?, env)),
-                _ => Err(LispError::Arity { func: "vm-assemble".into(), expected: "1".into(), got: args.len() }),
-            }),
-        })),
-    );
+    builtin(env, "vm-assemble", |args, env| Ok(close(&assemble(one("vm-assemble", args)?)?, env)));
+    builtin(env, "vm-run", |args, env| run_in(assemble(one("vm-run", args)?)?, root_of(env)));
+    builtin(env, "vm-global-kind", |args, env| Ok(global_kind(one("vm-global-kind", args)?, env)));
+    builtin(env, "vm-macroexpand", |args, env| {
+        let form = one("vm-macroexpand", args)?;
+        if let Value::List(items) = form {
+            if let Some(Value::Symbol(h)) = items.first() {
+                if let Ok(Value::Macro(m)) = env::get_sym(&root_of(env), h) {
+                    return crate::eval::expand_macro(&m, &items[1..]);
+                }
+            }
+        }
+        Ok(form.clone())
+    });
 }

@@ -1,0 +1,266 @@
+;; The EELisp compiler, written in EELisp: forms in, bytecode for the VM out (src/vm.rs).
+;; Roadmap step 2 (docs/plans/roadmap.md). For now the interpreter runs it; step 3 has it
+;; compile itself.
+;;
+;;   (compile form)      → a (proto …) form, the bytecode for one top-level form
+;;   (compile-run form)  → compiles the form and runs it at the top level
+;;
+;; Anything the compiler doesn't handle yet becomes an (interp form) instruction: the
+;; interpreter evaluates that form, in the same scope, with its exact meaning. So every program
+;; runs, and the compiler can grow one form at a time. `compiler-fallbacks` counts those places.
+;;
+;; Names starting with `compiler-` are its internals.
+
+;; How many forms were left to the interpreter so far.
+(def compiler-fallbacks 0)
+
+;; A fresh jump label.
+(def compiler-label-n 0)
+(defn compiler-label ()
+  (set! compiler-label-n (+ compiler-label-n 1))
+  compiler-label-n)
+
+;; Concatenate any number of instruction lists.
+(defn compiler-cat (. parts) (reduce append (list) parts))
+
+;; Is x one of the symbols in names?
+(defn compiler-member? (x names) (some? (fn (n) (= n x)) names))
+
+;; The forms the interpreter treats specially, whatever the scope says.
+(def compiler-specials
+  '(quote quasiquote if do begin def defn defun fn lambda defmacro set! let cond loop try recur and or for-each))
+
+;; The names a parameter list binds: `(a b . rest)` binds a, b and rest.
+(defn compiler-param-names (params)
+  (filter (fn (p) (and (symbol? p) (!= (->string p) "."))) params))
+
+;; Leave the form to the interpreter.
+(defn compiler-interp (x)
+  (set! compiler-fallbacks (+ compiler-fallbacks 1))
+  (list (list 'interp x)))
+
+(defn compiler-const (v) (list (list 'const v)))
+
+;; ── expressions ────────────────────────────────────────────────────────
+;; Every compile function takes the names bound in enclosing scopes (`locals`) and whether the
+;; form is in tail position (`tailp`), and returns a list of instructions that leaves the form's
+;; value on the stack.
+
+(defn compiler-expr (x locals tailp)
+  (cond
+    (symbol? x) (list (list 'load x))
+    (= (type x) "dict") (compiler-dict x locals)
+    (and (list? x) (not (empty? x))) (compiler-form x locals tailp)
+    true (compiler-const x)))
+
+;; Forms in sequence: every value but the last is dropped. No forms is nil.
+(defn compiler-body (forms locals tailp)
+  (cond
+    (empty? forms) (compiler-const nil)
+    (empty? (tail forms)) (compiler-expr (head forms) locals tailp)
+    true (compiler-cat (compiler-expr (head forms) locals false)
+                       (list (list 'pop))
+                       (compiler-body (tail forms) locals tailp))))
+
+;; A dict literal: each value is evaluated, keys stay as written.
+(defn compiler-dict (d locals)
+  (let (keys (dict-keys d))
+    (compiler-cat
+      (reduce (fn (acc k) (append acc (compiler-expr (dict-get d k) locals false))) (list) keys)
+      (list (cons 'dict keys)))))
+
+(defn compiler-form (x locals tailp)
+  (let (h (head x))
+    (cond
+      (and (symbol? h) (compiler-member? h compiler-specials)) (compiler-special h x locals tailp)
+      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "macro"))
+        (compiler-expr (vm-macroexpand x) locals tailp)
+      ;; builtins that don't evaluate all their arguments (deftable, query, …)
+      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "raw"))
+        (compiler-call-with x locals tailp (fn (a i locals) (compiler-const a)))
+      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "table-first"))
+        (compiler-call-with x locals tailp compiler-table-arg)
+      true (compiler-call x locals tailp))))
+
+;; A table command's first argument names the table as written — `(query contacts)` — unless
+;; it is a call, which is evaluated: `(query (str "con" "tacts"))`. The rest are evaluated.
+(defn compiler-table-arg (a i locals)
+  (if (and (= i 0) (not (and (list? a) (not (empty? a)))))
+    (compiler-const a)
+    (compiler-expr a locals false)))
+
+;; A call: the function, then its arguments, then call (or tail-call).
+(defn compiler-call (x locals tailp)
+  (compiler-call-with x locals tailp (fn (a i locals) (compiler-expr a locals false))))
+
+;; A call whose arguments compile with (arg-code argument index locals).
+(defn compiler-call-with (x locals tailp arg-code)
+  (let (args (tail x))
+    (compiler-cat
+      (compiler-expr (head x) locals false)
+      (reduce (fn (acc i) (append acc (arg-code (nth args i) i locals))) (list) (range 0 (length args)))
+      (list (list (if tailp 'tail-call 'call) (length args))))))
+
+;; ── special forms ──────────────────────────────────────────────────────
+
+(defn compiler-special (h x locals tailp)
+  (let (n (length x))
+    (cond
+      (= h 'quote) (compiler-const (if (> n 1) (nth x 1) nil))
+      (= h 'if) (if (< n 3) (compiler-interp x) (compiler-if x locals tailp))
+      (or (= h 'do) (= h 'begin)) (compiler-body (tail x) locals tailp)
+      (= h 'def) (compiler-def x locals)
+      (or (= h 'defn) (= h 'defun)) (compiler-defn x locals)
+      (or (= h 'fn) (= h 'lambda))
+        (if (and (> n 1) (list? (nth x 1)))
+          (list (list 'closure (compiler-proto nil (nth x 1) (drop 2 x) locals)))
+          (compiler-interp x))
+      (= h 'set!)
+        (if (and (> n 2) (symbol? (nth x 1)))
+          (compiler-cat (compiler-expr (nth x 2) locals false) (list (list 'set (nth x 1))))
+          (compiler-interp x))
+      (= h 'let) (if (< n 2) (compiler-interp x) (compiler-let x locals tailp))
+      (= h 'cond) (compiler-cond (tail x) locals tailp (compiler-label))
+      (= h 'and) (if (= n 1) (compiler-const true) (compiler-andor (tail x) locals tailp 'jump-if-false-or-pop (compiler-label)))
+      (= h 'or) (if (= n 1) (compiler-const false) (compiler-andor (tail x) locals tailp 'jump-if-true-or-pop (compiler-label)))
+      (= h 'loop) (if (< n 2) (compiler-interp x) (compiler-loop x locals))
+      (= h 'recur)
+        (compiler-cat
+          (reduce (fn (acc a) (append acc (compiler-expr a locals false))) (list) (tail x))
+          (list (list 'recur (- n 1))))
+      (= h 'try) (compiler-try x locals tailp)
+      ;; quasiquote, defmacro, for-each: the interpreter, for now
+      true (compiler-interp x))))
+
+(defn compiler-if (x locals tailp)
+  (let (else-l (compiler-label) end-l (compiler-label))
+    (compiler-cat
+      (compiler-expr (nth x 1) locals false)
+      (list (list 'jump-if-false else-l))
+      (compiler-expr (nth x 2) locals tailp)
+      (list (list 'jump end-l) (list 'label else-l))
+      (if (> (length x) 3) (compiler-expr (nth x 3) locals tailp) (compiler-const nil))
+      (list (list 'label end-l)))))
+
+;; A function body, as a proto. Its parameters are locals inside it.
+(defn compiler-proto (name params body locals)
+  (list 'proto :name name :params params :source body
+        :code (compiler-body body (append (compiler-param-names params) locals) true)))
+
+(defn compiler-def (x locals)
+  (cond
+    (< (length x) 3) (compiler-interp x)
+    (symbol? (nth x 1))
+      (compiler-cat (compiler-expr (nth x 2) locals false) (list (list 'def (nth x 1))))
+    ;; (def (name params…) body…)
+    (and (list? (nth x 1)) (not (empty? (nth x 1))) (symbol? (head (nth x 1))))
+      (let (name (head (nth x 1)))
+        (list (list 'closure (compiler-proto name (tail (nth x 1)) (drop 2 x) locals))
+              (list 'def name)))
+    true (compiler-interp x)))
+
+(defn compiler-defn (x locals)
+  (if (and (>= (length x) 3) (symbol? (nth x 1)) (list? (nth x 2)))
+    (list (list 'closure (compiler-proto (nth x 1) (nth x 2) (drop 3 x) locals))
+          (list 'def (nth x 1)))
+    (compiler-interp x)))
+
+;; The (name value) pairs of a let: flat `(a 1 b 2)` or nested `((a 1) (b 2))`. A pair whose
+;; name isn't a symbol binds nothing, as in the interpreter.
+(defn compiler-flat-pairs (binds)
+  (if (< (length binds) 2)
+    (list)
+    (let (rest (compiler-flat-pairs (drop 2 binds)))
+      (if (symbol? (head binds)) (cons (list (head binds) (second binds)) rest) rest))))
+
+(defn compiler-let-pairs (binds)
+  (cond
+    (not (list? binds)) (list)
+    (empty? binds) (list)
+    (symbol? (head binds)) (compiler-flat-pairs binds)
+    true (filter (fn (p) (and (list? p) (>= (length p) 2) (symbol? (head p)))) binds)))
+
+;; Each value is evaluated in the new scope, after the ones before it (let*).
+(defn compiler-bind (pairs locals)
+  (reduce (fn (acc p)
+            (append acc (compiler-cat (compiler-expr (second p) locals false)
+                                      (list (list 'def (head p)) (list 'pop)))))
+          (list) pairs))
+
+(defn compiler-let (x locals tailp)
+  (let (pairs (compiler-let-pairs (nth x 1))
+        inner (append (map head pairs) locals))
+    (compiler-cat
+      (list (list 'push-scope))
+      (compiler-bind pairs inner)
+      (compiler-body (drop 2 x) inner tailp)
+      (list (list 'pop-scope)))))
+
+;; Flat cond: test, result, test, result…; `else`, `otherwise` and `true` always match.
+(defn compiler-cond (clauses locals tailp end-l)
+  (if (< (length clauses) 2)
+    (compiler-cat (compiler-const nil) (list (list 'label end-l)))
+    (let (test (head clauses) result (second clauses) next-l (compiler-label))
+      (if (and (symbol? test) (compiler-member? test '(else otherwise)))
+        (compiler-cat (compiler-expr result locals tailp) (list (list 'label end-l)))
+        (compiler-cat
+          (compiler-expr test locals false)
+          (list (list 'jump-if-false next-l))
+          (compiler-expr result locals tailp)
+          (list (list 'jump end-l) (list 'label next-l))
+          (compiler-cond (drop 2 clauses) locals tailp end-l))))))
+
+;; and / or: every value but the last can end the form early.
+(defn compiler-andor (forms locals tailp jump end-l)
+  (if (empty? (tail forms))
+    (compiler-cat (compiler-expr (head forms) locals tailp) (list (list 'label end-l)))
+    (compiler-cat
+      (compiler-expr (head forms) locals false)
+      (list (list jump end-l))
+      (compiler-andor (tail forms) locals tailp jump end-l))))
+
+;; (loop (a 1 b 2) body): the body is one form; `recur` rebinds the names and starts it again.
+(defn compiler-loop (x locals)
+  (let (pairs (if (list? (nth x 1)) (compiler-flat-pairs (nth x 1)) (list))
+        names (map head pairs)
+        inner (append names locals))
+    (compiler-cat
+      (list (list 'push-scope))
+      (compiler-bind pairs inner)
+      (list (cons 'loop names))
+      (if (> (length x) 2) (compiler-expr (nth x 2) inner false) (compiler-const nil))
+      (list (list 'end-loop) (list 'pop-scope)))))
+
+;; (try body… (catch e handler…)). The body is never a tail call: its error must land here.
+(defn compiler-try (x locals tailp)
+  (let (last-form (last x)
+        catch? (and (> (length x) 1) (list? last-form) (not (empty? last-form)) (= (head last-form) 'catch))
+        body (if catch? (take (- (length x) 2) (tail x)) (tail x))
+        catch-l (compiler-label)
+        end-l (compiler-label))
+    (compiler-cat
+      (list (list 'try catch-l))
+      (compiler-body body locals false)
+      (list (list 'end-try) (list 'jump end-l) (list 'label catch-l))
+      (if catch? (compiler-catch last-form locals tailp) (list (list 'pop) (list 'const nil)))
+      (list (list 'label end-l)))))
+
+;; The handler runs with the error dict on the stack, bound to the catch name if there is one.
+(defn compiler-catch (c locals tailp)
+  (let (name (if (> (length c) 1) (nth c 1) nil)
+        inner (if (symbol? name) (cons name locals) locals))
+    (compiler-cat
+      (list (list 'push-scope))
+      (if (symbol? name) (list (list 'def name) (list 'pop)) (list (list 'pop)))
+      (compiler-body (drop 2 c) inner tailp)
+      (list (list 'pop-scope)))))
+
+;; ── entry points ───────────────────────────────────────────────────────
+
+;; The bytecode for one top-level form, as a (proto …) form.
+(defn compile (form)
+  (list 'proto :name nil :params (list) :source (list form)
+        :code (compiler-expr form (list) true)))
+
+;; Compile a top-level form and run it, in the global scope.
+(defn compile-run (form) (vm-run (compile form)))

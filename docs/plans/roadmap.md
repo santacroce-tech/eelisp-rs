@@ -54,6 +54,29 @@ binary nobody can reproduce), and it is the reference for testing.
 | 4 | **Switch `eval` to compile + VM.** Behind a feature or option first. | Full `cargo test` passes on the VM; an eeditor-based benchmark is at least even. |
 | 5 | **Move libraries up into EELisp.** The prelude first, then agenda and sheet logic. | Tests stay green; less Rust in `builtins.rs`, `agenda.rs` and `sheet.rs`. |
 
+## Status
+
+- **Step 1 — done.** `src/vm.rs`, `tests/vm.rs`. Bytecode is written as EELisp data and turned
+  into functions by `vm-assemble` / `vm-run`.
+- **Step 2 — working.** `src/compiler.eel`, `tests/compiler.rs`. The differential test reads 434
+  snippets out of seven test suites (lang, book_gaps, bytes, csv, host, agenda_advanced,
+  db_agenda) and runs them on the interpreter and through the compiler. All 434 agree in three
+  setups: compiler interpreted, prelude compiled, and **compiler compiled by itself**. Only 3
+  forms fall back to the interpreter (`(interp form)`): `defmacro`, `for-each`, and a malformed
+  `defun`. `quasiquote` falls back too, but no snippet hits it outside a macro.
+
+Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
+
+1. Calling something that isn't a function: the interpreter reports "expected function" before
+   evaluating the arguments; compiled code evaluates them first, so an error in an argument wins.
+2. A macro defined *after* a function that uses it: the interpreter expands it when the function
+   runs; compiled code needed it when the function was compiled, and stops with "macro … reached
+   at run time".
+3. A macro is expanded once, when its caller is compiled, not every time the caller runs.
+
+Next in step 2: compile `quasiquote`, `for-each` and `defmacro` instead of falling back, then
+measure (the compiler is not yet faster: it still looks variables up by name).
+
 ## Later (dream list, independent of the steps above)
 
 - Native backends from the same compiler: C, then RISC-V.
