@@ -37,6 +37,9 @@ enum Setup {
     CompiledPrelude,
     /// The compiler has compiled itself: the code doing the compiling is bytecode on the VM.
     SelfCompiled,
+    /// The compiler comes from the committed image (boot/compiler.image) alone; its source is
+    /// never interpreted.
+    FromImage,
 }
 
 impl Setup {
@@ -45,16 +48,24 @@ impl Setup {
             Setup::Plain => "interpreted compiler",
             Setup::CompiledPrelude => "compiled prelude",
             Setup::SelfCompiled => "self-compiled compiler",
+            Setup::FromImage => "compiler from the image",
         }
     }
 }
 
 fn engine(setup: Setup) -> Interpreter {
+    if let Setup::FromImage = setup {
+        let image = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/boot/compiler.image")).unwrap();
+        let it = eelisp::boot::with_image(&image).unwrap();
+        it.eval_str("(set! compiler-fallbacks 0)").unwrap();
+        return it;
+    }
     let it = compiling_engine();
     match setup {
         Setup::Plain => {}
         Setup::CompiledPrelude => recompile(&it, eelisp::prelude::PRELUDE),
         Setup::SelfCompiled => recompile(&it, COMPILER),
+        Setup::FromImage => unreachable!(),
     }
     // count only what the test's own snippets leave to the interpreter
     it.eval_str("(set! compiler-fallbacks 0)").unwrap();
@@ -190,6 +201,11 @@ fn with_the_prelude_compiled_too() {
 #[test]
 fn with_the_compiler_compiled_by_itself() {
     agree(Setup::SelfCompiled);
+}
+
+#[test]
+fn with_the_compiler_loaded_from_the_image() {
+    agree(Setup::FromImage);
 }
 
 /// Cases the suites barely touch: quasiquote, for-each and defmacro, edges included. Run in

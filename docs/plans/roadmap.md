@@ -66,6 +66,14 @@ binary nobody can reproduce), and it is the reference for testing.
   compiled, and **compiler compiled by itself**. The only forms left to the interpreter
   (`(interp form)`) are malformed ones (`(def x)`, `(defmacro)`…), so their error is its own.
 
+- **Step 3 — done.** `src/boot.rs`, `boot/compiler.image`, `examples/bootstrap.rs`,
+  `tests/bootstrap.rs`. Stage 0 (interpreted compiler) and stage 1 (compiler loaded from the
+  image, bytecode only) produce the same image, character for character: 36 protos, ~50 KB of
+  readable EELisp, with no `(interp …)` in it. A test fails if the committed image is stale, and
+  the differential suite runs a fourth time with the compiler loaded from the image alone.
+  Speed (release build, `cargo run --release --example bootstrap`): both stages take ~17 ms, so
+  compiled and interpreted are even for now.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before

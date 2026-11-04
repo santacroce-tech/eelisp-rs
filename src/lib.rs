@@ -15,6 +15,7 @@
 pub mod agenda;
 #[cfg(feature = "sqlite")]
 pub mod agenda_builtins;
+pub mod boot;
 pub mod builtins;
 pub mod bytes;
 #[cfg(feature = "sqlite")]
