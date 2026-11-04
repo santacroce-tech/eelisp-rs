@@ -141,6 +141,54 @@ fn notes_are_read_from_the_workspace() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `dir-list` / `file-info`: one folder as a file manager draws it — folders first, by name whatever
+/// the case, with size, change time and extension — hidden entries only when asked, and never a
+/// folder outside the workspace.
+#[test]
+fn folders_are_listed_from_the_workspace() {
+    let dir = std::env::temp_dir().join(format!("eelisp-dirs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for d in ["reviews", ".eeditor", "Assets"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    std::fs::write(dir.join("inbox.md"), "# Inbox").unwrap();
+    std::fs::write(dir.join("Budget.eesheet"), "12345").unwrap();
+    std::fs::write(dir.join("README"), "x").unwrap();
+    std::fs::write(dir.join(".hidden.md"), "no").unwrap();
+    std::fs::write(dir.join("reviews/week.MD"), "done").unwrap();
+
+    let it = Interpreter::new();
+    let root = dir.display().to_string();
+    it.editor.borrow_mut().current_dir = Some(Box::new(move || root.clone()));
+
+    let names = |src: &str| s(&it, &format!("(map (fn (e) (dict-get e :name)) {src})"));
+    assert_eq!(names("(dir-list)"), "(Assets reviews Budget.eesheet inbox.md README)");
+    assert_eq!(names("(dir-list nil :hidden true)"), "(.eeditor Assets reviews .hidden.md Budget.eesheet inbox.md README)");
+    assert_eq!(names("(dir-list \"reviews\")"), "(week.MD)");
+    assert_eq!(s(&it, "(dir-list \"nowhere\")"), "nil");
+
+    let budget = "(file-info \"Budget.eesheet\")";
+    assert_eq!(s(&it, &format!("(dict-get {budget} :size)")), "5");
+    assert_eq!(s(&it, &format!("(dict-get {budget} :ext)")), "eesheet");
+    assert_eq!(s(&it, &format!("(dict-get {budget} :dir)")), "false");
+    assert_eq!(s(&it, "(dict-get (file-info \"reviews/week.MD\") :path)"), "reviews/week.MD");
+    assert_eq!(s(&it, "(dict-get (file-info \"reviews/week.MD\") :ext)"), "md");
+    assert_eq!(s(&it, "(dict-get (file-info \"README\") :ext)"), "");
+    assert_eq!(s(&it, "(dict-get (file-info \"reviews\") :dir)"), "true");
+    assert_eq!(s(&it, "(dict-get (file-info \"reviews\") :size)"), "0");
+    assert_eq!(s(&it, "(file-info \"missing.md\")"), "nil");
+    // changed within the last minute, on the same clock as (now)
+    assert_eq!(s(&it, "(< (abs (- (now) (dict-get (file-info \"inbox.md\") :modified))) 60)"), "true");
+
+    for bad in ["(dir-list \"..\")", "(dir-list \"/etc\")", "(file-info \"../x\")"] {
+        let e = it.eval_str(bad).unwrap_err().to_string();
+        assert!(e.contains("workspace"), "{bad}: {e}");
+    }
+    assert!(it.eval_str("(dir-list \"inbox.md\")").unwrap_err().to_string().contains("not a folder"));
+    assert!(it.eval_str("(dir-list 3)").is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn editor_mutation_callback() {
     let it = Interpreter::new();
