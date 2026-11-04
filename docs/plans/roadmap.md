@@ -58,12 +58,13 @@ binary nobody can reproduce), and it is the reference for testing.
 
 - **Step 1 — done.** `src/vm.rs`, `tests/vm.rs`. Bytecode is written as EELisp data and turned
   into functions by `vm-assemble` / `vm-run`.
-- **Step 2 — working.** `src/compiler.eel`, `tests/compiler.rs`. The differential test reads 434
-  snippets out of seven test suites (lang, book_gaps, bytes, csv, host, agenda_advanced,
-  db_agenda) and runs them on the interpreter and through the compiler. All 434 agree in three
-  setups: compiler interpreted, prelude compiled, and **compiler compiled by itself**. Only 3
-  forms fall back to the interpreter (`(interp form)`): `defmacro`, `for-each`, and a malformed
-  `defun`. `quasiquote` falls back too, but no snippet hits it outside a macro.
+- **Step 2 — done.** `src/compiler.eel`, `tests/compiler.rs`. Every special form compiles,
+  `quasiquote`, `for-each` and `defmacro` included (compiled macros expand by running bytecode).
+  The differential test reads 434 snippets out of seven test suites (lang, book_gaps, bytes,
+  csv, host, agenda_advanced, db_agenda), adds 37 edge cases, and runs all 471 on the
+  interpreter and through the compiler. All agree in three setups: compiler interpreted, prelude
+  compiled, and **compiler compiled by itself**. The only forms left to the interpreter
+  (`(interp form)`) are malformed ones (`(def x)`, `(defmacro)`…), so their error is its own.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
@@ -74,8 +75,8 @@ Known differences from the interpreter (deliberate for now, each with a test to 
    at run time".
 3. A macro is expanded once, when its caller is compiled, not every time the caller runs.
 
-Next in step 2: compile `quasiquote`, `for-each` and `defmacro` instead of falling back, then
-measure (the compiler is not yet faster: it still looks variables up by name).
+Not yet measured: compiled code still looks variables up by name, like the interpreter, so it
+isn't expected to be much faster until the compiler resolves locals to slots.
 
 ## Later (dream list, independent of the steps above)
 

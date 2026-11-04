@@ -401,6 +401,9 @@ fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
 }
 
 pub fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
+    if let Some(code) = &m.code {
+        return crate::vm::call_proto(code.clone(), &m.closure, args.to_vec());
+    }
     let scope = env::child(&m.closure);
     for (i, p) in m.params.iter().enumerate() {
         env::define_sym(&scope, p, args.get(i).cloned().unwrap_or(Value::Null));
@@ -546,6 +549,7 @@ fn eval_defmacro(items: &[Value], env: &Env) -> Result<Value, LispError> {
             rest,
             body: items[3..].to_vec(),
             closure: env.clone(),
+            code: None,
         };
         let val = Value::Macro(Rc::new(m));
         env::define_sym(env, name, val.clone());

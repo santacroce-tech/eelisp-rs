@@ -5,9 +5,10 @@
 ;;   (compile form)      → a (proto …) form, the bytecode for one top-level form
 ;;   (compile-run form)  → compiles the form and runs it at the top level
 ;;
-;; Anything the compiler doesn't handle yet becomes an (interp form) instruction: the
-;; interpreter evaluates that form, in the same scope, with its exact meaning. So every program
-;; runs, and the compiler can grow one form at a time. `compiler-fallbacks` counts those places.
+;; Anything the compiler doesn't handle becomes an (interp form) instruction: the interpreter
+;; evaluates that form, in the same scope, with its exact meaning. Today that is only malformed
+;; forms (`(def x)`, `(if)`…), so their error is the interpreter's own. `compiler-fallbacks`
+;; counts those places.
 ;;
 ;; Names starting with `compiler-` are its internals.
 
@@ -129,7 +130,9 @@
           (reduce (fn (acc a) (append acc (compiler-expr a locals false))) (list) (tail x))
           (list (list 'recur (- n 1))))
       (= h 'try) (compiler-try x locals tailp)
-      ;; quasiquote, defmacro, for-each: the interpreter, for now
+      (= h 'quasiquote) (compiler-qq (if (> n 1) (nth x 1) nil) locals)
+      (= h 'for-each) (if (< n 3) (compiler-interp x) (compiler-for-each x locals))
+      (= h 'defmacro) (compiler-defmacro x locals)
       true (compiler-interp x))))
 
 (defn compiler-if (x locals tailp)
@@ -254,6 +257,52 @@
       (if (symbol? name) (list (list 'def name) (list 'pop)) (list (list 'pop)))
       (compiler-body (drop 2 c) inner tailp)
       (list (list 'pop-scope)))))
+
+;; Is x a two-element form headed by the symbol name — (unquote v), (unquote-splicing v)?
+(defn compiler-unquote? (x name)
+  (and (list? x) (= (length x) 2) (= (head x) name)))
+
+;; A quasiquote template: lists are rebuilt, ,x is evaluated, ,@x is spliced in, anything else
+;; (dicts included) stays as written.
+(defn compiler-qq (e locals)
+  (cond
+    (not (list? e)) (compiler-const e)
+    (compiler-unquote? e 'unquote) (compiler-expr (second e) locals false)
+    true (compiler-cat
+           (reduce (fn (acc it)
+                     (append acc (if (compiler-unquote? it 'unquote-splicing)
+                                   (compiler-expr (second it) locals false)
+                                   (compiler-qq it locals))))
+                   (list) e)
+           (list (cons 'make-list
+                       (map (fn (it) (if (compiler-unquote? it 'unquote-splicing) 'splice 'item)) e))))))
+
+;; (for-each var list body…): the body runs once per element, in a fresh scope binding var, and
+;; the form is nil. A var that isn't a symbol makes the whole form nil, list unevaluated.
+(defn compiler-for-each (x locals)
+  (let (var (nth x 1)
+        inner (cons var locals)
+        top-l (compiler-label)
+        end-l (compiler-label))
+    (if (not (symbol? var))
+      (compiler-const nil)
+      (compiler-cat
+        (compiler-expr (nth x 2) locals false)
+        (compiler-const 0)
+        (list (list 'label top-l) (list 'next-item end-l)
+              (list 'push-scope) (list 'def var) (list 'pop))
+        (reduce (fn (acc f) (compiler-cat acc (compiler-expr f inner false) (list (list 'pop))))
+                (list) (drop 3 x))
+        (list (list 'pop-scope) (list 'jump top-l) (list 'label end-l))
+        (compiler-const nil)))))
+
+;; (defmacro name (params) body…): the expander is compiled like a function body; it runs, at
+;; compile time, on the unevaluated argument forms.
+(defn compiler-defmacro (x locals)
+  (if (and (>= (length x) 3) (symbol? (nth x 1)) (list? (nth x 2)))
+    (list (list 'macro (compiler-proto (nth x 1) (nth x 2) (drop 3 x) locals))
+          (list 'def (nth x 1)))
+    (compiler-interp x)))
 
 ;; ── entry points ───────────────────────────────────────────────────────
 

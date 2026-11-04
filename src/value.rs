@@ -164,6 +164,8 @@ pub struct Macro {
     pub rest: Option<Sym>, // fixed vs Swift: macros DO carry a rest param
     pub body: Vec<Value>,
     pub closure: Env,
+    /// Set when the macro was compiled: its expander's bytecode (`crate::vm`).
+    pub code: Option<Rc<crate::vm::Proto>>,
 }
 
 /// How a builtin's arguments are evaluated before the call.

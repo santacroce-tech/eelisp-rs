@@ -192,13 +192,61 @@ fn with_the_compiler_compiled_by_itself() {
     agree(Setup::SelfCompiled);
 }
 
+/// Cases the suites barely touch: quasiquote, for-each and defmacro, edges included. Run in
+/// order on one engine pair, like a test function's snippets.
+const EDGES: &[&str] = &[
+    // quasiquote
+    "(def x 1) (def xs '(2 3))",
+    "`(a ,x ,@xs b)",
+    "`(a (b ,x) ,@xs)",
+    "`()",
+    "`x",
+    "`,x",
+    "`(1 ,@2)",
+    "`(1 ,@nil)",
+    "`{:a ,x}",
+    "`(outer `(inner ,x))",
+    "(quasiquote)",
+    "(let (y 5) `(y is ,y))",
+    // for-each
+    "(def acc 0)",
+    "(for-each n '(1 2 3) (set! acc (+ acc n)))",
+    "acc",
+    "(for-each n 5 (error \"not a list: never runs\"))",
+    "(for-each 1 (error \"not reached\") 2)",
+    "(for-each n '(1 2))",
+    "n",
+    "(for-each n '(1 2 3) (def seen n) (set! acc (* acc 10)))",
+    "(list acc seen)",
+    "(try (for-each n '(1 2 3) (if (= n 2) (error \"two\") n)) (catch e (dict-get e :message)))",
+    "(loop (i 0 total 0) (if (< i 3) (do (for-each k '(1 2) (set! total (+ total k))) (recur (+ i 1) total)) total))",
+    "(defn sum-list (l) (let (t 0) (for-each v l (set! t (+ t v))) t))",
+    "(sum-list (range 0 100))",
+    // defmacro
+    "(defmacro my-if (c a b) `(cond ,c ,a true ,b))",
+    "(my-if false 1 2)",
+    "(my-if (= 1 1) \"yes\" (error \"not evaluated\"))",
+    "(defmacro my-list (. items) `(list ,@items))",
+    "(my-list 1 (+ 1 1) 3)",
+    "(defn uses-macro (v) (my-if v :t :f))",
+    "(list (uses-macro true) (uses-macro nil))",
+    "(defmacro swap! (a b) `(let (tmp ,a) (set! ,a ,b) (set! ,b tmp)))",
+    "(def p 1) (def q 2) (swap! p q) (list p q)",
+    "(defmacro)",
+    "(defmacro bad)",
+    "my-if",
+];
+
 fn agree(setup: Setup) {
     let mut disagreements = Vec::new();
     let mut count = 0;
     let mut fallbacks = 0.0;
-    for (test, snippets) in SUITES.iter().flat_map(|(suite, src)| {
-        corpus(src).into_iter().map(move |(t, s)| (format!("{suite}::{t}"), s))
-    }) {
+    let edges = ("edges".to_string(), EDGES.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    for (test, snippets) in SUITES
+        .iter()
+        .flat_map(|(suite, src)| corpus(src).into_iter().map(move |(t, s)| (format!("{suite}::{t}"), s)))
+        .chain(std::iter::once(edges))
+    {
         let (dir_i, dir_c) = (scratch("interp"), scratch("comp"));
         let interp = in_dir(Interpreter::new(), &dir_i);
         let comp = in_dir(engine(setup), &dir_c);

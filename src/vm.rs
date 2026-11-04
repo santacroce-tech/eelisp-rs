@@ -37,6 +37,9 @@
 //! | `(dict k…)` | pop one value per key, push a dict |
 //! | `(loop s…)` `(recur n)` `(end-loop)` | `loop`: mark a restart point that rebinds `s…`; `recur` pops `n` values and restarts |
 //! | `(try L)` `(end-try)` | on an error until `end-try`, unwind and jump to `L` with the error dict pushed |
+//! | `(make-list item splice …)` | pop one value per shape and push a list; a `splice` value is a list whose elements go in (quasiquote) |
+//! | `(next-item L)` | with a list and an index on the stack: push the next element and advance, or pop both and jump to `L` when done (for-each) |
+//! | `(macro (proto …))` | push a macro whose expander is that proto, closing over the current environment |
 //! | `(interp form)` | push what the interpreter makes of `form` in the current scope — the compiler's fallback for anything it doesn't compile yet |
 //! | `(label L)` | a jump target (no instruction); `L` is a symbol or a number |
 
@@ -74,6 +77,9 @@ pub enum Op {
     Try(u32),
     EndTry,
     Interp(u32),
+    MakeList(u32),
+    NextItem(u32),
+    Macro(u32),
 }
 
 /// A compiled function body, before it closes over an environment.
@@ -89,6 +95,8 @@ pub struct Proto {
     /// Key lists for `Dict`, name lists for `Loop`.
     pub dict_keys: Vec<Vec<Symbol>>,
     pub loop_names: Vec<Vec<Sym>>,
+    /// For `MakeList`: per element, whether it is spliced.
+    pub list_shapes: Vec<Vec<bool>>,
 }
 
 /// The function a proto makes when it closes over `env`.
@@ -123,10 +131,27 @@ pub fn root_of(env: &Env) -> Env {
     }
 }
 
+/// The macro a proto makes when it closes over `env`.
+pub fn close_macro(proto: &Rc<Proto>, env: &Env) -> Value {
+    Value::Macro(Rc::new(Macro {
+        name: proto.name.clone(),
+        params: proto.params.clone(),
+        rest: proto.rest.clone(),
+        body: proto.source.clone(),
+        closure: env.clone(),
+        code: Some(proto.clone()),
+    }))
+}
+
 /// Call a compiled function with evaluated arguments. `f.code` must be set.
 pub fn call(f: &Function, args: Vec<Value>) -> Result<Value, LispError> {
-    let proto = f.code.clone().expect("vm::call on a function with no code");
-    let env = bind(&proto, &f.closure, args);
+    call_proto(f.code.clone().expect("vm::call on a function with no code"), &f.closure, args)
+}
+
+/// Run a proto as a call: its parameters bound to `args` in a scope under `closure`. How a
+/// compiled macro expands, too — it is called with its arguments unevaluated.
+pub fn call_proto(proto: Rc<Proto>, closure: &Env, args: Vec<Value>) -> Result<Value, LispError> {
+    let env = bind(&proto, closure, args);
     let mut vm = Vm { stack: Vec::new(), frames: Vec::new() };
     vm.frames.push(Frame::new(proto, env, 0));
     vm.run()
@@ -304,6 +329,46 @@ impl Vm {
                 Op::Interp(i) => {
                     let form = fr.proto.consts[i as usize].clone();
                     let v = crate::eval::eval(form, fr.env.clone())?;
+                    self.stack.push(v);
+                }
+                Op::MakeList(i) => {
+                    let shape = &fr.proto.list_shapes[i as usize];
+                    let vals = self.stack.split_off(self.stack.len() - shape.len());
+                    let mut out = Vec::with_capacity(vals.len());
+                    for (splice, v) in shape.iter().zip(vals) {
+                        match (splice, v) {
+                            (false, v) => out.push(v),
+                            (true, Value::List(l)) => out.extend(l.iter().cloned()),
+                            (true, other) => {
+                                return Err(LispError::TypeMismatch { expected: "list".into(), got: type_name(&other) })
+                            }
+                        }
+                    }
+                    self.stack.push(Value::List(Rc::new(out)));
+                }
+                Op::NextItem(end) => {
+                    let n = self.stack.len();
+                    let i = match &self.stack[n - 1] {
+                        Value::Number(i) => *i as usize,
+                        _ => unreachable!("next-item needs an index on the stack"),
+                    };
+                    let next = match &self.stack[n - 2] {
+                        Value::List(l) => l.get(i).cloned(),
+                        _ => None, // for-each over something that isn't a list does nothing
+                    };
+                    match next {
+                        Some(v) => {
+                            self.stack[n - 1] = Value::Number((i + 1) as f64);
+                            self.stack.push(v);
+                        }
+                        None => {
+                            self.stack.truncate(n - 2);
+                            fr.pc = end as usize;
+                        }
+                    }
+                }
+                Op::Macro(i) => {
+                    let v = close_macro(&fr.proto.protos[i as usize], &fr.env);
                     self.stack.push(v);
                 }
             }
@@ -486,6 +551,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         protos: Vec::new(),
         dict_keys: Vec::new(),
         loop_names: Vec::new(),
+        list_shapes: Vec::new(),
     };
     for f in code_forms {
         let (op, args) = instr(f)?;
@@ -551,6 +617,24 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             "end-loop" => Op::EndLoop,
             "try" => Op::Try(target(args.first())?),
             "end-try" => Op::EndTry,
+            "make-list" => {
+                let shape = args
+                    .iter()
+                    .map(|a| match a {
+                        Value::Symbol(s) if &**s == "item" => Ok(false),
+                        Value::Symbol(s) if &**s == "splice" => Ok(true),
+                        _ => Err(bad("make-list takes item or splice for each element")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                p.list_shapes.push(shape);
+                Op::MakeList(p.list_shapes.len() as u32 - 1)
+            }
+            "next-item" => Op::NextItem(target(args.first())?),
+            "macro" => {
+                arity(1)?;
+                p.protos.push(assemble(&args[0])?);
+                Op::Macro(p.protos.len() as u32 - 1)
+            }
             "interp" => {
                 arity(1)?;
                 p.consts.push(args[0].clone());
