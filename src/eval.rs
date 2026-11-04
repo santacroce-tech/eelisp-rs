@@ -185,16 +185,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                     let Some(c) = catch else { return Ok(Value::Null) };
                                     let scope = env::child(&env);
                                     if let Some(Value::Symbol(name)) = c.get(1) {
-                                        let mut d = OrderedDict::default();
-                                        // a runtime error's own text — (error "no price") is "no price", without the "Error: " a
-                                        // printed error carries
-                                        let message = match &err {
-                                            LispError::Runtime(m) => m.clone(),
-                                            other => other.to_string(),
-                                        };
-                                        d.insert("message".into(), Value::Str(message.into()));
-                                        d.insert("kind".into(), Value::Str(err.kind().to_string()));
-                                        env::define_sym(&scope, name, Value::Dict(Rc::new(d)));
+                                        env::define_sym(&scope, name, error_dict(&err));
                                     }
                                     if c.len() <= 2 {
                                         return Ok(Value::Null);
@@ -280,6 +271,13 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                         }
                         let args = eval_builtin_args(&b.arg_mode, &items, &env)?;
                         return (b.func)(&args, &env);
+                    }
+                    Value::Function(f) if f.code.is_some() => {
+                        let mut args = Vec::with_capacity(items.len() - 1);
+                        for a in &items[1..] {
+                            args.push(eval_arg(a, &env)?);
+                        }
+                        return crate::vm::call(&f, args);
                     }
                     Value::Function(f) => {
                         // Arguments are evaluated straight into the new scope's bindings.
@@ -370,6 +368,7 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
 pub fn apply_value(f: &Value, args: &[Value], env: &Env) -> Result<Value, LispError> {
     match f {
         Value::Builtin(b) => (b.func)(args, env),
+        Value::Function(func) if func.code.is_some() => crate::vm::call(func, args.to_vec()),
         Value::Function(func) => {
             let scope = bind_params(func, args)?;
             let mut result = Value::Null;
@@ -478,6 +477,7 @@ fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
                     rest,
                     body: items[2..].to_vec(),
                     closure: env.clone(),
+                    code: None,
                 };
                 let val = Value::Function(Rc::new(f));
                 env::define_sym(env, name, val.clone());
@@ -503,6 +503,7 @@ fn eval_defn(items: &[Value], env: &Env) -> Result<Value, LispError> {
             rest,
             body: items[3..].to_vec(),
             closure: env.clone(),
+            code: None,
         };
         let val = Value::Function(Rc::new(f));
         env::define_sym(env, name, val.clone());
@@ -526,6 +527,7 @@ fn eval_fn(items: &[Value], env: &Env) -> Result<Value, LispError> {
             rest,
             body: items[2..].to_vec(),
             closure: env.clone(),
+            code: None,
         })))
     } else {
         Err(LispError::InvalidSyntax("bad fn".into()))
@@ -551,6 +553,19 @@ fn eval_defmacro(items: &[Value], env: &Env) -> Result<Value, LispError> {
     } else {
         Err(LispError::InvalidSyntax("bad defmacro".into()))
     }
+}
+
+/// What `(catch e …)` binds `e` to: `{:message … :kind …}`. A runtime error's message is its own
+/// text — `(error "no price")` is "no price", without the "Error: " a printed error carries.
+pub fn error_dict(err: &LispError) -> Value {
+    let message = match err {
+        LispError::Runtime(m) => m.clone(),
+        other => other.to_string(),
+    };
+    let mut d = OrderedDict::default();
+    d.insert("message".into(), Value::Str(message));
+    d.insert("kind".into(), Value::Str(err.kind().to_string()));
+    Value::Dict(Rc::new(d))
 }
 
 /// Quasiquote with unquote / unquote-splicing (depth 1). Implemented, unlike the Swift version.

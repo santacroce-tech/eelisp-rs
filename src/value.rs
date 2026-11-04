@@ -153,6 +153,9 @@ pub struct Function {
     pub rest: Option<Sym>,
     pub body: Vec<Value>,
     pub closure: Env,
+    /// Set when the function was compiled: its bytecode, run by the VM (`crate::vm`). `body`
+    /// still holds the source forms, for printing and `(source f)`.
+    pub code: Option<Rc<crate::vm::Proto>>,
 }
 
 pub struct Macro {

@@ -102,6 +102,7 @@ pub fn register(env: &Env) {
     b!("println", printlnf);
     b!("eval", evalf);
     b!("apply", applyf);
+    crate::vm::register(env);
     b!("error", errorf);
     b!("csv-parse", csv_parse);
     b!("csv-stringify", csv_stringify);

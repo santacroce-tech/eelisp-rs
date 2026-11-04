@@ -44,6 +44,7 @@ pub mod sheet_ref;
 #[cfg(feature = "sqlite")]
 pub mod smart_parser;
 pub mod value;
+pub mod vm;
 
 pub use interpreter::Interpreter;
 pub use value::{LispError, Value};

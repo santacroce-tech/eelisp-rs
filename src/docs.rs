@@ -666,6 +666,8 @@ pub static CORE: &[Entry] = &[
     doc!("println", "(println x …) → nil", "Prints its arguments and a newline.", "(println \"total:\" 42)"),
     doc!("eval", "(eval form)", "Evaluates a value as code — the other half of `parse`.", "(eval (parse \"(+ 1 2)\"))   → 3"),
     doc!("apply", "(apply f args)", "Calls f with a list of arguments.", "(apply + '(1 2 3))   → 6"),
+    doc!("vm-assemble", "(vm-assemble '(proto :params (…) :code (…))) → function", "Turns bytecode, written as a list of instructions, into a function that runs on the virtual machine. It is what the compiler emits; see src/vm.rs for the instructions.",
+         "((vm-assemble '(proto :params (a b) :code ((load +) (load a) (load b) (tail-call 2)))) 2 3)   → 5"),
     doc!("error", "(error message)", "Stops with an error carrying the message — one that `try` can catch.",
          "(try (error \"no price\") (catch e (dict-get e :message)))   → \"no price\""),
     doc!("csv-parse", "(csv-parse text sep) → list", "Reads CSV into rows of text: quotes, doubled quotes, separators and line breaks inside quotes. The separator is \",\" unless given — \"\\t\" for TSV.",
