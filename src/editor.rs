@@ -5,6 +5,9 @@
 //! `notes` / `read-note` read the workspace's notes — the files on disk under `(current-dir)`, not
 //! the editor's buffers — so one command can look at every note, not just the open one. They are
 //! read-only on purpose: writing goes through the host, which knows which files are open in tabs.
+//!
+//! `dir-list` / `file-info` read the same workspace as a file manager sees it: every entry of one
+//! folder, with its size and when it last changed — what a two-panel browser draws.
 
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
@@ -96,6 +99,44 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>, seen: &mut usize) {
     }
 }
 
+/// A path relative to the workspace, `/`-separated whatever the platform.
+fn rel_path(root: &Path, p: &Path) -> String {
+    let rel = p.strip_prefix(root).unwrap_or(p);
+    rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
+}
+
+/// One entry as `dir-list` and `file-info` give it: name, path, whether it is a folder, size in
+/// bytes (0 for a folder), when it last changed (epoch seconds, as `now` counts them) and its
+/// extension, lower-case, without the dot ("" for a folder or a file with none).
+fn entry(root: &Path, p: &Path, meta: &std::fs::Metadata) -> Value {
+    let is_dir = meta.is_dir();
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = if is_dir { String::new() } else { p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default() };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as f64)
+        .unwrap_or(0.0);
+    let mut d = OrderedDict::default();
+    d.insert("name".into(), Value::Str(name));
+    d.insert("path".into(), Value::Str(rel_path(root, p)));
+    d.insert("dir".into(), Value::Bool(is_dir));
+    d.insert("size".into(), Value::Number(if is_dir { 0.0 } else { meta.len() as f64 }));
+    d.insert("modified".into(), Value::Number(modified));
+    d.insert("ext".into(), Value::Str(ext));
+    Value::Dict(Rc::new(d))
+}
+
+/// `(f "path")` → the path, or the workspace root for no argument / nil.
+fn folder_arg(fname: &str, args: &[Value]) -> Result<String, LispError> {
+    match args.first() {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(v) => Err(fail(format!("{fname}: expected a folder name, got {}", type_name(v)))),
+    }
+}
+
 fn b(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) {
     env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f) })));
 }
@@ -126,6 +167,55 @@ pub fn register(env: &Env, host: Host) {
             let file = inside(&root(&h), &rel)?;
             match std::fs::read(&file) {
                 Ok(bytes) => String::from_utf8(bytes).map(Value::Str).map_err(|_| fail(format!("{rel}: not a text file"))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+                Err(e) => Err(fail(format!("{rel}: {e}"))),
+            }
+        });
+    }
+    {
+        let h = host.clone();
+        b(env, "dir-list", move |args, _| {
+            let rel = folder_arg("dir-list", args)?;
+            let hidden = match (args.get(1), args.get(2)) {
+                (None, _) => false,
+                (Some(Value::Keyword(k)), v) if k == "hidden" => v.is_some_and(is_truthy),
+                (Some(v), _) => return Err(fail(format!("dir-list: expected :hidden true after the folder, got {}", type_name(v)))),
+            };
+            let root = root(&h);
+            let dir = inside(&root, &rel)?;
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
+                Err(e) if dir.is_file() => return Err(fail(format!("{rel}: not a folder ({e})"))),
+                Err(e) => return Err(fail(format!("{rel}: {e}"))),
+            };
+            let mut out: Vec<(bool, String, Value)> = Vec::new();
+            for e in entries.flatten().take(MAX_ENTRIES) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !hidden && name.starts_with('.') {
+                    continue;
+                }
+                let p = e.path();
+                // follow a symlink to what it points at; a broken one is still listed, as itself
+                let Ok(meta) = std::fs::metadata(&p).or_else(|_| e.metadata()) else { continue };
+                out.push((meta.is_dir(), name.to_lowercase(), entry(&root, &p, &meta)));
+            }
+            // folders first, then files, each by name whatever its case
+            out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            Ok(Value::List(Rc::new(out.into_iter().map(|(_, _, v)| v).collect())))
+        });
+    }
+    {
+        let h = host.clone();
+        b(env, "file-info", move |args, _| {
+            let rel = match args.first() {
+                Some(Value::Str(s)) => s.clone(),
+                _ => return Err(fail("file-info: expected a path, like \"inbox.md\"")),
+            };
+            let root = root(&h);
+            let p = inside(&root, &rel)?;
+            match std::fs::metadata(&p) {
+                Ok(meta) => Ok(entry(&root, &p, &meta)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
                 Err(e) => Err(fail(format!("{rel}: {e}"))),
             }
