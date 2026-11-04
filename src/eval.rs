@@ -402,7 +402,7 @@ fn bind_params(f: &Function, args: &[Value]) -> Result<Env, LispError> {
 
 pub fn expand_macro(m: &Macro, args: &[Value]) -> Result<Value, LispError> {
     if let Some(code) = &m.code {
-        return crate::vm::call_proto(code.clone(), &m.closure, args.to_vec());
+        return crate::vm::call_proto(code.clone(), &m.closure, m.upvals.clone(), args.to_vec());
     }
     let scope = env::child(&m.closure);
     for (i, p) in m.params.iter().enumerate() {
@@ -481,6 +481,7 @@ fn eval_def(items: &[Value], env: &Env) -> Result<Value, LispError> {
                     body: items[2..].to_vec(),
                     closure: env.clone(),
                     code: None,
+            upvals: None,
                 };
                 let val = Value::Function(Rc::new(f));
                 env::define_sym(env, name, val.clone());
@@ -507,6 +508,7 @@ fn eval_defn(items: &[Value], env: &Env) -> Result<Value, LispError> {
             body: items[3..].to_vec(),
             closure: env.clone(),
             code: None,
+            upvals: None,
         };
         let val = Value::Function(Rc::new(f));
         env::define_sym(env, name, val.clone());
@@ -531,6 +533,7 @@ fn eval_fn(items: &[Value], env: &Env) -> Result<Value, LispError> {
             body: items[2..].to_vec(),
             closure: env.clone(),
             code: None,
+            upvals: None,
         })))
     } else {
         Err(LispError::InvalidSyntax("bad fn".into()))
@@ -550,6 +553,7 @@ fn eval_defmacro(items: &[Value], env: &Env) -> Result<Value, LispError> {
             body: items[3..].to_vec(),
             closure: env.clone(),
             code: None,
+            upvals: None,
         };
         let val = Value::Macro(Rc::new(m));
         env::define_sym(env, name, val.clone());

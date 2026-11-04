@@ -1,14 +1,16 @@
 ;; The EELisp compiler, written in EELisp: forms in, bytecode for the VM out (src/vm.rs).
-;; Roadmap step 2 (docs/plans/roadmap.md). For now the interpreter runs it; step 3 has it
-;; compile itself.
+;; See docs/self-hosting/ for how it works, and docs/plans/roadmap.md for the plan.
 ;;
 ;;   (compile form)      → a (proto …) form, the bytecode for one top-level form
 ;;   (compile-run form)  → compiles the form and runs it at the top level
 ;;
+;; Local variables live in numbered slots of their function's frame, not in named scopes. A
+;; variable an inner function uses is captured: the closure and the frame share it. Names that
+;; aren't local are globals, looked up by name.
+;;
 ;; Anything the compiler doesn't handle becomes an (interp form) instruction: the interpreter
-;; evaluates that form, in the same scope, with its exact meaning. Today that is only malformed
-;; forms (`(def x)`, `(if)`…), so their error is the interpreter's own. `compiler-fallbacks`
-;; counts those places.
+;; evaluates that form. Only malformed forms (`(def x)`, `(if)`…) end up there, so their error
+;; is the interpreter's own. `compiler-fallbacks` counts those places.
 ;;
 ;; Names starting with `compiler-` are its internals.
 
@@ -31,7 +33,7 @@
 (def compiler-specials
   '(quote quasiquote if do begin def defn defun fn lambda defmacro set! let cond loop try recur and or for-each))
 
-;; The names a parameter list binds: `(a b . rest)` binds a, b and rest.
+;; The names a parameter list binds, in order: `(a b . rest)` binds a, b and rest.
 (defn compiler-param-names (params)
   (filter (fn (p) (and (symbol? p) (!= (->string p) "."))) params))
 
@@ -42,130 +44,282 @@
 
 (defn compiler-const (v) (list (list 'const v)))
 
-;; ── expressions ────────────────────────────────────────────────────────
-;; Every compile function takes the names bound in enclosing scopes (`locals`) and whether the
-;; form is in tail position (`tailp`), and returns a list of instructions that leaves the form's
-;; value on the stack.
+;; ── where variables live ───────────────────────────────────────────────
+;;
+;; The compiler's picture of the program at any point is a context, `cx`:
+;;   :fx   the function being compiled — {:id :slots :caps :parent}: how many slots it uses so
+;;         far, the outer variables it captures, the function it's inside
+;;   :lex  the blocks around this point, innermost first — {:fx :names :defs}: the variables
+;;         each one binds, as (name slot), and which of them a `def` made
+;; At the top level :lex is empty, and a `def` is global.
 
-(defn compiler-expr (x locals tailp)
+;; A mutable cell: (b) reads it, (b v) sets it.
+(defn compiler-box (v)
+  (let (val v)
+    (fn (. args) (if (empty? args) val (do (set! val (head args)) val)))))
+
+(def compiler-fx-n 0)
+
+;; A new function, inside `parent` (nil at the top level).
+(defn compiler-new-fx (parent)
+  (set! compiler-fx-n (+ compiler-fx-n 1))
+  {:id compiler-fx-n :slots (compiler-box 0) :caps (compiler-box (list)) :parent parent})
+
+(defn compiler-new-slot (fx)
+  (let (n ((dict-get fx :slots)))
+    ((dict-get fx :slots) (+ n 1))
+    n))
+
+(defn compiler-new-block (fx)
+  {:fx fx :names (compiler-box (list)) :defs (compiler-box (list))})
+
+;; Bind name in block, to a new slot of the block's function.
+(defn compiler-declare (name block)
+  (let (slot (compiler-new-slot (dict-get block :fx)))
+    ((dict-get block :names) (cons (list name slot) ((dict-get block :names))))
+    slot))
+
+;; cx, inside block.
+(defn compiler-enter (cx block)
+  {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx)})
+
+;; The first (name slot) entry for name.
+(defn compiler-lookup (name entries)
   (cond
-    (symbol? x) (list (list 'load x))
-    (= (type x) "dict") (compiler-dict x locals)
-    (and (list? x) (not (empty? x))) (compiler-form x locals tailp)
+    (empty? entries) nil
+    (= (head (head entries)) name) (head entries)
+    true (compiler-lookup name (tail entries))))
+
+;; The innermost binding of name, as (block slot); nil when it's a global.
+(defn compiler-find (name lex)
+  (if (empty? lex)
+    nil
+    (let (e (compiler-lookup name ((dict-get (head lex) :names))))
+      (if e (list (head lex) (second e)) (compiler-find name (tail lex))))))
+
+(defn compiler-fx-id (fx) (dict-get fx :id))
+
+;; The position of key among the (key …) entries, or nil.
+(defn compiler-index (key entries i)
+  (cond
+    (empty? entries) nil
+    (= (head (head entries)) key) i
+    true (compiler-index key (tail entries) (+ i 1))))
+
+;; The index under which fx captures slot `slot` of function `owner`. A new capture is added,
+;; and so is every capture the functions in between need to pass it along.
+(defn compiler-capture (fx owner slot)
+  (let (caps ((dict-get fx :caps))
+        key (list owner slot)
+        known (compiler-index key caps 0))
+    (if (not (nil? known))
+      known
+      (let (parent (dict-get fx :parent)
+            src (if (= (compiler-fx-id parent) owner)
+                  (list 'local slot)
+                  (list 'cap (compiler-capture parent owner slot))))
+        ((dict-get fx :caps) (append caps (list (list key src))))
+        (length caps)))))
+
+;; Where name lives, seen from cx: (local slot), (cap index), or nil for a global.
+(defn compiler-resolve (name cx)
+  (let (hit (compiler-find name (dict-get cx :lex))
+        here (compiler-fx-id (dict-get cx :fx)))
+    (if (nil? hit)
+      nil
+      (let (owner (compiler-fx-id (dict-get (head hit) :fx)))
+        (if (= owner here)
+          (list 'local (second hit))
+          (list 'cap (compiler-capture (dict-get cx :fx) owner (second hit))))))))
+
+;; Is name bound locally here (so it isn't the global macro or builtin of that name)?
+(defn compiler-local? (name cx)
+  (not (nil? (compiler-find name (dict-get cx :lex)))))
+
+(defn compiler-load (name cx)
+  (let (r (compiler-resolve name cx))
+    (cond
+      (nil? r) (list (list 'load name))
+      (= (head r) 'local) (list (list 'load-local (second r) name))
+      true (list (list 'load-cap (second r) name)))))
+
+(defn compiler-store (name cx)
+  (let (r (compiler-resolve name cx))
+    (cond
+      (nil? r) (list (list 'set name))
+      (= (head r) 'local) (list (list 'set-local (second r) name))
+      true (list (list 'set-cap (second r) name)))))
+
+;; The slot a `def` of name binds in the current scope: the one it already has there, or a new
+;; one. A new one is cleared each time its block starts again (`compiler-clears`).
+(defn compiler-def-slot (name cx)
+  (let (block (head (dict-get cx :lex))
+        e (compiler-lookup name ((dict-get block :names))))
+    (if e
+      (second e)
+      (let (slot (compiler-declare name block))
+        ((dict-get block :defs) (cons slot ((dict-get block :defs))))
+        slot))))
+
+;; Instructions that unbind a block's `def` slots, so each run of the block starts without them.
+(defn compiler-clears (block)
+  (map (fn (s) (list 'clear-local s)) (reverse ((dict-get block :defs)))))
+
+;; (def name value) with value's code from (make-code). At the top level it's a global. In a
+;; scope it binds a slot there; `early` binds the name before the value is compiled, so a
+;; function can refer to itself.
+(defn compiler-define (name cx early make-code)
+  (cond
+    (empty? (dict-get cx :lex))
+      (compiler-cat (make-code) (list (list 'def name)))
+    early
+      (let (slot (compiler-def-slot name cx))
+        (compiler-cat (make-code) (list (list 'def-local slot))))
+    true
+      (let (code (make-code))
+        (compiler-cat code (list (list 'def-local (compiler-def-slot name cx)))))))
+
+;; Is x a (fn …) or (lambda …) form?
+(defn compiler-fn-form? (x)
+  (and (list? x) (not (empty? x)) (compiler-member? (head x) '(fn lambda))))
+
+;; ── expressions ────────────────────────────────────────────────────────
+;; Every compile function takes the context and whether the form is in tail position (`tailp`),
+;; and returns a list of instructions that leaves the form's value on the stack.
+
+(defn compiler-expr (x cx tailp)
+  (cond
+    (symbol? x) (compiler-load x cx)
+    (= (type x) "dict") (compiler-dict x cx)
+    (and (list? x) (not (empty? x))) (compiler-form x cx tailp)
     true (compiler-const x)))
 
 ;; Forms in sequence: every value but the last is dropped. No forms is nil.
-(defn compiler-body (forms locals tailp)
+(defn compiler-body (forms cx tailp)
   (cond
     (empty? forms) (compiler-const nil)
-    (empty? (tail forms)) (compiler-expr (head forms) locals tailp)
-    true (compiler-cat (compiler-expr (head forms) locals false)
-                       (list (list 'pop))
-                       (compiler-body (tail forms) locals tailp))))
+    (empty? (tail forms)) (compiler-expr (head forms) cx tailp)
+    true (let (first-code (compiler-expr (head forms) cx false))
+           (compiler-cat first-code
+                         (list (list 'pop))
+                         (compiler-body (tail forms) cx tailp)))))
 
 ;; A dict literal: each value is evaluated, keys stay as written.
-(defn compiler-dict (d locals)
+(defn compiler-dict (d cx)
   (let (keys (dict-keys d))
     (compiler-cat
-      (reduce (fn (acc k) (append acc (compiler-expr (dict-get d k) locals false))) (list) keys)
+      (reduce (fn (acc k) (append acc (compiler-expr (dict-get d k) cx false))) (list) keys)
       (list (cons 'dict keys)))))
 
-(defn compiler-form (x locals tailp)
+(defn compiler-form (x cx tailp)
   (let (h (head x))
     (cond
-      (and (symbol? h) (compiler-member? h compiler-specials)) (compiler-special h x locals tailp)
-      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "macro"))
-        (compiler-expr (vm-macroexpand x) locals tailp)
+      (and (symbol? h) (compiler-member? h compiler-specials)) (compiler-special h x cx tailp)
+      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "macro"))
+        (compiler-expr (vm-macroexpand x) cx tailp)
       ;; builtins that don't evaluate all their arguments (deftable, query, …)
-      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "raw"))
-        (compiler-call-with x locals tailp (fn (a i locals) (compiler-const a)))
-      (and (symbol? h) (not (compiler-member? h locals)) (= (vm-global-kind h) "table-first"))
-        (compiler-call-with x locals tailp compiler-table-arg)
-      true (compiler-call x locals tailp))))
+      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "raw"))
+        (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
+      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "table-first"))
+        (compiler-call-with x cx tailp compiler-table-arg)
+      true (compiler-call x cx tailp))))
 
 ;; A table command's first argument names the table as written — `(query contacts)` — unless
 ;; it is a call, which is evaluated: `(query (str "con" "tacts"))`. The rest are evaluated.
-(defn compiler-table-arg (a i locals)
+(defn compiler-table-arg (a i cx)
   (if (and (= i 0) (not (and (list? a) (not (empty? a)))))
     (compiler-const a)
-    (compiler-expr a locals false)))
+    (compiler-expr a cx false)))
 
 ;; A call: the function, then its arguments, then call (or tail-call).
-(defn compiler-call (x locals tailp)
-  (compiler-call-with x locals tailp (fn (a i locals) (compiler-expr a locals false))))
+(defn compiler-call (x cx tailp)
+  (compiler-call-with x cx tailp (fn (a i cx) (compiler-expr a cx false))))
 
-;; A call whose arguments compile with (arg-code argument index locals).
-(defn compiler-call-with (x locals tailp arg-code)
-  (let (args (tail x))
+;; A call whose arguments compile with (arg-code argument index cx).
+(defn compiler-call-with (x cx tailp arg-code)
+  (let (args (tail x)
+        f-code (compiler-expr (head x) cx false))
     (compiler-cat
-      (compiler-expr (head x) locals false)
-      (reduce (fn (acc i) (append acc (arg-code (nth args i) i locals))) (list) (range 0 (length args)))
+      f-code
+      (reduce (fn (acc i) (append acc (arg-code (nth args i) i cx))) (list) (range 0 (length args)))
       (list (list (if tailp 'tail-call 'call) (length args))))))
 
 ;; ── special forms ──────────────────────────────────────────────────────
 
-(defn compiler-special (h x locals tailp)
+(defn compiler-special (h x cx tailp)
   (let (n (length x))
     (cond
       (= h 'quote) (compiler-const (if (> n 1) (nth x 1) nil))
-      (= h 'if) (if (< n 3) (compiler-interp x) (compiler-if x locals tailp))
-      (or (= h 'do) (= h 'begin)) (compiler-body (tail x) locals tailp)
-      (= h 'def) (compiler-def x locals)
-      (or (= h 'defn) (= h 'defun)) (compiler-defn x locals)
+      (= h 'if) (if (< n 3) (compiler-interp x) (compiler-if x cx tailp))
+      (or (= h 'do) (= h 'begin)) (compiler-body (tail x) cx tailp)
+      (= h 'def) (compiler-def x cx)
+      (or (= h 'defn) (= h 'defun)) (compiler-defn x cx)
       (or (= h 'fn) (= h 'lambda))
         (if (and (> n 1) (list? (nth x 1)))
-          (list (list 'closure (compiler-proto nil (nth x 1) (drop 2 x) locals)))
+          (list (list 'closure (compiler-proto nil (nth x 1) (drop 2 x) cx)))
           (compiler-interp x))
       (= h 'set!)
         (if (and (> n 2) (symbol? (nth x 1)))
-          (compiler-cat (compiler-expr (nth x 2) locals false) (list (list 'set (nth x 1))))
+          (let (value-code (compiler-expr (nth x 2) cx false))
+            (compiler-cat value-code (compiler-store (nth x 1) cx)))
           (compiler-interp x))
-      (= h 'let) (if (< n 2) (compiler-interp x) (compiler-let x locals tailp))
-      (= h 'cond) (compiler-cond (tail x) locals tailp (compiler-label))
-      (= h 'and) (if (= n 1) (compiler-const true) (compiler-andor (tail x) locals tailp 'jump-if-false-or-pop (compiler-label)))
-      (= h 'or) (if (= n 1) (compiler-const false) (compiler-andor (tail x) locals tailp 'jump-if-true-or-pop (compiler-label)))
-      (= h 'loop) (if (< n 2) (compiler-interp x) (compiler-loop x locals))
+      (= h 'let) (if (< n 2) (compiler-interp x) (compiler-let x cx tailp))
+      (= h 'cond) (compiler-cond (tail x) cx tailp (compiler-label))
+      (= h 'and) (if (= n 1) (compiler-const true) (compiler-andor (tail x) cx tailp 'jump-if-false-or-pop (compiler-label)))
+      (= h 'or) (if (= n 1) (compiler-const false) (compiler-andor (tail x) cx tailp 'jump-if-true-or-pop (compiler-label)))
+      (= h 'loop) (if (< n 2) (compiler-interp x) (compiler-loop x cx))
       (= h 'recur)
         (compiler-cat
-          (reduce (fn (acc a) (append acc (compiler-expr a locals false))) (list) (tail x))
+          (reduce (fn (acc a) (append acc (compiler-expr a cx false))) (list) (tail x))
           (list (list 'recur (- n 1))))
-      (= h 'try) (compiler-try x locals tailp)
-      (= h 'quasiquote) (compiler-qq (if (> n 1) (nth x 1) nil) locals)
-      (= h 'for-each) (if (< n 3) (compiler-interp x) (compiler-for-each x locals))
-      (= h 'defmacro) (compiler-defmacro x locals)
+      (= h 'try) (compiler-try x cx tailp)
+      (= h 'quasiquote) (compiler-qq (if (> n 1) (nth x 1) nil) cx)
+      (= h 'for-each) (if (< n 3) (compiler-interp x) (compiler-for-each x cx))
+      (= h 'defmacro) (compiler-defmacro x cx)
       true (compiler-interp x))))
 
-(defn compiler-if (x locals tailp)
-  (let (else-l (compiler-label) end-l (compiler-label))
+(defn compiler-if (x cx tailp)
+  (let (else-l (compiler-label)
+        end-l (compiler-label)
+        test-code (compiler-expr (nth x 1) cx false)
+        then-code (compiler-expr (nth x 2) cx tailp)
+        else-code (if (> (length x) 3) (compiler-expr (nth x 3) cx tailp) (compiler-const nil)))
     (compiler-cat
-      (compiler-expr (nth x 1) locals false)
+      test-code
       (list (list 'jump-if-false else-l))
-      (compiler-expr (nth x 2) locals tailp)
+      then-code
       (list (list 'jump end-l) (list 'label else-l))
-      (if (> (length x) 3) (compiler-expr (nth x 3) locals tailp) (compiler-const nil))
+      else-code
       (list (list 'label end-l)))))
 
-;; A function body, as a proto. Its parameters are locals inside it.
-(defn compiler-proto (name params body locals)
-  (list 'proto :name name :params params :source body
-        :code (compiler-body body (append (compiler-param-names params) locals) true)))
+;; A function body, as a proto: a new function whose first slots are its parameters.
+(defn compiler-proto (name params body cx)
+  (let (fx (compiler-new-fx (dict-get cx :fx))
+        block (compiler-new-block fx))
+    (for-each p (compiler-param-names params) (compiler-declare p block))
+    (let (code (compiler-body body (compiler-enter cx block) true))
+      (list 'proto :name name :params params :source body
+            :slots ((dict-get fx :slots))
+            :captures (map second ((dict-get fx :caps)))
+            :code code))))
 
-(defn compiler-def (x locals)
+(defn compiler-def (x cx)
   (cond
     (< (length x) 3) (compiler-interp x)
     (symbol? (nth x 1))
-      (compiler-cat (compiler-expr (nth x 2) locals false) (list (list 'def (nth x 1))))
+      (compiler-define (nth x 1) cx (compiler-fn-form? (nth x 2))
+                       (fn () (compiler-expr (nth x 2) cx false)))
     ;; (def (name params…) body…)
     (and (list? (nth x 1)) (not (empty? (nth x 1))) (symbol? (head (nth x 1))))
       (let (name (head (nth x 1)))
-        (list (list 'closure (compiler-proto name (tail (nth x 1)) (drop 2 x) locals))
-              (list 'def name)))
+        (compiler-define name cx true
+                         (fn () (list (list 'closure (compiler-proto name (tail (nth x 1)) (drop 2 x) cx))))))
     true (compiler-interp x)))
 
-(defn compiler-defn (x locals)
+(defn compiler-defn (x cx)
   (if (and (>= (length x) 3) (symbol? (nth x 1)) (list? (nth x 2)))
-    (list (list 'closure (compiler-proto (nth x 1) (nth x 2) (drop 3 x) locals))
-          (list 'def (nth x 1)))
+    (compiler-define (nth x 1) cx true
+                     (fn () (list (list 'closure (compiler-proto (nth x 1) (nth x 2) (drop 3 x) cx)))))
     (compiler-interp x)))
 
 ;; The (name value) pairs of a let: flat `(a 1 b 2)` or nested `((a 1) (b 2))`. A pair whose
@@ -183,80 +337,89 @@
     (symbol? (head binds)) (compiler-flat-pairs binds)
     true (filter (fn (p) (and (list? p) (>= (length p) 2) (symbol? (head p)))) binds)))
 
-;; Each value is evaluated in the new scope, after the ones before it (let*).
-(defn compiler-bind (pairs locals)
-  (reduce (fn (acc p)
-            (append acc (compiler-cat (compiler-expr (second p) locals false)
-                                      (list (list 'def (head p)) (list 'pop)))))
-          (list) pairs))
+;; Each value is computed with the bindings before it in view (let*), then gets its slot.
+;; → (code slots)
+(defn compiler-bind (pairs block cx)
+  (let (code (compiler-box (list)) slots (compiler-box (list)))
+    (for-each p pairs
+      (let (value-code (compiler-expr (second p) cx false)
+            slot (compiler-declare (head p) block))
+        (code (compiler-cat (code) value-code (list (list 'init-local slot))))
+        (slots (append (slots) (list slot)))))
+    (list (code) (slots))))
 
-(defn compiler-let (x locals tailp)
-  (let (pairs (compiler-let-pairs (nth x 1))
-        inner (append (map head pairs) locals))
-    (compiler-cat
-      (list (list 'push-scope))
-      (compiler-bind pairs inner)
-      (compiler-body (drop 2 x) inner tailp)
-      (list (list 'pop-scope)))))
+(defn compiler-let (x cx tailp)
+  (let (block (compiler-new-block (dict-get cx :fx))
+        inner (compiler-enter cx block)
+        binds (compiler-bind (compiler-let-pairs (nth x 1)) block inner)
+        body (compiler-body (drop 2 x) inner tailp))
+    (compiler-cat (compiler-clears block) (head binds) body)))
 
 ;; Flat cond: test, result, test, result…; `else`, `otherwise` and `true` always match.
-(defn compiler-cond (clauses locals tailp end-l)
+(defn compiler-cond (clauses cx tailp end-l)
   (if (< (length clauses) 2)
     (compiler-cat (compiler-const nil) (list (list 'label end-l)))
     (let (test (head clauses) result (second clauses) next-l (compiler-label))
       (if (and (symbol? test) (compiler-member? test '(else otherwise)))
-        (compiler-cat (compiler-expr result locals tailp) (list (list 'label end-l)))
-        (compiler-cat
-          (compiler-expr test locals false)
-          (list (list 'jump-if-false next-l))
-          (compiler-expr result locals tailp)
-          (list (list 'jump end-l) (list 'label next-l))
-          (compiler-cond (drop 2 clauses) locals tailp end-l))))))
+        (compiler-cat (compiler-expr result cx tailp) (list (list 'label end-l)))
+        (let (test-code (compiler-expr test cx false)
+              result-code (compiler-expr result cx tailp))
+          (compiler-cat
+            test-code
+            (list (list 'jump-if-false next-l))
+            result-code
+            (list (list 'jump end-l) (list 'label next-l))
+            (compiler-cond (drop 2 clauses) cx tailp end-l)))))))
 
 ;; and / or: every value but the last can end the form early.
-(defn compiler-andor (forms locals tailp jump end-l)
+(defn compiler-andor (forms cx tailp jump end-l)
   (if (empty? (tail forms))
-    (compiler-cat (compiler-expr (head forms) locals tailp) (list (list 'label end-l)))
-    (compiler-cat
-      (compiler-expr (head forms) locals false)
-      (list (list jump end-l))
-      (compiler-andor (tail forms) locals tailp jump end-l))))
+    (compiler-cat (compiler-expr (head forms) cx tailp) (list (list 'label end-l)))
+    (let (first-code (compiler-expr (head forms) cx false))
+      (compiler-cat
+        first-code
+        (list (list jump end-l))
+        (compiler-andor (tail forms) cx tailp jump end-l)))))
 
-;; (loop (a 1 b 2) body): the body is one form; `recur` rebinds the names and starts it again.
-(defn compiler-loop (x locals)
-  (let (pairs (if (list? (nth x 1)) (compiler-flat-pairs (nth x 1)) (list))
-        names (map head pairs)
-        inner (append names locals))
+;; (loop (a 1 b 2) body): the body is one form; `recur` rebinds the slots and starts it again.
+(defn compiler-loop (x cx)
+  (let (block (compiler-new-block (dict-get cx :fx))
+        inner (compiler-enter cx block)
+        binds (compiler-bind (if (list? (nth x 1)) (compiler-flat-pairs (nth x 1)) (list)) block inner)
+        body (if (> (length x) 2) (compiler-expr (nth x 2) inner false) (compiler-const nil)))
     (compiler-cat
-      (list (list 'push-scope))
-      (compiler-bind pairs inner)
-      (list (cons 'loop names))
-      (if (> (length x) 2) (compiler-expr (nth x 2) inner false) (compiler-const nil))
-      (list (list 'end-loop) (list 'pop-scope)))))
+      (compiler-clears block)
+      (head binds)
+      (list (cons 'loop-slots (second binds)))
+      body
+      (list (list 'end-loop)))))
 
 ;; (try body… (catch e handler…)). The body is never a tail call: its error must land here.
-(defn compiler-try (x locals tailp)
+(defn compiler-try (x cx tailp)
   (let (last-form (last x)
         catch? (and (> (length x) 1) (list? last-form) (not (empty? last-form)) (= (head last-form) 'catch))
         body (if catch? (take (- (length x) 2) (tail x)) (tail x))
         catch-l (compiler-label)
-        end-l (compiler-label))
+        end-l (compiler-label)
+        body-code (compiler-body body cx false)
+        catch-code (if catch? (compiler-catch last-form cx tailp) (list (list 'pop) (list 'const nil))))
     (compiler-cat
       (list (list 'try catch-l))
-      (compiler-body body locals false)
+      body-code
       (list (list 'end-try) (list 'jump end-l) (list 'label catch-l))
-      (if catch? (compiler-catch last-form locals tailp) (list (list 'pop) (list 'const nil)))
+      catch-code
       (list (list 'label end-l)))))
 
 ;; The handler runs with the error dict on the stack, bound to the catch name if there is one.
-(defn compiler-catch (c locals tailp)
+(defn compiler-catch (c cx tailp)
   (let (name (if (> (length c) 1) (nth c 1) nil)
-        inner (if (symbol? name) (cons name locals) locals))
-    (compiler-cat
-      (list (list 'push-scope))
-      (if (symbol? name) (list (list 'def name) (list 'pop)) (list (list 'pop)))
-      (compiler-body (drop 2 c) inner tailp)
-      (list (list 'pop-scope)))))
+        block (compiler-new-block (dict-get cx :fx))
+        inner (compiler-enter cx block)
+        bind (if (symbol? name)
+               (list (list 'init-local (compiler-declare name block)))
+               (list (list 'pop)))
+        body (compiler-body (drop 2 c) inner tailp))
+    (compiler-cat (compiler-clears block) bind body)))
 
 ;; Is x a two-element form headed by the symbol name — (unquote v), (unquote-splicing v)?
 (defn compiler-unquote? (x name)
@@ -264,52 +427,59 @@
 
 ;; A quasiquote template: lists are rebuilt, ,x is evaluated, ,@x is spliced in, anything else
 ;; (dicts included) stays as written.
-(defn compiler-qq (e locals)
+(defn compiler-qq (e cx)
   (cond
     (not (list? e)) (compiler-const e)
-    (compiler-unquote? e 'unquote) (compiler-expr (second e) locals false)
+    (compiler-unquote? e 'unquote) (compiler-expr (second e) cx false)
     true (compiler-cat
            (reduce (fn (acc it)
                      (append acc (if (compiler-unquote? it 'unquote-splicing)
-                                   (compiler-expr (second it) locals false)
-                                   (compiler-qq it locals))))
+                                   (compiler-expr (second it) cx false)
+                                   (compiler-qq it cx))))
                    (list) e)
            (list (cons 'make-list
                        (map (fn (it) (if (compiler-unquote? it 'unquote-splicing) 'splice 'item)) e))))))
 
 ;; (for-each var list body…): the body runs once per element, in a fresh scope binding var, and
 ;; the form is nil. A var that isn't a symbol makes the whole form nil, list unevaluated.
-(defn compiler-for-each (x locals)
-  (let (var (nth x 1)
-        inner (cons var locals)
-        top-l (compiler-label)
-        end-l (compiler-label))
+(defn compiler-for-each (x cx)
+  (let (var (nth x 1))
     (if (not (symbol? var))
       (compiler-const nil)
-      (compiler-cat
-        (compiler-expr (nth x 2) locals false)
-        (compiler-const 0)
-        (list (list 'label top-l) (list 'next-item end-l)
-              (list 'push-scope) (list 'def var) (list 'pop))
-        (reduce (fn (acc f) (compiler-cat acc (compiler-expr f inner false) (list (list 'pop))))
-                (list) (drop 3 x))
-        (list (list 'pop-scope) (list 'jump top-l) (list 'label end-l))
-        (compiler-const nil)))))
+      (let (list-code (compiler-expr (nth x 2) cx false)
+            block (compiler-new-block (dict-get cx :fx))
+            inner (compiler-enter cx block)
+            slot (compiler-declare var block)
+            top-l (compiler-label)
+            end-l (compiler-label)
+            body (reduce (fn (acc f) (compiler-cat acc (compiler-expr f inner false) (list (list 'pop))))
+                         (list) (drop 3 x)))
+        (compiler-cat
+          list-code
+          (compiler-const 0)
+          (list (list 'label top-l) (list 'next-item end-l))
+          (compiler-clears block)
+          (list (list 'init-local slot))
+          body
+          (list (list 'jump top-l) (list 'label end-l))
+          (compiler-const nil))))))
 
 ;; (defmacro name (params) body…): the expander is compiled like a function body; it runs, at
 ;; compile time, on the unevaluated argument forms.
-(defn compiler-defmacro (x locals)
+(defn compiler-defmacro (x cx)
   (if (and (>= (length x) 3) (symbol? (nth x 1)) (list? (nth x 2)))
-    (list (list 'macro (compiler-proto (nth x 1) (nth x 2) (drop 3 x) locals))
-          (list 'def (nth x 1)))
+    (compiler-define (nth x 1) cx true
+                     (fn () (list (list 'macro (compiler-proto (nth x 1) (nth x 2) (drop 3 x) cx)))))
     (compiler-interp x)))
 
 ;; ── entry points ───────────────────────────────────────────────────────
 
 ;; The bytecode for one top-level form, as a (proto …) form.
 (defn compile (form)
-  (list 'proto :name nil :params (list) :source (list form)
-        :code (compiler-expr form (list) true)))
+  (let (fx (compiler-new-fx nil)
+        code (compiler-expr form {:lex (list) :fx fx} true))
+    (list 'proto :name nil :params (list) :source (list form)
+          :slots ((dict-get fx :slots)) :captures (list) :code code)))
 
 ;; Compile a top-level form and run it, in the global scope.
 (defn compile-run (form) (vm-run (compile form)))

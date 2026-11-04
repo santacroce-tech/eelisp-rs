@@ -156,6 +156,8 @@ pub struct Function {
     /// Set when the function was compiled: its bytecode, run by the VM (`crate::vm`). `body`
     /// still holds the source forms, for printing and `(source f)`.
     pub code: Option<Rc<crate::vm::Proto>>,
+    /// A compiled closure's captured variables, shared with the function that made it.
+    pub upvals: Option<Rc<[crate::vm::Cell]>>,
 }
 
 pub struct Macro {
@@ -166,6 +168,7 @@ pub struct Macro {
     pub closure: Env,
     /// Set when the macro was compiled: its expander's bytecode (`crate::vm`).
     pub code: Option<Rc<crate::vm::Proto>>,
+    pub upvals: Option<Rc<[crate::vm::Cell]>>,
 }
 
 /// How a builtin's arguments are evaluated before the call.

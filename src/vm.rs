@@ -18,8 +18,15 @@
 //!
 //! ```text
 //! (proto :name "f" :params (n . rest) :source (body forms…)
-//!        :code ((load n) (const 0) (load =) …))
+//!        :slots 3 :captures ((local 0) (cap 1))
+//!        :code ((load-local 0 n) (const 0) (load =) …))
 //! ```
+//!
+//! With `:slots n` a proto is in **slot mode**: its frame has `n` local slots, the parameters in
+//! the first ones, and a call makes no scope. A variable an inner closure uses is moved into a
+//! shared cell when the closure is made (`:captures` says which: the maker's slot, or one of its
+//! own captures). Without `:slots`, parameters are bound by name in a new scope and `load`/`def`
+//! work on scopes — the mode hand-written bytecode uses.
 //!
 //! Instructions (stack effect in brackets):
 //!
@@ -41,9 +48,14 @@
 //! | `(make-list item splice …)` | pop one value per shape and push a list; a `splice` value is a list whose elements go in (quasiquote) |
 //! | `(next-item L)` | with a list and an index on the stack: push the next element and advance, or pop both and jump to `L` when done (for-each) |
 //! | `(macro (proto …))` | push a macro whose expander is that proto, closing over the current environment |
+//! | `(load-local i name)` `(set-local i name)` | read / assign slot `i`; if the slot isn't bound yet, the global `name` is meant |
+//! | `(def-local i)` `(init-local i)` `(clear-local i)` | bind slot `i` to the top (kept / popped as a fresh binding) / unbind it |
+//! | `(load-cap i name)` `(set-cap i name)` | read / assign the closure's `i`-th captured variable |
+//! | `(loop-slots i…)` | `loop` over slot variables: `recur` rebinds those slots |
 //! | `(interp form)` | push what the interpreter makes of `form` in the current scope — the compiler's fallback for anything it doesn't compile yet |
 //! | `(label L)` | a jump target (no instruction); `L` is a symbol or a number |
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -85,6 +97,40 @@ pub enum Op {
     MakeList(u32),
     NextItem(u32),
     Macro(u32),
+    // Slot-mode locals (a proto with `:slots`). The second operand of a load or set is the
+    // variable's name, for when its slot isn't bound yet: then the global of that name is meant.
+    LoadLocal(u32, u32),
+    DefLocal(u32),
+    DefLocalPop(u32),
+    InitLocal(u32),
+    SetLocal(u32, u32),
+    ClearLocal(u32),
+    LoadCap(u32, u32),
+    SetCap(u32, u32),
+    LoopSlots(u32),
+}
+
+/// A variable a closure shares with the function that made it (or with that function's own
+/// closure). `None` until it's defined.
+pub type Cell = Rc<RefCell<Option<Value>>>;
+
+/// One local variable of a slot-mode frame.
+#[derive(Clone)]
+enum Slot {
+    /// Not defined yet in this run of its scope: reading it means the global of the same name.
+    Unbound,
+    Val(Value),
+    /// Captured by a closure: the frame and its closures share the cell.
+    Cell(Cell),
+}
+
+/// Where a closure's captured variable comes from, in the function creating it.
+#[derive(Clone, Copy, Debug)]
+pub enum CapSource {
+    /// That function's own slot.
+    Local(u32),
+    /// One of that function's own captures.
+    Cap(u32),
 }
 
 /// A compiled function body, before it closes over an environment.
@@ -104,10 +150,21 @@ pub struct Proto {
     pub loop_names: Vec<Vec<Sym>>,
     /// For `MakeList`: per element, whether it is spliced.
     pub list_shapes: Vec<Vec<bool>>,
+    /// `Some(n)`: a slot-mode proto with `n` local slots — parameters first, in order, then the
+    /// rest parameter. `None`: the parameters are bound by name in a new scope.
+    pub nslots: Option<u32>,
+    /// What a closure made from this proto captures, in order: `LoadCap(i)` reads the i-th.
+    pub captures: Vec<CapSource>,
+    /// Slot lists for `LoopSlots`.
+    pub loop_slots: Vec<Vec<u32>>,
 }
 
 /// The function a proto makes when it closes over `env`.
 pub fn close(proto: &Rc<Proto>, env: &Env) -> Value {
+    close_with(proto, env, None)
+}
+
+fn close_with(proto: &Rc<Proto>, env: &Env, upvals: Option<Rc<[Cell]>>) -> Value {
     Value::Function(Rc::new(Function {
         name: proto.name.clone(),
         params: proto.params.clone(),
@@ -115,6 +172,7 @@ pub fn close(proto: &Rc<Proto>, env: &Env) -> Value {
         body: proto.source.clone(),
         closure: env.clone(),
         code: Some(proto.clone()),
+        upvals,
     }))
 }
 
@@ -132,11 +190,31 @@ thread_local! {
 }
 
 fn run_frame(proto: Rc<Proto>, env: Env) -> Result<Value, LispError> {
-    let mut vm = SPARE.with(|s| s.borrow_mut().pop()).unwrap_or_else(|| Vm { stack: Vec::new(), frames: Vec::new() });
-    vm.frames.push(Frame::new(proto, env, 0));
+    run_entry(proto, &env, None, std::iter::empty(), true)
+}
+
+/// Run `proto` as the entry frame of a machine: called with `args` under `closure`, or — `top` —
+/// as a top-level form whose definitions land in `closure` itself.
+fn run_entry(
+    proto: Rc<Proto>,
+    closure: &Env,
+    upvals: Option<Rc<[Cell]>>,
+    args: impl Iterator<Item = Value>,
+    top: bool,
+) -> Result<Value, LispError> {
+    let mut vm = SPARE.with(|s| s.borrow_mut().pop()).unwrap_or_default();
+    let frame = if top && proto.nslots.is_none() {
+        Frame::new(proto, closure.clone(), 0, 0, None)
+    } else if top {
+        enter(&mut vm.slots, proto, closure, upvals, args, 0, false)
+    } else {
+        enter(&mut vm.slots, proto, closure, upvals, args, 0, true)
+    };
+    vm.frames.push(frame);
     let r = vm.run();
     vm.stack.clear();
     vm.frames.clear();
+    vm.slots.clear();
     SPARE.with(|s| {
         let mut s = s.borrow_mut();
         if s.len() < 16 {
@@ -159,7 +237,7 @@ pub fn root_of(env: &Env) -> Env {
 }
 
 /// The macro a proto makes when it closes over `env`.
-pub fn close_macro(proto: &Rc<Proto>, env: &Env) -> Value {
+fn close_macro(proto: &Rc<Proto>, env: &Env, upvals: Option<Rc<[Cell]>>) -> Value {
     Value::Macro(Rc::new(Macro {
         name: proto.name.clone(),
         params: proto.params.clone(),
@@ -167,19 +245,96 @@ pub fn close_macro(proto: &Rc<Proto>, env: &Env) -> Value {
         body: proto.source.clone(),
         closure: env.clone(),
         code: Some(proto.clone()),
+        upvals,
     }))
 }
 
 /// Call a compiled function with evaluated arguments. `f.code` must be set.
 pub fn call(f: &Function, args: Vec<Value>) -> Result<Value, LispError> {
-    call_proto(f.code.clone().expect("vm::call on a function with no code"), &f.closure, args)
+    call_proto(f.code.clone().expect("vm::call on a function with no code"), &f.closure, f.upvals.clone(), args)
 }
 
 /// Run a proto as a call: its parameters bound to `args` in a scope under `closure`. How a
 /// compiled macro expands, too — it is called with its arguments unevaluated.
-pub fn call_proto(proto: Rc<Proto>, closure: &Env, args: Vec<Value>) -> Result<Value, LispError> {
-    let env = bind(&proto, closure, args);
-    run_frame(proto, env)
+pub fn call_proto(
+    proto: Rc<Proto>,
+    closure: &Env,
+    upvals: Option<Rc<[Cell]>>,
+    args: Vec<Value>,
+) -> Result<Value, LispError> {
+    run_entry(proto, closure, upvals, args.into_iter(), false)
+}
+
+/// A frame for calling `proto` with `args`. Slot mode: its slots go on top of `slots`, the
+/// parameters in the first ones, and its environment is the closure's own — a call makes no
+/// scope. Named mode (`bind`): a new scope holds the parameters. `as_call` false runs a slot-mode
+/// top-level form: slots, but no parameters.
+fn enter(
+    slots: &mut Vec<Slot>,
+    proto: Rc<Proto>,
+    closure: &Env,
+    upvals: Option<Rc<[Cell]>>,
+    args: impl IntoIterator<Item = Value>,
+    base: usize,
+    as_call: bool,
+) -> Frame {
+    let Some(n) = proto.nslots else {
+        let env = bind(&proto, closure, args);
+        return Frame::new(proto, env, base, slots.len(), upvals);
+    };
+    let sb = slots.len();
+    slots.resize(sb + n as usize, Slot::Unbound);
+    if as_call {
+        let mut args = args.into_iter();
+        let np = proto.params.len();
+        for k in 0..np {
+            slots[sb + k] = Slot::Val(args.next().unwrap_or(Value::Null));
+        }
+        if proto.rest.is_some() {
+            slots[sb + np] = Slot::Val(Value::List(Rc::new(args.collect())));
+        }
+    }
+    Frame::new(proto, closure.clone(), base, sb, upvals)
+}
+
+/// `def` in a slot: through the cell if a closure shares it, so the closure sees it too.
+fn def_slot(slot: &mut Slot, v: Value) {
+    match slot {
+        Slot::Cell(c) => *c.borrow_mut() = Some(v),
+        s => *s = Slot::Val(v),
+    }
+}
+
+/// The cells a closure made from `proto` captures, from the frame creating it. A captured slot
+/// becomes a cell, shared from then on by the frame and the closure.
+fn capture(slots: &mut [Slot], sb: usize, upvals: &Option<Rc<[Cell]>>, proto: &Proto) -> Option<Rc<[Cell]>> {
+    if proto.captures.is_empty() {
+        return None;
+    }
+    let cells: Vec<Cell> = proto
+        .captures
+        .iter()
+        .map(|c| match *c {
+            CapSource::Local(j) => {
+                let slot = &mut slots[sb + j as usize];
+                match slot {
+                    Slot::Cell(c) => c.clone(),
+                    Slot::Val(v) => {
+                        let c = Rc::new(RefCell::new(Some(v.clone())));
+                        *slot = Slot::Cell(c.clone());
+                        c
+                    }
+                    Slot::Unbound => {
+                        let c = Rc::new(RefCell::new(None));
+                        *slot = Slot::Cell(c.clone());
+                        c
+                    }
+                }
+            }
+            CapSource::Cap(j) => upvals.as_ref().expect("a capture of a capture needs captures")[j as usize].clone(),
+        })
+        .collect();
+    Some(Rc::from(cells))
 }
 
 /// The parameters' scope — missing arguments are nil, extras go to the rest parameter or are
@@ -201,7 +356,14 @@ struct Mark {
     env: Env,
     sp: usize,
     handlers: usize,
-    names: u32,
+    /// What `recur` rebinds: names (`Loop`) or slots (`LoopSlots`), by list index.
+    rebind: Rebind,
+}
+
+#[derive(Clone, Copy)]
+enum Rebind {
+    Names(u32),
+    Slots(u32),
 }
 
 struct Handler {
@@ -216,19 +378,41 @@ struct Frame {
     pc: usize,
     env: Env,
     base: usize,
+    /// Where this frame's slots start in `Vm::slots`.
+    slot_base: usize,
+    upvals: Option<Rc<[Cell]>>,
     marks: Vec<Mark>,
     handlers: Vec<Handler>,
 }
 
 impl Frame {
-    fn new(proto: Rc<Proto>, env: Env, base: usize) -> Frame {
-        Frame { proto, pc: 0, env, base, marks: Vec::new(), handlers: Vec::new() }
+    fn new(proto: Rc<Proto>, env: Env, base: usize, slot_base: usize, upvals: Option<Rc<[Cell]>>) -> Frame {
+        Frame { proto, pc: 0, env, base, slot_base, upvals, marks: Vec::new(), handlers: Vec::new() }
     }
 }
 
+#[derive(Default)]
 struct Vm {
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    /// Every frame's local slots, end to end.
+    slots: Vec<Slot>,
+}
+
+/// `recur`'s new values into a loop's variables.
+fn rebind(m: &Mark, proto: &Proto, slots: &mut [Slot], sb: usize, vals: impl Iterator<Item = Value>) {
+    match m.rebind {
+        Rebind::Names(i) => {
+            for (name, v) in proto.loop_names[i as usize].iter().zip(vals) {
+                env::define_sym(&m.env, name, v);
+            }
+        }
+        Rebind::Slots(i) => {
+            for (&slot, v) in proto.loop_slots[i as usize].iter().zip(vals) {
+                def_slot(&mut slots[sb + slot as usize], v);
+            }
+        }
+    }
 }
 
 fn pop(stack: &mut Vec<Value>) -> Value {
@@ -296,8 +480,9 @@ impl Vm {
                     fr.env = parent.expect("pop-scope at the root environment");
                 }
                 Op::Closure(i) => {
-                    let v = close(&fr.proto.protos[i as usize], &fr.env);
-                    self.stack.push(v);
+                    let proto = &fr.proto.protos[i as usize];
+                    let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
+                    self.stack.push(close_with(proto, &fr.env, up));
                 }
                 Op::Call(n) => {
                     self.call(n as usize, false)?;
@@ -325,13 +510,13 @@ impl Vm {
                     }
                     self.stack.push(Value::Dict(Rc::new(d)));
                 }
-                Op::Loop(names) => {
+                Op::Loop(i) | Op::LoopSlots(i) => {
                     let mark = Mark {
                         start: fr.pc,
                         env: fr.env.clone(),
                         sp: self.stack.len(),
                         handlers: fr.handlers.len(),
-                        names,
+                        rebind: if matches!(op, Op::Loop(_)) { Rebind::Names(i) } else { Rebind::Slots(i) },
                     };
                     fr.marks.push(mark);
                 }
@@ -339,11 +524,8 @@ impl Vm {
                     let base = self.stack.len() - n as usize;
                     // The loop is this frame's own (the usual case): rebind and jump, here.
                     if let Some(m) = fr.marks.last() {
+                        rebind(m, &fr.proto, &mut self.slots, fr.slot_base, self.stack.drain(base..));
                         let (start, sp, handlers, menv) = (m.start, m.sp, m.handlers, m.env.clone());
-                        let names = &fr.proto.loop_names[m.names as usize];
-                        for (name, v) in names.iter().zip(self.stack.drain(base..)) {
-                            env::define_sym(&menv, name, v);
-                        }
                         fr.env = menv;
                         fr.pc = start;
                         fr.handlers.truncate(handlers);
@@ -406,8 +588,51 @@ impl Vm {
                     }
                 }
                 Op::Macro(i) => {
-                    let v = close_macro(&fr.proto.protos[i as usize], &fr.env);
+                    let proto = &fr.proto.protos[i as usize];
+                    let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
+                    self.stack.push(close_macro(proto, &fr.env, up));
+                }
+                Op::LoadLocal(i, s) => {
+                    let v = match &self.slots[fr.slot_base + i as usize] {
+                        Slot::Val(v) => v.clone(),
+                        Slot::Cell(c) => match &*c.borrow() {
+                            Some(v) => v.clone(),
+                            None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                        },
+                        Slot::Unbound => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                    };
                     self.stack.push(v);
+                }
+                Op::DefLocal(i) => def_slot(&mut self.slots[fr.slot_base + i as usize], top(&self.stack)),
+                Op::DefLocalPop(i) => def_slot(&mut self.slots[fr.slot_base + i as usize], pop(&mut self.stack)),
+                Op::InitLocal(i) => self.slots[fr.slot_base + i as usize] = Slot::Val(pop(&mut self.stack)),
+                Op::ClearLocal(i) => self.slots[fr.slot_base + i as usize] = Slot::Unbound,
+                Op::SetLocal(i, s) => {
+                    let v = top(&self.stack);
+                    match &mut self.slots[fr.slot_base + i as usize] {
+                        Slot::Val(old) => *old = v,
+                        Slot::Cell(c) if c.borrow().is_some() => *c.borrow_mut() = Some(v),
+                        // not defined in this scope yet: set! looks further out, to the global
+                        _ => env::set(&fr.env, &fr.proto.syms[s as usize], v)?,
+                    }
+                }
+                Op::LoadCap(i, s) => {
+                    let up = fr.upvals.as_ref().expect("load-cap in a closure with no captures");
+                    let v = match &*up[i as usize].borrow() {
+                        Some(v) => v.clone(),
+                        None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                    };
+                    self.stack.push(v);
+                }
+                Op::SetCap(i, s) => {
+                    let v = top(&self.stack);
+                    let up = fr.upvals.as_ref().expect("set-cap in a closure with no captures");
+                    let cell = &up[i as usize];
+                    if cell.borrow().is_some() {
+                        *cell.borrow_mut() = Some(v);
+                    } else {
+                        env::set(&fr.env, &fr.proto.syms[s as usize], v)?;
+                    }
                 }
             }
         }
@@ -434,17 +659,25 @@ impl Vm {
         match &f {
             Value::Function(func) if func.code.is_some() => {
                 let proto = func.code.clone().unwrap();
-                let env = bind(&proto, &func.closure, self.stack.drain(base..));
-                self.stack.pop();
                 if tail {
-                    let fr = self.frames.last_mut().unwrap();
-                    self.stack.truncate(fr.base);
-                    *fr = Frame::new(proto, env, fr.base);
+                    // the new frame takes this one's place: its slots, then its stack
+                    let (fbase, fsb) = {
+                        let fr = self.frames.last().unwrap();
+                        (fr.base, fr.slot_base)
+                    };
+                    let args: Vec<Value> = self.stack.drain(base..).collect();
+                    self.stack.truncate(fbase);
+                    self.slots.truncate(fsb);
+                    let frame = enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), args, fbase, true);
+                    *self.frames.last_mut().unwrap() = frame;
                 } else {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
                     }
-                    self.frames.push(Frame::new(proto, env, self.stack.len()));
+                    let frame =
+                        enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), self.stack.drain(base..), base - 1, true);
+                    self.stack.pop();
+                    self.frames.push(frame);
                 }
                 Ok(None)
             }
@@ -471,6 +704,7 @@ impl Vm {
     fn ret(&mut self, v: Value) -> Option<Value> {
         let fr = self.frames.pop().unwrap();
         self.stack.truncate(fr.base);
+        self.slots.truncate(fr.slot_base);
         if self.frames.is_empty() {
             return Some(v);
         }
@@ -486,10 +720,7 @@ impl Vm {
             if recur && !fr.marks.is_empty() {
                 let LispError::Recur(vals) = e else { unreachable!() };
                 let m = fr.marks.last().unwrap();
-                let names = &fr.proto.loop_names[m.names as usize];
-                for (name, v) in names.iter().zip(vals) {
-                    env::define_sym(&m.env, name, v);
-                }
+                rebind(m, &fr.proto, &mut self.slots, fr.slot_base, vals.into_iter());
                 fr.env = m.env.clone();
                 fr.pc = m.start;
                 fr.handlers.truncate(m.handlers);
@@ -507,6 +738,7 @@ impl Vm {
             }
             let fr = self.frames.pop().unwrap();
             self.stack.truncate(fr.base);
+            self.slots.truncate(fr.slot_base);
         }
         Err(e)
     }
@@ -543,6 +775,8 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
     let mut rest = None;
     let mut source = Vec::new();
     let mut code_forms: &[Value] = &[];
+    let mut nslots = None;
+    let mut captures = Vec::new();
     let mut i = 1;
     while i < items.len() {
         let key = match &items[i] {
@@ -567,6 +801,19 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 }
             }
             ("source", Value::List(forms)) => source = forms.to_vec(),
+            ("slots", Value::Number(_)) => nslots = Some(count_of(Some(val), ":slots")?),
+            ("captures", Value::List(caps)) => {
+                for c in caps.iter() {
+                    let (kind, args) = instr(c)?;
+                    let i = count_of(args.first(), "a capture")?;
+                    captures.push(match &*kind {
+                        "local" => CapSource::Local(i),
+                        "cap" => CapSource::Cap(i),
+                        other => return Err(bad(format!("a capture is (local i) or (cap i), not ({other} …)"))),
+                    });
+                }
+            }
+            ("captures", Value::Null) => {}
             ("code", Value::List(forms)) => code_forms = forms,
             (k, _) => return Err(bad(format!("unknown or malformed field :{k}"))),
         }
@@ -609,6 +856,33 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         dict_keys: Vec::new(),
         loop_names: Vec::new(),
         list_shapes: Vec::new(),
+        nslots,
+        captures,
+        loop_slots: Vec::new(),
+    };
+    if let Some(n) = nslots {
+        let need = p.params.len() + p.rest.is_some() as usize;
+        if (n as usize) < need {
+            return Err(bad(format!(":slots {n} has no room for {need} parameter(s)")));
+        }
+    }
+    let ncaps = p.captures.len() as u32;
+    let slot = |v: Option<&Value>, nslots: Option<u32>| -> Result<u32, LispError> {
+        let Some(n) = nslots else { return Err(bad("a slot instruction needs a proto with :slots")) };
+        let i = count_of(v, "a slot")?;
+        if i < n {
+            Ok(i)
+        } else {
+            Err(bad(format!("slot {i} is out of range (:slots {n})")))
+        }
+    };
+    let cap = |v: Option<&Value>| -> Result<u32, LispError> {
+        let i = count_of(v, "a capture")?;
+        if i < ncaps {
+            Ok(i)
+        } else {
+            Err(bad(format!("capture {i} is out of range ({ncaps} captured)")))
+        }
     };
     for f in code_forms {
         let (op, args) = instr(f)?;
@@ -637,6 +911,25 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 }
             }
             "pop" => Op::Pop,
+            "load-local" | "set-local" | "load-cap" | "set-cap" => {
+                arity(2)?;
+                let name = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
+                match &*op {
+                    "load-local" => Op::LoadLocal(slot(args.first(), p.nslots)?, name),
+                    "set-local" => Op::SetLocal(slot(args.first(), p.nslots)?, name),
+                    "load-cap" => Op::LoadCap(cap(args.first())?, name),
+                    _ => Op::SetCap(cap(args.first())?, name),
+                }
+            }
+            "def-local" => Op::DefLocal(slot(args.first(), p.nslots)?),
+            "def-local-pop" => Op::DefLocalPop(slot(args.first(), p.nslots)?),
+            "init-local" => Op::InitLocal(slot(args.first(), p.nslots)?),
+            "clear-local" => Op::ClearLocal(slot(args.first(), p.nslots)?),
+            "loop-slots" => {
+                let slots = args.iter().map(|a| slot(Some(a), p.nslots)).collect::<Result<Vec<_>, _>>()?;
+                p.loop_slots.push(slots);
+                Op::LoopSlots(p.loop_slots.len() as u32 - 1)
+            }
             "def-pop" => {
                 arity(1)?;
                 let s = sym_of(&args[0], "def-pop's name")?;
@@ -650,7 +943,9 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             "pop-scope" => Op::PopScope,
             "closure" => {
                 arity(1)?;
-                p.protos.push(assemble(&args[0])?);
+                let child = assemble(&args[0])?;
+                check_captures(&child, p.nslots, ncaps)?;
+                p.protos.push(child);
                 Op::Closure(p.protos.len() as u32 - 1)
             }
             "call" => Op::Call(count_of(args.first(), "call")?),
@@ -692,7 +987,9 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             "next-item" => Op::NextItem(target(args.first())?),
             "macro" => {
                 arity(1)?;
-                p.protos.push(assemble(&args[0])?);
+                let child = assemble(&args[0])?;
+                check_captures(&child, p.nslots, ncaps)?;
+                p.protos.push(child);
                 Op::Macro(p.protos.len() as u32 - 1)
             }
             "interp" => {
@@ -707,6 +1004,22 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
     Ok(Rc::new(p))
 }
 
+/// A closure's captures must name slots and captures the creating proto has.
+fn check_captures(child: &Proto, nslots: Option<u32>, ncaps: u32) -> Result<(), LispError> {
+    for c in &child.captures {
+        match *c {
+            CapSource::Local(j) if j >= nslots.unwrap_or(0) => {
+                return Err(bad(format!("a closure captures slot {j}, which its maker doesn't have")))
+            }
+            CapSource::Cap(j) if j >= ncaps => {
+                return Err(bad(format!("a closure captures capture {j}, which its maker doesn't have")))
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// The index of `s` in a proto's symbol table, adding it if it's new.
 fn intern(syms: &mut Vec<Sym>, s: Sym) -> u32 {
     match syms.iter().position(|x| *x == s) {
@@ -718,7 +1031,8 @@ fn intern(syms: &mut Vec<Sym>, s: Sym) -> u32 {
     }
 }
 
-/// `(def s) (pop)` → `(def-pop s)`: the pair every let and loop binding compiles to.
+/// `(def s) (pop)` → `(def-pop s)` and `(def-local i) (pop)` → `(def-local-pop i)`: a
+/// definition whose value nobody uses moves it instead of copying it.
 fn fuse_def_pop(forms: &[Value]) -> Vec<Value> {
     let is = |f: &Value, name: &str, n: usize| {
         matches!(f, Value::List(l) if l.len() == n && matches!(&l[0], Value::Symbol(s) if &**s == name))
@@ -726,9 +1040,10 @@ fn fuse_def_pop(forms: &[Value]) -> Vec<Value> {
     let mut out = Vec::with_capacity(forms.len());
     let mut i = 0;
     while i < forms.len() {
-        if i + 1 < forms.len() && is(&forms[i], "def", 2) && is(&forms[i + 1], "pop", 1) {
+        let fused = if is(&forms[i], "def", 2) { "def-pop" } else if is(&forms[i], "def-local", 2) { "def-local-pop" } else { "" };
+        if i + 1 < forms.len() && !fused.is_empty() && is(&forms[i + 1], "pop", 1) {
             let Value::List(l) = &forms[i] else { unreachable!() };
-            out.push(Value::List(Rc::new(vec![Value::Symbol(Sym::new("def-pop")), l[1].clone()])));
+            out.push(Value::List(Rc::new(vec![Value::Symbol(Sym::new(fused)), l[1].clone()])));
             i += 2;
         } else {
             out.push(forms[i].clone());
@@ -781,7 +1096,13 @@ fn global_kind(name: &Value, env: &Env) -> Value {
 }
 
 pub fn register(env: &Env) {
-    builtin(env, "vm-assemble", |args, env| Ok(close(&assemble(one("vm-assemble", args)?)?, env)));
+    builtin(env, "vm-assemble", |args, env| {
+        let proto = assemble(one("vm-assemble", args)?)?;
+        if !proto.captures.is_empty() {
+            return Err(bad("a proto with :captures is made by (closure …) inside another proto, not on its own"));
+        }
+        Ok(close(&proto, env))
+    });
     builtin(env, "vm-run", |args, env| run_in(assemble(one("vm-run", args)?)?, root_of(env)));
     builtin(env, "vm-global-kind", |args, env| Ok(global_kind(one("vm-global-kind", args)?, env)));
     builtin(env, "vm-macroexpand", |args, env| {

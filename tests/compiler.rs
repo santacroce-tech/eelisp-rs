@@ -251,6 +251,45 @@ const EDGES: &[&str] = &[
     "(defmacro)",
     "(defmacro bad)",
     "my-if",
+    // locals in slots, closures sharing them
+    "(defn make-counter () (let (n 0) (fn () (set! n (+ n 1)) n)))",
+    "(def c1 (make-counter)) (def c2 (make-counter)) (c1) (c1) (list (c1) (c2))",
+    "(defn adders () (map (fn (i) (fn (x) (+ x i))) (range 0 3)))",
+    "(map (fn (f) (f 10)) (adders))",
+    "(defn lets-in-loop () (loop (i 0 fs (list)) (if (= i 3) (map (fn (f) (f)) fs) (let (j (* i 10)) (recur (+ i 1) (cons (fn () j) fs))))))",
+    "(lets-in-loop)",
+    "(defn loop-var-shared () (loop (i 0 f nil) (if (= i 3) (f) (recur (+ i 1) (if (nil? f) (fn () i) f)))))",
+    "(loop-var-shared)",
+    "(defn items-captured () (let (fs (list)) (for-each k '(1 2 3) (set! fs (cons (fn () k) fs))) (map (fn (f) (f)) fs)))",
+    "(items-captured)",
+    "(defn three-levels (a) (fn (b) (fn (c) (list a b c))))",
+    "(((three-levels 1) 2) 3)",
+    "(defn set-outer () (let (x 1) (let (g (fn () (set! x (+ x 10)))) (g) (g) x)))",
+    "(set-outer)",
+    "(defn local-def () (def y 5) (def y (+ y 1)) y)",
+    "(local-def)",
+    "y",
+    "(def z \"global z\")",
+    "(defn maybe-def (flag) (if flag (def z \"local z\")) z)",
+    "(list (maybe-def true) (maybe-def false))",
+    "(defn local-rec (n) (defn helper (k acc) (if (= k 0) acc (helper (- k 1) (* acc k)))) (helper n 1))",
+    "(local-rec 10)",
+    "(defn local-fn-def () (def again (fn (k) (if (= k 0) :done (again (- k 1))))) (again 5))",
+    "(local-fn-def)",
+    "(defn shadow (x) (let (x (* x 2)) (let (x (+ x 1)) x)))",
+    "(shadow 5)",
+    "(defn rest-slots (a . more) (list a more (length more)))",
+    "(list (rest-slots 1) (rest-slots 1 2 3))",
+    "(defn missing-args (a b c) (list a b c))",
+    "(missing-args 1)",
+    "(defn set-global () (set! z \"set from a function\") z)",
+    "(list (set-global) z)",
+    "(defn catch-binds () (try (error \"inner\") (catch e (fn () (dict-get e :message)))))",
+    "((catch-binds))",
+    "(defn defs-each-iteration () (loop (i 0 out (list)) (if (= i 2) out (let () (if (= i 0) (def w :first)) (recur (+ i 1) (cons (try w (catch e :unbound)) out))))))",
+    "(defs-each-iteration)",
+    "(defn eval-sees-globals (z) (eval 'z))",
+    "(eval-sees-globals \"a local\")",
 ];
 
 fn agree(setup: Setup) {
@@ -290,7 +329,7 @@ fn compile_returns_bytecode_a_person_can_read() {
     let p = print_value(&it.eval_str("(compile '(if ok 1 2))").unwrap(), true);
     assert_eq!(
         p,
-        "(proto :name nil :params () :source ((if ok 1 2)) :code ((load ok) (jump-if-false 1) (const 1) (jump 2) (label 1) (const 2) (label 2)))"
+        "(proto :name nil :params () :source ((if ok 1 2)) :slots 0 :captures () :code ((load ok) (jump-if-false 1) (const 1) (jump 2) (label 1) (const 2) (label 2)))"
     );
 }
 
