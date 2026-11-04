@@ -10,7 +10,9 @@ become a book.
 | 2 | [A virtual machine](02-a-virtual-machine.md) | The bytecode VM: a stack machine, its instructions, tail calls, `loop`/`recur`, `try`/`catch`, and how compiled and interpreted code live side by side |
 | 3 | [A compiler in EELisp](03-a-compiler-in-eelisp.md) | `src/compiler.eel`: compiling each form, macros at compile time, and the differential test that keeps it honest |
 | 4 | [The bootstrap](04-the-bootstrap.md) | The compiler compiling itself, stage 0 and stage 1, and the fixed point that proves it works |
+| 5 | [Measuring](05-measuring.md) | A benchmark from real editor snippets, a compiler that was first slower than the interpreter, what fixed that, and the language decision that real speed needs |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel` and `src/boot.rs`; the tests that back every claim made here are
-`tests/vm.rs`, `tests/compiler.rs` and `tests/bootstrap.rs`.
+`tests/vm.rs`, `tests/compiler.rs` and `tests/bootstrap.rs`; the numbers come from
+`examples/bench.rs`.

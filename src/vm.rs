@@ -28,6 +28,7 @@
 //! | `(const v)` | push `v` |
 //! | `(load s)` / `(def s)` / `(set s)` | push the value of `s` / bind or assign `s` to the top (kept) |
 //! | `(pop)` | drop the top |
+//! | `(def-pop s)` | bind `s` to the top and drop it (the assembler makes it from `(def s) (pop)`) |
 //! | `(jump L)` `(jump-if-false L)` | jump; the conditional one pops its test |
 //! | `(jump-if-false-or-pop L)` `(jump-if-true-or-pop L)` | `and`/`or`: keep the top and jump, or pop it |
 //! | `(push-scope)` `(pop-scope)` | enter / leave a child environment |
@@ -53,12 +54,16 @@ use crate::value::*;
 /// Deeper than this many non-tail calls is an error, not an exhausted machine.
 pub const MAX_FRAMES: usize = 100_000;
 
-#[derive(Clone, Debug)]
+/// One instruction. Every operand is an index (into the proto's constants, symbols, protos…) or
+/// a jump target, so an instruction is a copy, not a clone, when the machine fetches it.
+#[derive(Clone, Copy, Debug)]
 pub enum Op {
     Const(u32),
-    Load(Sym),
-    Def(Sym),
-    Set(Sym),
+    Load(u32),
+    Def(u32),
+    /// `def` then `pop`, fused by the assembler: the value moves into the binding.
+    DefPop(u32),
+    Set(u32),
     Pop,
     Jump(u32),
     JumpIfFalse(u32),
@@ -91,6 +96,8 @@ pub struct Proto {
     pub source: Vec<Value>,
     pub code: Vec<Op>,
     pub consts: Vec<Value>,
+    /// The names `Load`, `Def` and `Set` refer to.
+    pub syms: Vec<Sym>,
     pub protos: Vec<Rc<Proto>>,
     /// Key lists for `Dict`, name lists for `Loop`.
     pub dict_keys: Vec<Vec<Symbol>>,
@@ -114,9 +121,29 @@ pub fn close(proto: &Rc<Proto>, env: &Env) -> Value {
 /// Run a proto's code directly in `env` — no parameter scope — the way a top-level form runs:
 /// its `def`s land in `env`.
 pub fn run_in(proto: Rc<Proto>, env: Env) -> Result<Value, LispError> {
-    let mut vm = Vm { stack: Vec::new(), frames: Vec::new() };
+    run_frame(proto, env)
+}
+
+thread_local! {
+    /// Machines that finished a run, kept for the next one: `map` calling a compiled function
+    /// once per element would otherwise allocate a stack and a frame list each time. A run that
+    /// starts while another is going (a builtin calling back into compiled code) takes another.
+    static SPARE: std::cell::RefCell<Vec<Vm>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn run_frame(proto: Rc<Proto>, env: Env) -> Result<Value, LispError> {
+    let mut vm = SPARE.with(|s| s.borrow_mut().pop()).unwrap_or_else(|| Vm { stack: Vec::new(), frames: Vec::new() });
     vm.frames.push(Frame::new(proto, env, 0));
-    vm.run()
+    let r = vm.run();
+    vm.stack.clear();
+    vm.frames.clear();
+    SPARE.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.len() < 16 {
+            s.push(vm);
+        }
+    });
+    r
 }
 
 /// The global scope at the root of `env`'s chain.
@@ -152,14 +179,12 @@ pub fn call(f: &Function, args: Vec<Value>) -> Result<Value, LispError> {
 /// compiled macro expands, too — it is called with its arguments unevaluated.
 pub fn call_proto(proto: Rc<Proto>, closure: &Env, args: Vec<Value>) -> Result<Value, LispError> {
     let env = bind(&proto, closure, args);
-    let mut vm = Vm { stack: Vec::new(), frames: Vec::new() };
-    vm.frames.push(Frame::new(proto, env, 0));
-    vm.run()
+    run_frame(proto, env)
 }
 
 /// The parameters' scope — missing arguments are nil, extras go to the rest parameter or are
 /// dropped, exactly as the tree-walker binds them.
-fn bind(proto: &Proto, closure: &Env, args: Vec<Value>) -> Env {
+fn bind(proto: &Proto, closure: &Env, args: impl IntoIterator<Item = Value>) -> Env {
     let mut locals = Vec::with_capacity(proto.params.len() + proto.rest.is_some() as usize);
     let mut args = args.into_iter();
     for p in &proto.params {
@@ -228,10 +253,7 @@ impl Vm {
     fn step(&mut self) -> Result<Value, LispError> {
         loop {
             let fr = self.frames.last_mut().expect("vm has no frame");
-            let op = match fr.proto.code.get(fr.pc) {
-                Some(op) => op.clone(),
-                None => Op::Return,
-            };
+            let op = fr.proto.code.get(fr.pc).copied().unwrap_or(Op::Return);
             fr.pc += 1;
             match op {
                 Op::Const(i) => {
@@ -239,11 +261,12 @@ impl Vm {
                     self.stack.push(v);
                 }
                 Op::Load(s) => {
-                    let v = env::get_sym(&fr.env, &s)?;
+                    let v = env::get_sym(&fr.env, &fr.proto.syms[s as usize])?;
                     self.stack.push(v);
                 }
-                Op::Def(s) => env::define_sym(&fr.env, &s, top(&self.stack)),
-                Op::Set(s) => env::set(&fr.env, &s, top(&self.stack))?,
+                Op::Def(s) => env::define_sym(&fr.env, &fr.proto.syms[s as usize], top(&self.stack)),
+                Op::DefPop(s) => env::define_sym(&fr.env, &fr.proto.syms[s as usize], pop(&mut self.stack)),
+                Op::Set(s) => env::set(&fr.env, &fr.proto.syms[s as usize], top(&self.stack))?,
                 Op::Pop => {
                     pop(&mut self.stack);
                 }
@@ -313,7 +336,22 @@ impl Vm {
                     fr.marks.push(mark);
                 }
                 Op::Recur(n) => {
-                    let vals = self.stack.split_off(self.stack.len() - n as usize);
+                    let base = self.stack.len() - n as usize;
+                    // The loop is this frame's own (the usual case): rebind and jump, here.
+                    if let Some(m) = fr.marks.last() {
+                        let (start, sp, handlers, menv) = (m.start, m.sp, m.handlers, m.env.clone());
+                        let names = &fr.proto.loop_names[m.names as usize];
+                        for (name, v) in names.iter().zip(self.stack.drain(base..)) {
+                            env::define_sym(&menv, name, v);
+                        }
+                        fr.env = menv;
+                        fr.pc = start;
+                        fr.handlers.truncate(handlers);
+                        self.stack.truncate(sp);
+                        continue;
+                    }
+                    // Otherwise it travels, as the interpreter's does, to a caller's loop.
+                    let vals = self.stack.split_off(base);
                     return Err(LispError::Recur(vals));
                 }
                 Op::EndLoop => {
@@ -379,12 +417,25 @@ impl Vm {
     /// one when `tail`); anything else is applied here. Returns the value when a tail call
     /// finished the entry frame.
     fn call(&mut self, n: usize, tail: bool) -> Result<Option<Value>, LispError> {
-        let args = self.stack.split_off(self.stack.len() - n);
-        let f = pop(&mut self.stack);
+        // The arguments are the top `n` values, the function just below them. They are passed
+        // from where they lie: no vector is made for them.
+        let base = self.stack.len() - n;
+        // A builtin is called where it lies, with its arguments where they lie.
+        if let Value::Builtin(b) = &self.stack[base - 1] {
+            let env = &self.frames.last().unwrap().env;
+            let v = (b.func)(&self.stack[base..], env)?;
+            self.stack.truncate(base - 1);
+            return Ok(if tail { self.ret(v) } else {
+                self.stack.push(v);
+                None
+            });
+        }
+        let f = self.stack[base - 1].clone();
         match &f {
             Value::Function(func) if func.code.is_some() => {
                 let proto = func.code.clone().unwrap();
-                let env = bind(&proto, &func.closure, args);
+                let env = bind(&proto, &func.closure, self.stack.drain(base..));
+                self.stack.pop();
                 if tail {
                     let fr = self.frames.last_mut().unwrap();
                     self.stack.truncate(fr.base);
@@ -399,7 +450,8 @@ impl Vm {
             }
             Value::Function(_) | Value::Builtin(_) => {
                 let env = self.frames.last().unwrap().env.clone();
-                let v = apply_value(&f, &args, &env)?;
+                let v = apply_value(&f, &self.stack[base..], &env)?;
+                self.stack.truncate(base - 1);
                 if tail {
                     Ok(self.ret(v))
                 } else {
@@ -521,6 +573,10 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         i += 2;
     }
 
+    // Pass 0: fuse `(def s) (pop)` into `(def-pop s)`, before labels are counted.
+    let fused = fuse_def_pop(code_forms);
+    let code_forms: &[Value] = &fused;
+
     // Pass 1: where each label lands.
     let mut labels: HashMap<String, u32> = HashMap::new();
     let mut at = 0u32;
@@ -548,6 +604,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         source,
         code: Vec::new(),
         consts: Vec::new(),
+        syms: Vec::new(),
         protos: Vec::new(),
         dict_keys: Vec::new(),
         loop_names: Vec::new(),
@@ -569,19 +626,22 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 p.consts.push(args[0].clone());
                 Op::Const(p.consts.len() as u32 - 1)
             }
-            "load" => {
+            "load" | "def" | "set" => {
                 arity(1)?;
-                Op::Load(sym_of(&args[0], "load's name")?)
-            }
-            "def" => {
-                arity(1)?;
-                Op::Def(sym_of(&args[0], "def's name")?)
-            }
-            "set" => {
-                arity(1)?;
-                Op::Set(sym_of(&args[0], "set's name")?)
+                let s = sym_of(&args[0], &format!("{op}'s name"))?;
+                let i = intern(&mut p.syms, s);
+                match &*op {
+                    "load" => Op::Load(i),
+                    "def" => Op::Def(i),
+                    _ => Op::Set(i),
+                }
             }
             "pop" => Op::Pop,
+            "def-pop" => {
+                arity(1)?;
+                let s = sym_of(&args[0], "def-pop's name")?;
+                Op::DefPop(intern(&mut p.syms, s))
+            }
             "jump" => Op::Jump(target(args.first())?),
             "jump-if-false" => Op::JumpIfFalse(target(args.first())?),
             "jump-if-false-or-pop" => Op::JumpIfFalseOrPop(target(args.first())?),
@@ -645,6 +705,37 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         p.code.push(o);
     }
     Ok(Rc::new(p))
+}
+
+/// The index of `s` in a proto's symbol table, adding it if it's new.
+fn intern(syms: &mut Vec<Sym>, s: Sym) -> u32 {
+    match syms.iter().position(|x| *x == s) {
+        Some(i) => i as u32,
+        None => {
+            syms.push(s);
+            syms.len() as u32 - 1
+        }
+    }
+}
+
+/// `(def s) (pop)` → `(def-pop s)`: the pair every let and loop binding compiles to.
+fn fuse_def_pop(forms: &[Value]) -> Vec<Value> {
+    let is = |f: &Value, name: &str, n: usize| {
+        matches!(f, Value::List(l) if l.len() == n && matches!(&l[0], Value::Symbol(s) if &**s == name))
+    };
+    let mut out = Vec::with_capacity(forms.len());
+    let mut i = 0;
+    while i < forms.len() {
+        if i + 1 < forms.len() && is(&forms[i], "def", 2) && is(&forms[i + 1], "pop", 1) {
+            let Value::List(l) = &forms[i] else { unreachable!() };
+            out.push(Value::List(Rc::new(vec![Value::Symbol(Sym::new("def-pop")), l[1].clone()])));
+            i += 2;
+        } else {
+            out.push(forms[i].clone());
+            i += 1;
+        }
+    }
+    out
 }
 
 fn label_of(v: Option<&Value>) -> Result<String, LispError> {

@@ -71,8 +71,13 @@ binary nobody can reproduce), and it is the reference for testing.
   image, bytecode only) produce the same image, character for character: 36 protos, ~50 KB of
   readable EELisp, with no `(interp …)` in it. A test fails if the committed image is stale, and
   the differential suite runs a fourth time with the compiler loaded from the image alone.
-  Speed (release build, `cargo run --release --example bootstrap`): both stages take ~17 ms, so
-  compiled and interpreted are even for now.
+- **Measuring — first round done.** `examples/bench.rs` runs synthetic workloads and the example
+  calls from eeditor's snippet files on both engines. Compiled code started up to a third slower;
+  six fixes in the VM (copyable instructions, arguments passed in place, `recur` without the
+  error path, builtins called by reference, a fused `def-pop`, reused machines) brought it to
+  even: 0.9–1.15×, most real snippets ~1.05×. Big gains need locals in slots, which changes
+  whether `eval` can see a caller's locals: a language decision, pending. See
+  docs/self-hosting/05-measuring.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
