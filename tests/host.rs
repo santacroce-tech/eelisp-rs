@@ -189,6 +189,43 @@ fn folders_are_listed_from_the_workspace() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A folder outside the workspace the host granted is read as `~name/…` — listed, read and
+/// described with that prefix — and nothing a script writes can name one that wasn't granted or
+/// climb out of one that was.
+#[test]
+fn granted_folders_are_read_by_name() {
+    let base = std::env::temp_dir().join(format!("eelisp-roots-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (ws, dl) = (base.join("ws"), base.join("Downloads"));
+    std::fs::create_dir_all(ws.join("notes")).unwrap();
+    std::fs::create_dir_all(dl.join("invoices")).unwrap();
+    std::fs::write(dl.join("invoices/march.md"), "# March").unwrap();
+    std::fs::write(dl.join("photo.jpg"), [0u8, 1]).unwrap();
+    std::fs::write(base.join("secret.md"), "no").unwrap();
+
+    let it = Interpreter::new();
+    let root = ws.display().to_string();
+    it.editor.borrow_mut().current_dir = Some(Box::new(move || root.clone()));
+    assert_eq!(s(&it, "(roots)"), "()");
+    assert!(it.eval_str("(dir-list \"~Downloads\")").unwrap_err().to_string().contains("no folder by that name"));
+
+    let granted = vec![("Downloads".to_string(), dl.display().to_string())];
+    it.editor.borrow_mut().roots = Some(Box::new(move || granted.clone()));
+    assert_eq!(s(&it, "(roots)"), "(~Downloads)");
+    assert_eq!(s(&it, "(map (fn (e) (dict-get e :path)) (dir-list \"~Downloads\"))"), "(~Downloads/invoices ~Downloads/photo.jpg)");
+    assert_eq!(s(&it, "(notes \"~Downloads\")"), "(~Downloads/invoices/march.md)");
+    assert_eq!(s(&it, "(read-note \"~Downloads/invoices/march.md\")"), "# March");
+    assert_eq!(s(&it, "(dict-get (file-info \"~Downloads/invoices\") :dir)"), "true");
+    // the workspace is as it was
+    assert_eq!(s(&it, "(map (fn (e) (dict-get e :name)) (dir-list))"), "(notes)");
+
+    for bad in ["(read-note \"~Downloads/../secret.md\")", "(dir-list \"~Downloads/../..\")", "(read-note \"~Other/x.md\")"] {
+        let e = it.eval_str(bad).unwrap_err().to_string();
+        assert!(e.contains("workspace") || e.contains("no folder"), "{bad}: {e}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn editor_mutation_callback() {
     let it = Interpreter::new();
