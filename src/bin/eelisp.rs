@@ -94,6 +94,16 @@ fn main() {
         if let Some(dir) = flag("--workspace") {
             it.editor.borrow_mut().current_dir = Some(Box::new(move || dir.clone()));
         }
+        // `--root name=/abs/path`, as often as wanted: folders outside the workspace a script may
+        // read as `~name/…` — the dev bridge passes what EEDITOR_ROOTS grants.
+        let roots: Vec<(String, String)> = args
+            .windows(2)
+            .filter(|w| w[0] == "--root")
+            .filter_map(|w| w[1].split_once('=').map(|(n, p)| (n.to_string(), p.to_string())))
+            .collect();
+        if !roots.is_empty() {
+            it.editor.borrow_mut().roots = Some(Box::new(move || roots.clone()));
+        }
         run_serve(&it);
         return;
     }

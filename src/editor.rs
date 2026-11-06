@@ -8,6 +8,9 @@
 //!
 //! `dir-list` / `file-info` read the same workspace as a file manager sees it: every entry of one
 //! folder, with its size and when it last changed — what a two-panel browser draws.
+//!
+//! A path that starts `~name/` is under a folder outside the workspace the person granted the host
+//! (`EditorHost::roots`); `(roots)` lists those names. A script can't grant one itself.
 
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +27,9 @@ pub struct EditorHost {
     /// The workspace root — the folder the host is editing, not the process's cwd. The engine
     /// has no filesystem of its own, so "where am I" is a question only the host can answer.
     pub current_dir: Option<Box<dyn Fn() -> String>>,
+    /// Folders outside the workspace the person has granted, as (name, absolute path). A script
+    /// names one as `~name/…`; it can't add one — only the host can, which asks the person.
+    pub roots: Option<Box<dyn Fn() -> Vec<(String, String)>>>,
     pub cursor_pos: Option<Box<dyn Fn() -> i64>>,
     pub selection: Option<Box<dyn Fn() -> (i64, i64)>>,
     pub set_cursor: Option<Box<dyn Fn(i64)>>,
@@ -68,6 +74,25 @@ fn inside(root: &Path, rel: &str) -> Result<PathBuf, LispError> {
     Ok(root.join(rel))
 }
 
+/// Where a script's path points: the workspace, or a granted folder for a path that starts
+/// `~name/`. Gives the base folder, the prefix paths under it are written with ("" or "~name"),
+/// and the file itself — never outside the base.
+fn locate(host: &Host, rel: &str) -> Result<(PathBuf, String, PathBuf), LispError> {
+    let Some(named) = rel.strip_prefix('~') else {
+        let base = root(host);
+        let full = inside(&base, rel)?;
+        return Ok((base, String::new(), full));
+    };
+    let (name, rest) = named.split_once('/').unwrap_or((named, ""));
+    let roots = host.borrow().roots.as_ref().map(|f| f()).unwrap_or_default();
+    let Some((_, path)) = roots.iter().find(|(n, _)| n == name) else {
+        return Err(fail(format!("~{name}: no folder by that name — add it in EEditor first")));
+    };
+    let base = PathBuf::from(path);
+    let full = inside(&base, rest)?;
+    Ok((base, format!("~{name}"), full))
+}
+
 fn is_note(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| NOTE_EXT.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
@@ -75,7 +100,7 @@ fn is_note(p: &Path) -> bool {
 /// Every note under `dir`, as paths relative to `root` with `/` separators. Hidden entries
 /// (`.eeditor`, `.git`) are skipped, symlinked folders aren't followed (no loops), unreadable
 /// folders are passed over.
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>, seen: &mut usize) {
+fn walk(root: &Path, prefix: &str, dir: &Path, out: &mut Vec<String>, seen: &mut usize) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         *seen += 1;
@@ -89,26 +114,28 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>, seen: &mut usize) {
         let Ok(kind) = e.file_type() else { continue };
         let path = e.path();
         if kind.is_dir() {
-            walk(root, &path, out, seen);
-        } else if is_note(&path) {
-            if let Ok(rel) = path.strip_prefix(root) {
-                let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-                out.push(parts.join("/"));
-            }
+            walk(root, prefix, &path, out, seen);
+        } else if is_note(&path) && path.starts_with(root) {
+            out.push(rel_path(root, prefix, &path));
         }
     }
 }
 
-/// A path relative to the workspace, `/`-separated whatever the platform.
-fn rel_path(root: &Path, p: &Path) -> String {
+/// A path as a script writes it: relative to the workspace, or `~name/…` under a granted folder,
+/// `/`-separated whatever the platform.
+fn rel_path(root: &Path, prefix: &str, p: &Path) -> String {
     let rel = p.strip_prefix(root).unwrap_or(p);
-    rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
+    let mut parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    if !prefix.is_empty() {
+        parts.insert(0, prefix.to_string());
+    }
+    parts.join("/")
 }
 
 /// One entry as `dir-list` and `file-info` give it: name, path, whether it is a folder, size in
 /// bytes (0 for a folder), when it last changed (epoch seconds, as `now` counts them) and its
 /// extension, lower-case, without the dot ("" for a folder or a file with none).
-fn entry(root: &Path, p: &Path, meta: &std::fs::Metadata) -> Value {
+fn entry(root: &Path, prefix: &str, p: &Path, meta: &std::fs::Metadata) -> Value {
     let is_dir = meta.is_dir();
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let ext = if is_dir { String::new() } else { p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default() };
@@ -120,7 +147,7 @@ fn entry(root: &Path, p: &Path, meta: &std::fs::Metadata) -> Value {
         .unwrap_or(0.0);
     let mut d = OrderedDict::default();
     d.insert("name".into(), Value::Str(name));
-    d.insert("path".into(), Value::Str(rel_path(root, p)));
+    d.insert("path".into(), Value::Str(rel_path(root, prefix, p)));
     d.insert("dir".into(), Value::Bool(is_dir));
     d.insert("size".into(), Value::Number(if is_dir { 0.0 } else { meta.len() as f64 }));
     d.insert("modified".into(), Value::Number(modified));
@@ -145,14 +172,10 @@ pub fn register(env: &Env, host: Host) {
     {
         let h = host.clone();
         b(env, "notes", move |args, _| {
-            let root = root(&h);
-            let under = match args.first() {
-                None | Some(Value::Null) => root.clone(),
-                Some(Value::Str(s)) => inside(&root, s)?,
-                Some(v) => return Err(fail(format!("notes: expected a folder name, got {}", type_name(v)))),
-            };
+            let rel = folder_arg("notes", args)?;
+            let (root, prefix, under) = locate(&h, &rel)?;
             let mut out = Vec::new();
-            walk(&root, &under, &mut out, &mut 0);
+            walk(&root, &prefix, &under, &mut out, &mut 0);
             out.sort();
             Ok(Value::List(Rc::new(out.into_iter().map(Value::Str).collect())))
         });
@@ -164,7 +187,7 @@ pub fn register(env: &Env, host: Host) {
                 Some(Value::Str(s)) if !s.trim().is_empty() => s.clone(),
                 _ => return Err(fail("read-note: expected a path, like \"inbox.md\"")),
             };
-            let file = inside(&root(&h), &rel)?;
+            let (_, _, file) = locate(&h, &rel)?;
             match std::fs::read(&file) {
                 Ok(bytes) => String::from_utf8(bytes).map(Value::Str).map_err(|_| fail(format!("{rel}: not a text file"))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
@@ -181,8 +204,7 @@ pub fn register(env: &Env, host: Host) {
                 (Some(Value::Keyword(k)), v) if k == "hidden" => v.is_some_and(is_truthy),
                 (Some(v), _) => return Err(fail(format!("dir-list: expected :hidden true after the folder, got {}", type_name(v)))),
             };
-            let root = root(&h);
-            let dir = inside(&root, &rel)?;
+            let (root, prefix, dir) = locate(&h, &rel)?;
             let entries = match std::fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
@@ -198,7 +220,7 @@ pub fn register(env: &Env, host: Host) {
                 let p = e.path();
                 // follow a symlink to what it points at; a broken one is still listed, as itself
                 let Ok(meta) = std::fs::metadata(&p).or_else(|_| e.metadata()) else { continue };
-                out.push((meta.is_dir(), name.to_lowercase(), entry(&root, &p, &meta)));
+                out.push((meta.is_dir(), name.to_lowercase(), entry(&root, &prefix, &p, &meta)));
             }
             // folders first, then files, each by name whatever its case
             out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
@@ -212,13 +234,21 @@ pub fn register(env: &Env, host: Host) {
                 Some(Value::Str(s)) => s.clone(),
                 _ => return Err(fail("file-info: expected a path, like \"inbox.md\"")),
             };
-            let root = root(&h);
-            let p = inside(&root, &rel)?;
+            let (root, prefix, p) = locate(&h, &rel)?;
             match std::fs::metadata(&p) {
-                Ok(meta) => Ok(entry(&root, &p, &meta)),
+                Ok(meta) => Ok(entry(&root, &prefix, &p, &meta)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
                 Err(e) => Err(fail(format!("{rel}: {e}"))),
             }
+        });
+    }
+    {
+        let h = host.clone();
+        b(env, "roots", move |_, _| {
+            let mut names: Vec<String> =
+                h.borrow().roots.as_ref().map(|f| f()).unwrap_or_default().into_iter().map(|(n, _)| format!("~{n}")).collect();
+            names.sort();
+            Ok(Value::List(Rc::new(names.into_iter().map(Value::Str).collect())))
         });
     }
     {

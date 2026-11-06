@@ -445,13 +445,18 @@ str-join — builtin
     <h2>Editor RPC</h2>
     <p>
       Installed by the host, so these exist when the engine runs inside an editor and not on the
-      bare command line. They let a script read and change the document it is running in.
+      bare command line. They let a script read and change the document it is running in, and read the workspace
+      around it — never a path outside it.
     </p>
     <div class="table-wrap"><table>
       <tr><th>Function</th><th>Notes</th></tr>
       <tr><td><code>(buffer-text)</code></td><td>the whole document</td></tr>
       <tr><td><code>(current-file)</code></td><td>path of the open note</td></tr>
       <tr><td><code>(current-dir)</code></td><td>the workspace root — the folder being edited</td></tr>
+      <tr><td><code>(notes [folder])</code></td><td>every note (<code>.md</code>) in the workspace, or under a folder, sorted</td></tr>
+      <tr><td><code>(read-note path)</code></td><td>a file's text as saved, or <code>nil</code></td></tr>
+      <tr><td><code>(dir-list [folder] [:hidden true])</code></td><td>one folder's entries, folders first, each a dict: <code>:name</code> <code>:path</code> <code>:dir</code> <code>:size</code> <code>:modified</code> (epoch seconds, like <code>now</code>) <code>:ext</code></td></tr>
+      <tr><td><code>(file-info path)</code></td><td>one entry as <code>dir-list</code> gives it, or <code>nil</code></td></tr>
       <tr><td><code>(cursor-pos)</code> · <code>(set-cursor n)</code></td><td></td></tr>
       <tr><td><code>(selection)</code></td><td>the selected text</td></tr>
       <tr><td><code>(insert-at pos text)</code></td><td></td></tr>

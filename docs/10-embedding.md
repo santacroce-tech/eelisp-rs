@@ -158,6 +158,7 @@ engine.eval("(str-len (buffer-text))");     // → 5
 | `buffer_text` | `(buffer-text)` |
 | `current_file` | `(current-file)` |
 | `current_dir` | `(current-dir)`, which is also where sheet names resolve and where `(notes)`, `(read-note path)`, `(dir-list folder)` and `(file-info path)` read |
+| `roots` | folders outside the workspace the person granted, as `(name, path)`: a script reads them as `~name/…` and lists them with `(roots)`, but can't add one |
 | `cursor_pos` / `set_cursor` | `(cursor-pos)` / `(set-cursor n)` |
 | `selection` | `(selection)` → `(from to)` |
 | `insert_at` | `(insert-at pos text)` |
