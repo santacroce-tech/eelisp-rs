@@ -54,7 +54,7 @@ fn lexer_booleans_are_symbols_until_parsed() {
 
 #[test]
 fn lexer_negative_numbers() {
-    assert_eq!(lex("-42 -3.14").unwrap(), vec![Token::Num(-42.0), Token::Num(-3.14)]);
+    assert_eq!(lex("-42 -2.75").unwrap(), vec![Token::Num(-42.0), Token::Num(-2.75)]);
     // matches Swift: -1 stays a negative literal in these positions
     assert_eq!(
         lex("(def x -1)").unwrap(),
@@ -363,7 +363,7 @@ fn prelude_functions() {
 #[test]
 fn printer_formats_values() {
     assert_eq!(print_value(&Value::Number(42.0), true), "42");
-    assert_eq!(print_value(&Value::Number(3.14), true), "3.14");
+    assert_eq!(print_value(&Value::Number(2.75), true), "2.75");
     assert_eq!(print_value(&Value::Str("hello".into()), true), "\"hello\"");
     assert_eq!(print_value(&Value::Bool(true), true), "true");
     assert_eq!(print_value(&Value::Null, true), "nil");
