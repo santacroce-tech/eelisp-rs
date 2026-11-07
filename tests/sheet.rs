@@ -856,3 +856,98 @@ fn another_sheets_columns_and_blocks_read_the_same_way() {
     set(&it, "A2", "=Rates!A1:B2");
     assert_eq!(get(&it, "A2"), r#"(("eur" 1.1) ("gbp" 1.3))"#);
 }
+
+// ── formulas that read the database ─────────────────────────────────
+
+#[test]
+fn a_formula_reading_a_table_follows_its_writes() {
+    let (_, it) = budget("follow-table");
+    ev(&it, "(deftable prices (symbol:string price:number))");
+    ev(&it, r#"(insert prices {:symbol "btc" :price 100})"#);
+    set(&it, "A1", r#"=(count-records prices)"#);
+    set(&it, "A2", "=(+ 1 1)");
+    assert_eq!(get(&it, "A1"), "1");
+    ev(&it, r#"(insert prices {:symbol "eth" :price 10})"#);
+    assert_eq!(get(&it, "A1"), "2", "recalculated after the insert, nothing pressed");
+    ev(&it, r#"(update prices 1 {:price 101})"#);
+    ev(&it, "(delete prices 2)");
+    assert_eq!(get(&it, "A1"), "1", "and after a delete");
+}
+
+#[test]
+fn a_table_read_inside_a_function_counts() {
+    let (_, it) = budget("follow-fn");
+    ev(&it, "(deftable prices (symbol:string price:number at:string))");
+    ev(&it, r#"(defn latest (s) (let (rows (records (query prices :where "symbol = ?" :params (list s) :order "at" :desc true :limit 1))) (if (empty? rows) nil (field-get (first rows) :price))))"#);
+    set(&it, "A1", r#"btc"#);
+    set(&it, "B1", "=(latest A1)");
+    assert_eq!(get(&it, "B1"), "nil");
+    ev(&it, r#"(insert prices {:symbol "btc" :price 80121 :at "2026-10-26 09:30"})"#);
+    assert_eq!(get(&it, "B1"), "80121");
+    // several writes in one form: one recalculation, at the end, with the last value
+    ev(&it, r#"(do (insert prices {:symbol "btc" :price 1 :at "2026-10-26 10:00"}) (insert prices {:symbol "btc" :price 2 :at "2026-10-26 10:15"}))"#);
+    assert_eq!(get(&it, "B1"), "2");
+}
+
+#[test]
+fn a_reopened_sheet_remembers_what_its_formulas_read() {
+    let (_, it) = budget("follow-reopen");
+    ev(&it, "(deftable t (n:number))");
+    set(&it, "A1", "=(count-records t)");
+    assert_eq!(get(&it, "A1"), "0");
+    ev(&it, r#"(sheet-close "Budget")"#);
+    ev(&it, r#"(sheet-open "Budget")"#); // opening runs nothing — the reads come from the file
+    ev(&it, "(insert t {:n 1})");
+    assert_eq!(get(&it, "A1"), "1");
+}
+
+#[test]
+fn only_formulas_that_read_the_table_are_recalculated() {
+    let (_, it) = budget("follow-only");
+    ev(&it, "(deftable t (n:number))");
+    ev(&it, "(deftable other (n:number))");
+    set(&it, "A1", "=(count-records t)");
+    let before = ev(&it, r#"(sheet-version "Budget")"#);
+    ev(&it, "(insert other {:n 1})");
+    assert_eq!(ev(&it, r#"(sheet-version "Budget")"#), before, "a write to another table changes nothing");
+    ev(&it, "(insert t {:n 1})");
+    assert_ne!(ev(&it, r#"(sheet-version "Budget")"#), before);
+}
+
+#[test]
+fn a_form_that_fails_after_writing_still_recalculates() {
+    let (_, it) = budget("follow-fail");
+    ev(&it, "(deftable t (n:number))");
+    set(&it, "A1", "=(count-records t)");
+    assert!(it.eval_str("(do (insert t {:n 1}) (/ 1 0))").is_err());
+    assert_eq!(get(&it, "A1"), "1", "the insert happened; the sheet follows it");
+}
+
+#[test]
+fn a_formula_that_writes_a_table_does_not_set_itself_off() {
+    // Its own write would recalculate it, which would write again: writes made while a formula
+    // runs aren't followed, so the sheet settles.
+    let (_, it) = budget("follow-self");
+    ev(&it, "(deftable log (n:number))");
+    set(&it, "A1", "=(do (insert log {:n 1}) (count-records log))");
+    let rows = ev(&it, "(count-records log)");
+    for _ in 0..3 {
+        ev(&it, "(+ 1 1)");
+    }
+    assert_eq!(ev(&it, "(count-records log)"), rows, "nothing else ran the formula");
+    // a write from outside a formula still recalculates it (and it writes once more)
+    ev(&it, "(insert log {:n 2})");
+    assert_eq!(get(&it, "A1"), ev(&it, "(count-records log)"));
+}
+
+#[test]
+fn a_host_call_that_writes_a_table_recalculates_too() {
+    // Interpreter::call — how a host runs a script's function — follows writes like eval does.
+    let (_, it) = budget("follow-call");
+    ev(&it, "(deftable prices (price:number))");
+    ev(&it, "(defn add-price (p) (insert prices {:price p}))");
+    set(&it, "A1", "=(count-records prices)");
+    assert_eq!(get(&it, "A1"), "0");
+    it.call("add-price", &[eelisp::Value::Number(42.0)]).unwrap().unwrap();
+    assert_eq!(get(&it, "A1"), "1", "recalculated after the host's call, no eval needed");
+}

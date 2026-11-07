@@ -69,11 +69,15 @@ pub struct CellData {
     pub error: Option<String>,
     pub fmt: Option<Map<String, J>>,
     pub formula: Option<Formula>,
+    /// The database tables the formula read the last time it ran — so a write to one of them can
+    /// recalculate it. Kept in the file's meta table (`reads`), so a sheet opened without running
+    /// anything still knows.
+    pub reads: Vec<String>,
 }
 
 impl CellData {
     fn empty() -> Self {
-        CellData { input: String::new(), value: Value::Null, error: None, fmt: None, formula: None }
+        CellData { input: String::new(), value: Value::Null, error: None, fmt: None, formula: None, reads: Vec::new() }
     }
     /// Nothing typed and nothing formatted: no reason to keep a row for it.
     fn is_blank(&self) -> bool {
@@ -491,7 +495,7 @@ impl Sheet {
                 Ok(J::Object(m)) => Some(m),
                 _ => None,
             });
-            self.cells.insert(CellRef::new(row, col), CellData { input, value, error, fmt, formula });
+            self.cells.insert(CellRef::new(row, col), CellData { input, value, error, fmt, formula, reads: Vec::new() });
         }
         self.widths = {
             let mut stmt = self.conn.prepare("SELECT col, width FROM widths").map_err(sql(&path))?;
@@ -503,6 +507,21 @@ impl Sheet {
             let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql(&path))?;
             mapped.collect::<Result<_, _>>().map_err(sql(&path))?
         };
+        // which tables each formula read — {"row,col": ["prices", …]}; absent in older files
+        let reads: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'reads'", [], |r| r.get(0))
+            .ok();
+        if let Some(J::Object(m)) = reads.and_then(|t| serde_json::from_str::<J>(&t).ok()) {
+            for (k, v) in m {
+                let mut rc = k.split(',').filter_map(|n| n.parse::<u32>().ok());
+                if let (Some(r), Some(c), Some(J::Array(ts))) = (rc.next(), rc.next(), Some(v)) {
+                    if let Some(cell) = self.cells.get_mut(&CellRef::new(r, c)) {
+                        cell.reads = ts.into_iter().filter_map(|t| t.as_str().map(String::from)).collect();
+                    }
+                }
+            }
+        }
         self.version = self
             .conn
             .query_row("SELECT value FROM meta WHERE key = 'version'", [], |r| r.get::<_, String>(0))
@@ -676,6 +695,9 @@ impl Sheet {
                 cell.formula = Some(f);
             }
         }
+        if cell.formula.is_none() {
+            cell.reads.clear(); // a value reads nothing; a formula's reads are noted when it runs
+        }
         cell.input = input;
         if cell.is_blank() {
             self.cells.remove(&at);
@@ -761,6 +783,26 @@ impl Sheet {
             bindings.push((name.clone(), value));
         }
         Some(Prepared::Eval { expr, bindings, externals })
+    }
+
+    /// The tables a formula read when it last ran. True when that changed, so it's saved.
+    pub fn set_reads(&mut self, at: CellRef, tables: Vec<String>) -> bool {
+        let Some(cell) = self.cells.get_mut(&at) else { return false };
+        let changed = cell.reads != tables;
+        cell.reads = tables;
+        changed
+    }
+
+    /// The formulas that read any of these tables — what a write to them has to recalculate.
+    pub fn cells_reading(&self, tables: &BTreeSet<String>) -> Vec<CellRef> {
+        let mut out: Vec<CellRef> = self
+            .cells
+            .iter()
+            .filter(|(_, c)| c.formula.is_some() && c.reads.iter().any(|t| tables.contains(t)))
+            .map(|(at, _)| *at)
+            .collect();
+        out.sort();
+        out
     }
 
     /// Record a formula's outcome. True when the value or the error actually changed.
@@ -980,6 +1022,12 @@ impl Sheet {
             let tx = conn.transaction()?;
             f(&tx, cells, &Sizes { widths, heights })?;
             tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?1)", params![next.to_string()])?;
+            let reads: Map<String, J> = cells
+                .iter()
+                .filter(|(_, c)| !c.reads.is_empty())
+                .map(|(at, c)| (format!("{},{}", at.row, at.col), J::Array(c.reads.iter().cloned().map(J::String).collect())))
+                .collect();
+            tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('reads', ?1)", params![J::Object(reads).to_string()])?;
             tx.commit()
         })();
         match outcome {
@@ -1146,6 +1194,8 @@ pub struct Sheets {
     open: HashMap<PathBuf, Sheet>,
     /// Recalculations in progress. A formula may read a sheet while one runs, never change one.
     pub recalculating: u32,
+    /// The engine's database — to note which tables each formula reads.
+    pub database: Option<std::rc::Rc<std::cell::RefCell<crate::database::Database>>>,
 }
 
 impl Sheets {
@@ -1165,6 +1215,13 @@ impl Sheets {
         let sheet = Sheet::create(path)?;
         self.open.insert(path.to_path_buf(), sheet);
         Ok(self.open.get_mut(path).unwrap())
+    }
+
+    /// Every open sheet's path.
+    pub fn open_paths(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = self.open.keys().cloned().collect();
+        out.sort();
+        out
     }
 
     /// Every open sheet's path, and the names of the sheets its formulas read.
