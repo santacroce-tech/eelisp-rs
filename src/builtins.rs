@@ -2,6 +2,7 @@
 //! type and the eval callback path (map/filter/reduce/apply/eval). The full ~80-builtin
 //! catalog + date/db/agenda/http builtins are TODO — register them the same way.
 
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 use crate::env::{self, Env};
@@ -184,7 +185,7 @@ fn sort_by(args: &[Value], env: &Env) -> Result<Value, LispError> {
     // stable ascending sort by the numeric key (keyfn item)
     let mut keyed: Vec<(f64, Value)> = Vec::with_capacity(l.len());
     for item in l.iter() {
-        let k = as_num(&apply_value(keyfn, &[item.clone()], env)?)?;
+        let k = as_num(&apply_value(keyfn, std::slice::from_ref(item), env)?)?;
         keyed.push((k, item.clone()));
     }
     keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -431,9 +432,11 @@ fn eqf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn nef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Bool(!(args.len() >= 2 && args[0] == args[1])))
 }
+/// The ordering comparisons hold only when every neighbouring pair is ordered that way; a NaN is
+/// ordered against nothing, so any comparison with one is false.
 fn ltf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? < as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Less)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -441,7 +444,7 @@ fn ltf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn gtf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? > as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Greater)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -449,7 +452,7 @@ fn gtf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn lef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? <= as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Less | Ordering::Equal)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -457,7 +460,7 @@ fn lef(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn gef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? >= as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Greater | Ordering::Equal)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -637,7 +640,7 @@ fn mapf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let l = as_list(&args[1])?;
     let mut out = Vec::with_capacity(l.len());
     for item in l.iter() {
-        out.push(apply_value(&args[0], &[item.clone()], env)?);
+        out.push(apply_value(&args[0], std::slice::from_ref(item), env)?);
     }
     Ok(list_val(out))
 }
@@ -645,7 +648,7 @@ fn filterf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let l = as_list(&args[1])?;
     let mut out = Vec::new();
     for item in l.iter() {
-        if is_truthy(&apply_value(&args[0], &[item.clone()], env)?) {
+        if is_truthy(&apply_value(&args[0], std::slice::from_ref(item), env)?) {
             out.push(item.clone());
         }
     }
@@ -882,7 +885,7 @@ fn csv_parse(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let sep = csv_sep(args.get(1), "csv-parse")?;
     let rows = parse_delimited(&text, sep)
         .into_iter()
-        .map(|r| Value::List(Rc::new(r.into_iter().map(|c| Value::Str(c.into())).collect())))
+        .map(|r| Value::List(Rc::new(r.into_iter().map(Value::Str).collect())))
         .collect();
     Ok(Value::List(Rc::new(rows)))
 }
@@ -905,7 +908,7 @@ fn csv_records(args: &[Value], _: &Env) -> Result<Value, LispError> {
                 let t = raw.trim();
                 let v = if t.is_empty() {
                     Value::Null
-                } else if crate::sheet::looks_numeric(t) {
+                } else if looks_numeric(t) {
                     t.parse::<f64>().map(Value::Number).unwrap_or_else(|_| Value::Str(raw.into()))
                 } else {
                     Value::Str(raw.into())
@@ -948,7 +951,7 @@ fn csv_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
             one => cell(one),
         })
         .collect();
-    Ok(Value::Str(lines.join("\n").into()))
+    Ok(Value::Str(lines.join("\n")))
 }
 
 // ── JSON (ANALYSIS §4.11) — plain JSON ⇄ Value; objects↔dicts, arrays↔lists ──
@@ -1113,4 +1116,36 @@ fn value_to_natural(v: &Value) -> serde_json::Value {
         }
         other => J::String(crate::printer::print_value(other, false)),
     }
+}
+
+/// `12`, `-3.5`, `.5`, `1e3` — but not `inf`, `NaN` or `0x1F`, which Rust would happily parse.
+pub fn looks_numeric(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let (mut digits, mut dot) = (0, false);
+    while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot)) {
+        if b[i] == b'.' {
+            dot = true;
+        } else {
+            digits += 1;
+        }
+        i += 1;
+    }
+    if digits == 0 {
+        return false;
+    }
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let exp_start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == exp_start {
+            return false;
+        }
+    }
+    i == b.len()
 }

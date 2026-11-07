@@ -82,6 +82,19 @@ This is a **clean break**, not a bug-for-bug port. Deliberately corrected (see A
 - **Clean tokenization** — no operator-number splitting, no positional `-` heuristic. Write
   `(- 1 3)` to subtract, `-5` is a negative literal.
 
+## Build options
+
+| Feature | Default | What it adds |
+|---|---|---|
+| `sqlite` | on | the database, the agenda and sheets, on SQLite |
+| `http` | on | `http-get` and `http-post` |
+| `js` | off | in a browser, the clock from JavaScript (`web/` turns it on) |
+
+`--no-default-features` is the language alone, with no C code: it builds for any WebAssembly
+host, such as a game's mod sandbox. A host adds its own functions with
+`Interpreter::define_fn` and calls the script's with `Interpreter::call` (see
+`docs/10-embedding.md`).
+
 ## Build & run
 
 ```bash

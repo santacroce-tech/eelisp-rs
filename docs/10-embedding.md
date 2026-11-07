@@ -1,6 +1,6 @@
 # 10. Embedding
 
-The engine is a library first and a binary second. There are four ways to hold it, and all four
+The engine is a library first and a binary second. There are five ways to hold it. The first four
 end at the same method, `Interpreter::eval_host`, so they all get the same answer:
 
 | Host | Use it when | Entry point |
@@ -9,6 +9,7 @@ end at the same method, `Interpreter::eval_host`, so they all get the same answe
 | Rust, across threads | a Tauri app, or anything that shares state between threads | `eelisp::server::EngineHandle` |
 | Any language | Node, Python, a shell script | `eelisp --serve` over stdin/stdout |
 | A browser | a web page or Web Worker | `eelisp-web`, compiled to WebAssembly |
+| A sandbox | scripting inside another program: a game's mods, an app's plugins | `eelisp` without its default features, as WebAssembly |
 
 ## From Rust
 
@@ -156,7 +157,8 @@ engine.eval("(str-len (buffer-text))");     // → 5
 |---|---|
 | `buffer_text` | `(buffer-text)` |
 | `current_file` | `(current-file)` |
-| `current_dir` | `(current-dir)`, which is also where sheet names resolve and where `(notes)` / `(read-note path)` read |
+| `current_dir` | `(current-dir)`, which is also where sheet names resolve and where `(notes)`, `(read-note path)`, `(dir-list folder)` and `(file-info path)` read |
+| `roots` | folders outside the workspace the person granted, as `(name, path)`: a script reads them as `~name/…` and lists them with `(roots)`, but can't add one |
 | `cursor_pos` / `set_cursor` | `(cursor-pos)` / `(set-cursor n)` |
 | `selection` | `(selection)` → `(from to)` |
 | `insert_at` | `(insert-at pos text)` |
@@ -177,6 +179,38 @@ sequenceDiagram
         B-->>E: nothing happens
     end
     B-->>E: nil
+```
+
+### Your own functions
+
+For anything beyond the editor, add functions to the language with `define_fn`. Their arguments
+arrive evaluated, and an error they return is the script's error, just as if a builtin had failed.
+
+```rust
+use eelisp::{Interpreter, LispError, Value};
+
+let it = Interpreter::new();
+it.define_fn("set-block", move |args| {
+    let n = |i: usize| match args.get(i) {
+        Some(Value::Number(n)) => Ok(*n as i32),
+        _ => Err(LispError::Runtime("set-block wants x y z".into())),
+    };
+    world.set_block(n(0)?, n(1)?, n(2)?);
+    Ok(Value::Bool(true))
+});
+it.eval_str("(for-each y (range 0 10) (set-block 1 y 2))")?;
+```
+
+Going the other way, `call` runs a function the script defined, by name. That's how a host tells a
+script that something happened. It returns `None` when the script hasn't defined that function, so
+a script only writes the handlers it cares about:
+
+```rust
+it.eval_str(r#"(defn on-join (player name) (println "Hello " name))"#)?;
+
+if let Some(result) = it.call("on-join", &[Value::Number(7.0), Value::Str("Ada".into())]) {
+    result?;   // the handler ran; an error is the script's
+}
 ```
 
 ## From any language: `--serve`
@@ -237,6 +271,34 @@ Build it with `web/build.sh`. The browser build leaves out `http-get` and `http-
 so instead of crashing), `EngineHandle` (there are no threads), and agenda file export/import
 (there's no filesystem).
 
+## In a sandbox: the language alone
+
+To let people script your program safely, run EELisp inside a WebAssembly sandbox (wasmtime,
+wasmer, or a game's mod runtime) that gives scripts nothing but the functions you add. Build the
+engine without its default features and it's just the language: no SQLite (so no C code to
+compile to WebAssembly), no network, and no JavaScript.
+
+```toml
+[dependencies]
+eelisp = { git = "https://github.com/santacroce-tech/eelisp-rs", default-features = false }
+```
+
+That leaves out the database, the agenda and sheets. The rest of the language is there: functions,
+macros, strings, lists, dicts, dates, CSV, JSON, regular expressions, bytes, and `(functions)`.
+
+A bare WebAssembly module has no clock, so tell the engine the time when you have it, or dates
+start at 1970:
+
+```rust
+#[cfg(target_arch = "wasm32")]
+eelisp::dates::set_now(seconds_since_1970);
+```
+
+[Ourcraft](https://github.com/rsantacroce/ourcraft) runs its mods this way. Each `.el` file is a mod,
+run by its own copy of a small runner that adds the game's functions with `define_fn`, calls the
+script's `on-join` and `on-chat` with `call`, and lives in the same sandbox as every other mod. The
+interpreter, without SQLite, compiles to about 1.3 MB of WebAssembly.
+
 ## Building
 
 ```bash
@@ -248,8 +310,20 @@ cargo llvm-cov --summary-only       # line coverage, if cargo-llvm-cov is instal
 ```
 
 SQLite is compiled in through `rusqlite`'s `bundled` feature, so the binary doesn't depend on a
-system SQLite. The `http` feature, on by default, adds `ureq` for `http-get` and `http-post`.
-Build with `--no-default-features` to leave the network out. The engine is MIT licensed.
+system SQLite. The engine is MIT licensed. Its features choose what's built in:
+
+| Feature | Default | What it adds |
+|---|---|---|
+| `sqlite` | on | the database, the agenda and sheets, on SQLite |
+| `http` | on | `http-get` and `http-post`, with `ureq` |
+| `js` | off | in a browser, the clock from JavaScript's `Date.now()` (the `web/` crate turns it on) |
+
+```bash
+cargo build                                            # everything
+cargo build --no-default-features --features sqlite    # no network
+cargo build --no-default-features                      # the language alone
+cargo build --no-default-features --target wasm32-unknown-unknown --lib   # …for a sandbox
+```
 
 That's the whole engine. The [function reference](reference.md) lists everything callable from
 EELisp.

@@ -31,7 +31,11 @@ pub struct Entry {
 }
 
 /// The manual, in reading order: core language, database, agenda, sheets, editor RPC.
+#[cfg(feature = "sqlite")]
 pub static TABLES: &[&[Entry]] = &[CORE, BYTES, DATABASE, AGENDA, SHEETS, EDITOR];
+/// Without the `sqlite` feature there's no database, agenda or sheets to describe.
+#[cfg(not(feature = "sqlite"))]
+pub static TABLES: &[&[Entry]] = &[CORE, BYTES, EDITOR];
 
 pub fn builtins() -> impl Iterator<Item = &'static Entry> {
     TABLES.iter().flat_map(|t| t.iter())
@@ -853,6 +857,12 @@ pub static EDITOR: &[Entry] = &[
          "(notes \"reviews\")   → (\"reviews/2026-09-28 week.md\")"),
     doc!("read-note", "(read-note path) → string", "A note's text as saved on disk, or nil if there is no such file. The path is relative to the workspace and can't leave it.",
          "(read-note \"inbox.md\")   → \"# Inbox\\n…\""),
+    doc!("roots", "(roots) → list", "The folders outside the workspace the person has granted, as the names a path starts with: \"~Downloads\". Only the host can add one — a script can't.",
+         "(roots)   → (\"~Downloads\")   (dir-list \"~Downloads\")"),
+    doc!("dir-list", "(dir-list [folder] [:hidden true]) → list", "One folder's entries, folders first, each a dict: :name, :path (workspace-relative), :dir, :size (bytes), :modified (epoch seconds, like now) and :ext. Names starting with a dot are left out unless :hidden is true. nil when there is no such folder; the path can't leave the workspace — or a granted folder, written ~name/…",
+         "(map (fn (e) (dict-get e :name)) (dir-list \"notes\"))   → (\"reviews\" \"inbox.md\")"),
+    doc!("file-info", "(file-info path) → dict", "One file or folder as dir-list describes it, or nil when there is none.",
+         "(date-format (dict-get (file-info \"inbox.md\") :modified))   → \"2026-11-04 16:35\""),
     doc!("cursor-pos", "(cursor-pos) → number", "The cursor's character offset in the document.", "(cursor-pos)   → 142"),
     doc!("selection", "(selection) → list", "The selection as (from to); both the same when nothing is selected.", "(selection)   → (10 24)"),
     doc!("set-cursor", "(set-cursor n) → nil", "Moves the cursor to a character offset.", "(set-cursor 0)"),

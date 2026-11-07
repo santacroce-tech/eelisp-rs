@@ -270,37 +270,7 @@ fn groups_of_three(body: &str, sep: char) -> bool {
     body.contains(sep)
 }
 
-/// `12`, `-3.5`, `.5`, `1e3` — but not `inf`, `NaN` or `0x1F`, which Rust would happily parse.
-pub fn looks_numeric(s: &str) -> bool {
-    let b = s.as_bytes();
-    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
-    let (mut digits, mut dot) = (0, false);
-    while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot)) {
-        if b[i] == b'.' {
-            dot = true;
-        } else {
-            digits += 1;
-        }
-        i += 1;
-    }
-    if digits == 0 {
-        return false;
-    }
-    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-        i += 1;
-        if matches!(b.get(i), Some(b'+' | b'-')) {
-            i += 1;
-        }
-        let exp_start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == exp_start {
-            return false;
-        }
-    }
-    i == b.len()
-}
+pub use crate::builtins::looks_numeric;
 
 pub fn parse_formula(body: &str) -> Formula {
     let expr = match parser::parse(body) {
