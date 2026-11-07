@@ -104,6 +104,11 @@ impl Interpreter {
         // sheets — their names resolve against the host's (current-dir)
         #[cfg(feature = "sqlite")]
         let sheets = Rc::new(RefCell::new(crate::sheet::Sheets::default()));
+        // formulas note the tables they read, so a write to one can recalculate them
+        #[cfg(feature = "sqlite")]
+        {
+            sheets.borrow_mut().database = Some(db.clone());
+        }
         #[cfg(feature = "sqlite")]
         sheet_builtins::register(&global, ed.clone(), sheets.clone());
 
@@ -209,7 +214,9 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut result = Value::Null;
         for f in forms {
-            result = eval::eval(f.value.clone(), self.global.clone())?;
+            let r = eval::eval(f.value.clone(), self.global.clone());
+            self.follow_tables();
+            result = r?;
             self.sources.borrow_mut().record(&f);
         }
         Ok(result)
@@ -220,10 +227,23 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut out = Vec::with_capacity(forms.len());
         for f in forms {
-            out.push(eval::eval(f.value.clone(), self.global.clone())?);
+            let r = eval::eval(f.value.clone(), self.global.clone());
+            self.follow_tables();
+            out.push(r?);
             self.sources.borrow_mut().record(&f);
         }
         Ok(out)
+    }
+
+    /// Tables written by what just ran recalculate the open sheets' formulas that read them —
+    /// once per top-level form, so a loop of inserts recalculates once, at the end. Runs even when
+    /// the form failed: what it wrote before failing is written.
+    fn follow_tables(&self) {
+        #[cfg(feature = "sqlite")]
+        {
+            let written = self.database.borrow().take_written();
+            crate::sheet_builtins::follow_tables(&self.sheets, &self.global, &written);
+        }
     }
 
     // ── host boundary (ANALYSIS §5) ──────────────────────────────────
@@ -281,7 +301,9 @@ impl Interpreter {
         if !matches!(f, Value::Function(_) | Value::Builtin(_)) {
             return None;
         }
-        Some(eval::apply_value(&f, args, &self.global))
+        let r = eval::apply_value(&f, args, &self.global);
+        self.follow_tables();
+        Some(r)
     }
 
     /// Toggle whether captured output also mirrors to stdout (on for CLI, off for a host).
