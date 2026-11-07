@@ -243,7 +243,7 @@ pub(crate) fn unbase64(s: &str) -> Option<Vec<u8>> {
         } as u32)
     };
     let clean: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if clean.len() % 4 != 0 {
+    if !clean.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(clean.len() / 4 * 3);
