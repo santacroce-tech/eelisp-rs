@@ -2,7 +2,7 @@
 //! Sheets: a grid whose formulas are EELisp, each sheet a SQLite file. Addressing, what a cell
 //! holds, recalculation order, cycles, errors, persistence — and that opening a sheet runs nothing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eelisp::printer::print_value;
 use eelisp::sheet_ref::*;
@@ -17,7 +17,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// An interpreter whose workspace is `dir`, so sheet names resolve there.
-fn engine(dir: &PathBuf) -> Interpreter {
+fn engine(dir: &Path) -> Interpreter {
     let it = Interpreter::new();
     let root = dir.display().to_string();
     it.editor.borrow_mut().current_dir = Some(Box::new(move || root.clone()));
@@ -676,7 +676,7 @@ fn shift_formula_moves_only_what_is_free_to_move() {
     assert!(off.resized);
     let ranges = shift_formula("(sum A1:B2)", 2, 0);
     assert_eq!(ranges.text, "(sum A3:B4)");
-    assert_eq!(shift_formula("(+ 1 2)", 5, 5).changed, false);
+    assert!(!shift_formula("(+ 1 2)", 5, 5).changed);
 }
 
 // ── the aggregates a sheet leans on ──────────────────────────────────

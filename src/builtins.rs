@@ -2,6 +2,7 @@
 //! type and the eval callback path (map/filter/reduce/apply/eval). The full ~80-builtin
 //! catalog + date/db/agenda/http builtins are TODO — register them the same way.
 
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 use crate::env::{self, Env};
@@ -185,7 +186,7 @@ fn sort_by(args: &[Value], env: &Env) -> Result<Value, LispError> {
     // stable ascending sort by the numeric key (keyfn item)
     let mut keyed: Vec<(f64, Value)> = Vec::with_capacity(l.len());
     for item in l.iter() {
-        let k = as_num(&apply_value(keyfn, &[item.clone()], env)?)?;
+        let k = as_num(&apply_value(keyfn, std::slice::from_ref(item), env)?)?;
         keyed.push((k, item.clone()));
     }
     keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -432,9 +433,11 @@ fn eqf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn nef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Bool(!(args.len() >= 2 && args[0] == args[1])))
 }
+/// The ordering comparisons hold only when every neighbouring pair is ordered that way; a NaN is
+/// ordered against nothing, so any comparison with one is false.
 fn ltf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? < as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Less)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -442,7 +445,7 @@ fn ltf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn gtf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? > as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Greater)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -450,7 +453,7 @@ fn gtf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn lef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? <= as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Less | Ordering::Equal)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -458,7 +461,7 @@ fn lef(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn gef(args: &[Value], _: &Env) -> Result<Value, LispError> {
     for w in args.windows(2) {
-        if !(as_num(&w[0])? >= as_num(&w[1])?) {
+        if !matches!(as_num(&w[0])?.partial_cmp(&as_num(&w[1])?), Some(Ordering::Greater | Ordering::Equal)) {
             return Ok(Value::Bool(false));
         }
     }
@@ -638,7 +641,7 @@ fn mapf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let l = as_list(&args[1])?;
     let mut out = Vec::with_capacity(l.len());
     for item in l.iter() {
-        out.push(apply_value(&args[0], &[item.clone()], env)?);
+        out.push(apply_value(&args[0], std::slice::from_ref(item), env)?);
     }
     Ok(list_val(out))
 }
@@ -646,7 +649,7 @@ fn filterf(args: &[Value], env: &Env) -> Result<Value, LispError> {
     let l = as_list(&args[1])?;
     let mut out = Vec::new();
     for item in l.iter() {
-        if is_truthy(&apply_value(&args[0], &[item.clone()], env)?) {
+        if is_truthy(&apply_value(&args[0], std::slice::from_ref(item), env)?) {
             out.push(item.clone());
         }
     }
@@ -886,7 +889,7 @@ fn csv_parse(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let sep = csv_sep(args.get(1), "csv-parse")?;
     let rows = parse_delimited(&text, sep)
         .into_iter()
-        .map(|r| Value::List(Rc::new(r.into_iter().map(|c| Value::Str(c.into())).collect())))
+        .map(|r| Value::List(Rc::new(r.into_iter().map(Value::Str).collect())))
         .collect();
     Ok(Value::List(Rc::new(rows)))
 }
@@ -952,7 +955,7 @@ fn csv_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
             one => cell(one),
         })
         .collect();
-    Ok(Value::Str(lines.join("\n").into()))
+    Ok(Value::Str(lines.join("\n")))
 }
 
 // ── JSON (ANALYSIS §4.11) — plain JSON ⇄ Value; objects↔dicts, arrays↔lists ──

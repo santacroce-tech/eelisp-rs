@@ -232,6 +232,17 @@ fn definition_forms_reject_short_forms() {
 }
 
 #[test]
+fn comparisons_with_nan_are_false() {
+    // NaN is ordered against nothing, so every ordering comparison with it is false — and stays
+    // false whichever way round the comparison is written.
+    let i = Interpreter::new();
+    i.eval_str("(def n (->number \"NaN\"))").unwrap();
+    assert_eq!(s(&i, "(list (< 1 n) (> 1 n) (<= n n) (>= n 1) (< n 1) (> n 1))"), "(false false false false false false)");
+    // chains still need every neighbouring pair in order
+    assert_eq!(s(&i, "(list (< 1 2 3) (<= 1 1 2) (> 3 2 2) (>= 3 3 1))"), "(true true false true)");
+}
+
+#[test]
 fn eval_if_cond_let_do() {
     let i = Interpreter::new();
     assert_eq!(s(&i, "(if true 1 2)"), "1");

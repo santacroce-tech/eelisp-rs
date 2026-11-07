@@ -185,8 +185,12 @@ pub struct Builtin {
     pub name: String,
     pub arg_mode: ArgMode,
     // Boxed closure (not a fn pointer) so builtins can capture state — e.g. the database handle.
-    pub func: Box<dyn Fn(&[Value], &Env) -> Result<Value, LispError>>,
+    pub func: Box<BuiltinFn>,
 }
+
+/// What a builtin runs: its evaluated (or raw, per `arg_mode`) arguments and the caller's
+/// environment in, a value or an error out.
+pub type BuiltinFn = dyn Fn(&[Value], &Env) -> Result<Value, LispError>;
 
 // ── Database value types (ANALYSIS §4.9) ─────────────────────────────
 

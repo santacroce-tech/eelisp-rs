@@ -47,7 +47,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Null);
                             }
                             for e in &items[1..items.len() - 1] {
-                                eval_arg(&e, &env)?;
+                                eval_arg(e, &env)?;
                             }
                             expr = items[items.len() - 1].clone();
                             continue;
@@ -149,7 +149,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 match eval(body.clone(), scope.clone()) {
                                     Ok(v) => return Ok(v),
                                     Err(LispError::Recur(vals)) => {
-                                        for (n, v) in names.iter().zip(vals.into_iter()) {
+                                        for (n, v) in names.iter().zip(vals) {
                                             env::define_sym(&scope, n, v);
                                         }
                                     }
@@ -202,7 +202,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                         "recur" => {
                             let mut vals = Vec::with_capacity(items.len().saturating_sub(1));
                             for a in &items[1..] {
-                                vals.push(eval_arg(&a, &env)?);
+                                vals.push(eval_arg(a, &env)?);
                             }
                             return Err(LispError::Recur(vals));
                         }
@@ -211,7 +211,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Bool(true));
                             }
                             for e in &items[1..items.len() - 1] {
-                                let v = eval_arg(&e, &env)?;
+                                let v = eval_arg(e, &env)?;
                                 if !is_truthy(&v) {
                                     return Ok(v);
                                 }
@@ -224,7 +224,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                                 return Ok(Value::Bool(false));
                             }
                             for e in &items[1..items.len() - 1] {
-                                let v = eval_arg(&e, &env)?;
+                                let v = eval_arg(e, &env)?;
                                 if is_truthy(&v) {
                                     return Ok(v);
                                 }
@@ -265,7 +265,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             let mut buf: [Value; 4] = [Value::Null, Value::Null, Value::Null, Value::Null];
                             let n = items.len() - 1;
                             for (slot, a) in buf.iter_mut().zip(&items[1..]) {
-                                *slot = eval_arg(&a, &env)?;
+                                *slot = eval_arg(a, &env)?;
                             }
                             return (b.func)(&buf[..n], &env);
                         }
@@ -285,7 +285,7 @@ pub fn eval(mut expr: Value, mut env: Env) -> Result<Value, LispError> {
                             Vec::with_capacity(f.params.len() + f.rest.is_some() as usize);
                         let mut extra = Vec::new();
                         for (i, a) in items[1..].iter().enumerate() {
-                            let v = eval_arg(&a, &env)?;
+                            let v = eval_arg(a, &env)?;
                             match f.params.get(i) {
                                 Some(p) => locals.push((p.clone(), v)),
                                 None => extra.push(v),
@@ -339,7 +339,7 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
         ArgMode::Eval => {
             let mut a = Vec::with_capacity(items.len().saturating_sub(1));
             for x in &items[1..] {
-                a.push(eval_arg(&x, &env)?);
+                a.push(eval_arg(x, env)?);
             }
             Ok(a)
         }
@@ -356,7 +356,7 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
                 });
             }
             for x in items.iter().skip(2) {
-                a.push(eval_arg(&x, &env)?);
+                a.push(eval_arg(x, env)?);
             }
             Ok(a)
         }
@@ -455,7 +455,7 @@ fn parse_params(spec: &[Value]) -> Result<(Vec<Sym>, Option<Sym>), LispError> {
 /// (`defun` for `defn`, `lambda` for `fn`) should be named the way it was written.
 fn head_of<'a>(items: &'a [Value], fallback: &'a str) -> &'a str {
     match items.first() {
-        Some(Value::Symbol(s)) => &**s,
+        Some(Value::Symbol(s)) => s,
         _ => fallback,
     }
 }

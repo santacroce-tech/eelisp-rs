@@ -29,13 +29,19 @@ pub struct EditorHost {
     pub current_dir: Option<Box<dyn Fn() -> String>>,
     /// Folders outside the workspace the person has granted, as (name, absolute path). A script
     /// names one as `~name/…`; it can't add one — only the host can, which asks the person.
-    pub roots: Option<Box<dyn Fn() -> Vec<(String, String)>>>,
+    pub roots: Option<Box<RootsFn>>,
     pub cursor_pos: Option<Box<dyn Fn() -> i64>>,
     pub selection: Option<Box<dyn Fn() -> (i64, i64)>>,
     pub set_cursor: Option<Box<dyn Fn(i64)>>,
     pub insert_at: Option<Box<dyn Fn(i64, String)>>,
-    pub replace_range: Option<Box<dyn Fn(i64, i64, String)>>,
+    pub replace_range: Option<Box<ReplaceRangeFn>>,
 }
+
+/// Replace the text between two offsets: (start, end, new text).
+pub type ReplaceRangeFn = dyn Fn(i64, i64, String);
+
+/// The host's list of granted folders, as (name, absolute path).
+pub type RootsFn = dyn Fn() -> Vec<(String, String)>;
 
 type Host = Rc<RefCell<EditorHost>>;
 
