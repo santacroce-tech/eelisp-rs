@@ -301,7 +301,9 @@ impl Interpreter {
         if !matches!(f, Value::Function(_) | Value::Builtin(_)) {
             return None;
         }
-        Some(eval::apply_value(&f, args, &self.global))
+        let r = eval::apply_value(&f, args, &self.global);
+        self.follow_tables();
+        Some(r)
     }
 
     /// Toggle whether captured output also mirrors to stdout (on for CLI, off for a host).

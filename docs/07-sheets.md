@@ -93,6 +93,13 @@ the end:
 (sheet-get "Portfolio" "D2")                   ; → 80121, nothing pressed
 ```
 
+It works the same when the write comes from a host calling one of your functions
+(`Interpreter::call`), not only from code typed at the prompt.
+
+A formula may write to a table too, but that write doesn't recalculate anything: following it would
+run the formula again, which would write again, for ever. Only writes made outside formulas are
+followed.
+
 What a formula reads is noted when it runs, and kept in the file, so a sheet just opened — which
 runs nothing — still knows. A sheet last saved by an older engine has no such list yet: its
 formulas learn what they read at its next recalculation (**↻** once does it). Formulas that read the clock, or a sheet that was closed when it

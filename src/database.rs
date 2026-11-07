@@ -64,15 +64,18 @@ impl Database {
         }
     }
 
+    /// Note a write, for `take_written`. A write made while a formula runs isn't noted: following
+    /// it would recalculate that formula, which would write again — for ever.
     fn wrote_to(&self, table: &str) {
-        self.written.borrow_mut().insert(table.to_string());
+        if self.reads.borrow().is_empty() {
+            self.written.borrow_mut().insert(table.to_string());
+        }
     }
 
     /// The tables written since the last call, and forget them.
     pub fn take_written(&self) -> BTreeSet<String> {
         std::mem::take(&mut *self.written.borrow_mut())
     }
-
 
     pub fn open(path: &str) -> Result<Self, LispError> {
         let conn = Connection::open(path).map_err(db_err)?;
@@ -180,8 +183,8 @@ impl Database {
     }
 
     pub fn drop_table(&mut self, table: &str) -> Result<Value, LispError> {
-        self.wrote_to(table);
         self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), []).map_err(db_err)?;
+        self.wrote_to(table);
         self.conn
             .execute("DELETE FROM _eelisp_schema WHERE name = ?1", params![table])
             .map_err(db_err)?;
@@ -270,10 +273,10 @@ impl Database {
 
     /// Soft-delete rows matching a raw WHERE clause (used by drop-template / drop-rule / drop-view).
     pub fn soft_delete_where(&self, table: &str, where_: &str, params: &[Value]) -> Result<i64, LispError> {
-        self.wrote_to(table);
         let sql = format!("UPDATE {} SET _deleted = 1 WHERE _deleted = 0 AND ({})", table, where_);
         let vals: Vec<SqlValue> = params.iter().map(to_sql).collect();
         let changed = self.conn.execute(&sql, rusqlite::params_from_iter(vals)).map_err(db_err)?;
+        self.wrote_to(table);
         Ok(changed as i64)
     }
 
@@ -301,9 +304,9 @@ impl Database {
     }
 
     pub fn delete(&self, table: &str, id: i64) -> Result<Value, LispError> {
-        self.wrote_to(table);
         let sql = format!("UPDATE {} SET _deleted = 1 WHERE _deleted = 0 AND _id = ?1", table);
         let changed = self.conn.execute(&sql, params![id]).map_err(db_err)?;
+        self.wrote_to(table);
         Ok(Value::Number(changed as f64))
     }
 
@@ -322,8 +325,8 @@ impl Database {
     }
 
     pub fn pack(&self, table: &str) -> Result<Value, LispError> {
-        self.wrote_to(table);
         self.conn.execute(&format!("DELETE FROM {} WHERE _deleted = 1", table), []).map_err(db_err)?;
+        self.wrote_to(table);
         Ok(Value::Bool(true))
     }
 

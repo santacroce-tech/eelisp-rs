@@ -922,3 +922,32 @@ fn a_form_that_fails_after_writing_still_recalculates() {
     assert!(it.eval_str("(do (insert t {:n 1}) (/ 1 0))").is_err());
     assert_eq!(get(&it, "A1"), "1", "the insert happened; the sheet follows it");
 }
+
+#[test]
+fn a_formula_that_writes_a_table_does_not_set_itself_off() {
+    // Its own write would recalculate it, which would write again: writes made while a formula
+    // runs aren't followed, so the sheet settles.
+    let (_, it) = budget("follow-self");
+    ev(&it, "(deftable log (n:number))");
+    set(&it, "A1", "=(do (insert log {:n 1}) (count-records log))");
+    let rows = ev(&it, "(count-records log)");
+    for _ in 0..3 {
+        ev(&it, "(+ 1 1)");
+    }
+    assert_eq!(ev(&it, "(count-records log)"), rows, "nothing else ran the formula");
+    // a write from outside a formula still recalculates it (and it writes once more)
+    ev(&it, "(insert log {:n 2})");
+    assert_eq!(get(&it, "A1"), ev(&it, "(count-records log)"));
+}
+
+#[test]
+fn a_host_call_that_writes_a_table_recalculates_too() {
+    // Interpreter::call — how a host runs a script's function — follows writes like eval does.
+    let (_, it) = budget("follow-call");
+    ev(&it, "(deftable prices (price:number))");
+    ev(&it, "(defn add-price (p) (insert prices {:price p}))");
+    set(&it, "A1", "=(count-records prices)");
+    assert_eq!(get(&it, "A1"), "0");
+    it.call("add-price", &[eelisp::Value::Number(42.0)]).unwrap().unwrap();
+    assert_eq!(get(&it, "A1"), "1", "recalculated after the host's call, no eval needed");
+}

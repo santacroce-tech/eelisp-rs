@@ -785,7 +785,6 @@ impl Sheet {
         Some(Prepared::Eval { expr, bindings, externals })
     }
 
-    /// Record a formula's outcome. True when the value or the error actually changed.
     /// The tables a formula read when it last ran. True when that changed, so it's saved.
     pub fn set_reads(&mut self, at: CellRef, tables: Vec<String>) -> bool {
         let Some(cell) = self.cells.get_mut(&at) else { return false };
@@ -806,6 +805,7 @@ impl Sheet {
         out
     }
 
+    /// Record a formula's outcome. True when the value or the error actually changed.
     pub fn set_result(&mut self, at: CellRef, result: Result<Value, String>) -> bool {
         let Some(cell) = self.cells.get_mut(&at) else { return false };
         let (value, error) = match result.and_then(storable) {
@@ -1217,7 +1217,6 @@ impl Sheets {
         Ok(self.open.get_mut(path).unwrap())
     }
 
-    /// Every open sheet's path, and the names of the sheets its formulas read.
     /// Every open sheet's path.
     pub fn open_paths(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> = self.open.keys().cloned().collect();
@@ -1225,6 +1224,7 @@ impl Sheets {
         out
     }
 
+    /// Every open sheet's path, and the names of the sheets its formulas read.
     pub fn reading_map(&self) -> Vec<(PathBuf, Vec<String>)> {
         self.open.iter().map(|(path, sheet)| (path.clone(), sheet.reads_sheets())).collect()
     }
