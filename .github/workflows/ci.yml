@@ -14,7 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Any clippy warning fails the build, so the tree stays clean.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all --verbose
       - name: Release build
@@ -28,7 +33,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy (no SQLite, no network)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
       - name: Test (no SQLite, no network)
         run: cargo test --no-default-features
       - name: Build with SQLite but no network
