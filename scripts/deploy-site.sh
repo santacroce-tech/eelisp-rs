@@ -33,9 +33,10 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
   exit 1
 fi
 
+# macOS's bash 3.2 calls an empty array unbound under set -u, hence ${DRY[@]+…} below.
 DRY=()
 [ "${1:-}" = "--dry-run" ] && DRY=(--dry-run)
 echo "→ site/ from main $(git rev-parse --short HEAD) to $DEPLOY_PATH${DRY:+  (dry run)}"
 # --delete: the server mirrors site/. README.md stays off it (and --delete-excluded takes away a copy
 # an older deploy left): it says how the site is deployed, which the public needn't read.
-rsync -avz "${DRY[@]}" --delete --delete-excluded --exclude README.md -e "ssh -i $KEY" site/ "$DEPLOY_HOST:$DEPLOY_PATH/"
+rsync -avz ${DRY[@]+"${DRY[@]}"} --delete --delete-excluded --exclude README.md -e "ssh -i $KEY" site/ "$DEPLOY_HOST:$DEPLOY_PATH/"
