@@ -88,9 +88,13 @@ binary nobody can reproduce), and it is the reference for testing.
   or `EELISP_COMPILED=1`) loads the compiler from the embedded image, recompiles the prelude, and
   compiles every top-level form. The whole test suite passes in compiled mode (20 suites, with
   and without default features) and CI runs it both ways. Off by default because compiling costs
-  10–60 µs per form: loading eeditor's snippet files goes from 1.5 ms to 54 ms. Next: make the
-  compiler itself faster, then decide whether compiled mode becomes the default. See
+  10–60 µs per form: loading eeditor's snippet files goes from 1.5 ms to 54 ms. See
   docs/self-hosting/07-switching-on.md.
+- **Compiler speed — first round.** Counting calls showed 6,779 per form compiled, mostly list
+  walks (special-form membership, name lookup). Dicts and resolving a call's head once: 2,569
+  calls per form; loading eeditor's snippets compiled 54 ms → 26 ms; `(+ 1 2)` 12 → 5.8 µs.
+  See docs/self-hosting/08-profiling-the-compiler.md. Next candidates: a cheaper VM call path,
+  a lighter compiler context; then decide whether compiled mode becomes the default.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
