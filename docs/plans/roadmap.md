@@ -84,6 +84,14 @@ binary nobody can reproduce), and it is the reference for testing.
   still a fixed point. Compiled code: 1.1–1.4× the interpreter on most workloads; `lists` ~0.95×
   (time is in shared builtins). See docs/self-hosting/06-slots.md.
 
+- **Step 4 — compiled mode, behind a switch.** `Interpreter::set_compiled(true)` (or `--compiled`,
+  or `EELISP_COMPILED=1`) loads the compiler from the embedded image, recompiles the prelude, and
+  compiles every top-level form. The whole test suite passes in compiled mode (20 suites, with
+  and without default features) and CI runs it both ways. Off by default because compiling costs
+  10–60 µs per form: loading eeditor's snippet files goes from 1.5 ms to 54 ms. Next: make the
+  compiler itself faster, then decide whether compiled mode becomes the default. See
+  docs/self-hosting/07-switching-on.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before
