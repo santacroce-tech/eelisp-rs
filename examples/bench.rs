@@ -6,6 +6,9 @@
 //! from `boot/compiler.image` and compiles every definition. Then `(bench-run)` is called the
 //! same number of times on both and timed. The two results must agree.
 //!
+//! A second table measures what an editor feels in compiled mode (`Interpreter::set_compiled`):
+//! starting an engine, and one `eval_str` of a small form, compiling included.
+//!
 //! With a directory (eeditor's `src/snippets`), every example call written in its files'
 //! comments — `;; (zzromanos 2024) → …` — becomes a workload too, except in files that reach the
 //! network.
@@ -99,6 +102,56 @@ fn measure(image: &str, name: &str, setup: &str, call: &str, reps: u32) -> Optio
     Some(Row { name: name.into(), interp: ti, vm: tv })
 }
 
+/// The mean time of `f` over `n` runs.
+fn mean(n: u32, mut f: impl FnMut()) -> Duration {
+    let t = Instant::now();
+    for _ in 0..n {
+        f();
+    }
+    t.elapsed() / n
+}
+
+/// What compiled mode costs an editor: starting an engine in it, and one evaluation of a small
+/// form — the compiling is part of every evaluation now.
+fn latency(snippets: Option<&str>) {
+    let interp = || {
+        let it = Interpreter::new();
+        it.set_compiled(false).unwrap();
+        it
+    };
+    let compiled = || {
+        let it = Interpreter::new();
+        it.set_compiled(true).unwrap();
+        it
+    };
+    println!("{:<28} {:>12} {:>12}", "per call", "interpreter", "compiled");
+    println!("{:<28} {:>10.1?} {:>10.1?}", "start an engine", mean(20, || drop(interp())), mean(20, || drop(compiled())));
+    let (i, c) = (interp(), compiled());
+    for (name, src) in [
+        ("eval (+ 1 2)", "(+ 1 2)"),
+        ("eval a small defn", "(defn area (w h) (* w h))"),
+        ("eval a let + map", "(let (xs (range 0 10)) (map (fn (x) (* x x)) xs))"),
+    ] {
+        let ti = mean(2000, || drop(i.eval_str(src)));
+        let tc = mean(2000, || drop(c.eval_str(src)));
+        println!("{:<28} {:>10.1?} {:>10.1?}", name, ti, tc);
+    }
+    if let Some(dir) = snippets {
+        // loading every snippet file, as the editor does at startup
+        let srcs: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("eelisp"))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let load = |it: &Interpreter| srcs.iter().for_each(|s| drop(it.eval_str(s)));
+        let ti = mean(5, || load(&interp()));
+        let tc = mean(5, || load(&compiled()));
+        println!("{:<28} {:>10.1?} {:>10.1?}", "load the snippet files", ti, tc);
+    }
+}
+
 /// The example calls in a snippet file's comments: `;; (zzname …)` up to the balanced paren.
 fn examples(src: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -158,6 +211,8 @@ fn main() {
             rows.extend(measure(&image, &format!("{name} ({} calls)", calls.len()), &src, &body, 20));
         }
     }
+    latency(args.first().map(String::as_str));
+    println!();
     println!("{:<28} {:>12} {:>12} {:>8}", "workload", "interpreter", "compiled", "speedup");
     for r in &rows {
         println!(

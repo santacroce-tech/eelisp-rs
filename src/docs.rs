@@ -152,6 +152,10 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
         let parent = {
             let s = scope.borrow();
             for (k, v) in s.bindings() {
+                // the compiler's internals (compiled mode) aren't the program's functions
+                if k.starts_with("compiler-") {
+                    continue;
+                }
                 out.entry(k.to_string()).or_insert_with(|| v.clone());
             }
             s.parent.clone()

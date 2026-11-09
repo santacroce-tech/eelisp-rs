@@ -4,6 +4,8 @@
 //!   eelisp -e "<expr>"— evaluate one expression
 //!   eelisp --serve [--workspace <dir>] [--db <file>]
 //!                     — JSON-line RPC for a host; `--db` keeps tables and agenda in a file
+//!   --compiled        — with any of the above: compile each form and run it on the bytecode VM
+//!                       (`Interpreter::set_compiled`) instead of interpreting it
 
 use std::io::{self, BufRead, Write};
 
@@ -70,8 +72,22 @@ fn run_serve(it: &Interpreter) {
     }
 }
 
+/// `--compiled`: switch the engine to compiled mode, or stop if that fails.
+fn with_mode(it: Interpreter, compiled: bool) -> Interpreter {
+    if compiled {
+        if let Err(e) = it.set_compiled(true) {
+            eprintln!("Error: compiled mode failed to start: {}", e);
+            std::process::exit(1);
+        }
+    }
+    it
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--compiled` can go anywhere; take it out before the rest is read
+    let compiled = args.iter().any(|a| a == "--compiled");
+    args.retain(|a| a != "--compiled");
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
 
     if args.first().map(String::as_str) == Some("--serve") {
@@ -88,6 +104,7 @@ fn main() {
             }
             None => Interpreter::new(),
         };
+        let it = with_mode(it, compiled);
         // `--workspace <dir>`: the dev bridge serves a folder, so tell the engine which one.
         // Without it `(current-dir)` is empty here while the desktop app answers properly, and the
         // same snippet would behave differently in the browser.
@@ -108,7 +125,7 @@ fn main() {
         return;
     }
 
-    let it = Interpreter::new();
+    let it = with_mode(Interpreter::new(), compiled);
     if !args.is_empty() {
         if args[0] == "-e" {
             let src = args[1..].join(" ");

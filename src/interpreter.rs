@@ -34,6 +34,11 @@ pub struct Interpreter {
     /// The open sheets — shared with the `sheet-*` builtins.
     #[cfg(feature = "sqlite")]
     pub sheets: Rc<RefCell<crate::sheet::Sheets>>,
+    /// The compiler's `compile` function once compiled mode has loaded it (`set_compiled`), held
+    /// here so a program defining its own `compile` can't break the engine.
+    compiler: RefCell<Option<Value>>,
+    /// Whether top-level forms are compiled and run on the VM instead of interpreted.
+    compiled: std::cell::Cell<bool>,
 }
 
 impl Interpreter {
@@ -129,11 +134,62 @@ impl Interpreter {
             database_error,
             #[cfg(feature = "sqlite")]
             sheets,
+            compiler: RefCell::new(None),
+            compiled: std::cell::Cell::new(false),
         };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
             panic!("prelude failed to load: {}", e);
         }
+        // EELISP_COMPILED=1 starts every engine in compiled mode — how the whole test suite is run
+        // on the VM, and a way to try it in any host without changing the host.
+        if std::env::var("EELISP_COMPILED").is_ok_and(|v| v == "1" || v == "true") {
+            if let Err(e) = it.set_compiled(true) {
+                panic!("compiled mode failed to start: {}", e);
+            }
+        }
         it
+    }
+
+    // ── compiled mode ────────────────────────────────────────────────
+
+    /// Compile each top-level form and run it on the bytecode VM, instead of interpreting it
+    /// (docs/plans/roadmap.md, step 4). The first time it's turned on, the compiler is loaded from
+    /// its bootstrap image — compiled already, its source never interpreted — and the prelude is
+    /// recompiled, so its functions and macros run on the VM too.
+    ///
+    /// Results are the same either way: the differential tests hold both engines to that. What
+    /// still runs on the interpreter: `(eval …)`, agenda rules and sheet formulas.
+    pub fn set_compiled(&self, on: bool) -> Result<(), LispError> {
+        if on && self.compiler.borrow().is_none() {
+            crate::boot::load_image(self, crate::boot::IMAGE)?;
+            let compile = env::get(&self.global, "compile")?;
+            *self.compiler.borrow_mut() = Some(compile);
+            for form in parser::parse(prelude::PRELUDE)? {
+                self.compile_and_run(&form)?;
+            }
+        }
+        self.compiled.set(on);
+        Ok(())
+    }
+
+    /// Whether top-level forms are compiled (`set_compiled`).
+    pub fn is_compiled(&self) -> bool {
+        self.compiled.get()
+    }
+
+    /// Evaluate one top-level form, the way the engine is set to.
+    fn eval_form(&self, form: &Value) -> Result<Value, LispError> {
+        if self.compiled.get() {
+            self.compile_and_run(form)
+        } else {
+            eval::eval(form.clone(), self.global.clone())
+        }
+    }
+
+    fn compile_and_run(&self, form: &Value) -> Result<Value, LispError> {
+        let compile = self.compiler.borrow().clone().expect("compiled mode without a compiler");
+        let proto = eval::apply_value(&compile, std::slice::from_ref(form), &self.global)?;
+        crate::vm::run_in(crate::vm::assemble(&proto)?, self.global.clone())
     }
 
     /// Point the engine at another database file — a host whose workspace moved calls this. The
@@ -214,7 +270,7 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut result = Value::Null;
         for f in forms {
-            let r = eval::eval(f.value.clone(), self.global.clone());
+            let r = self.eval_form(&f.value);
             self.follow_tables();
             result = r?;
             self.sources.borrow_mut().record(&f);
@@ -227,7 +283,7 @@ impl Interpreter {
         let forms = parser::top_forms(src)?;
         let mut out = Vec::with_capacity(forms.len());
         for f in forms {
-            let r = eval::eval(f.value.clone(), self.global.clone());
+            let r = self.eval_form(&f.value);
             self.follow_tables();
             out.push(r?);
             self.sources.borrow_mut().record(&f);

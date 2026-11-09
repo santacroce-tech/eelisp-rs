@@ -299,6 +299,30 @@ run by its own copy of a small runner that adds the game's functions with `defin
 script's `on-join` and `on-chat` with `call`, and lives in the same sandbox as every other mod. The
 interpreter, without SQLite, compiles to about 1.3 MB of WebAssembly.
 
+## Compiled mode (experimental)
+
+The engine can compile each top-level form to bytecode and run it on a virtual machine, instead
+of interpreting it. Results are the same; the whole test suite runs both ways. It's off by
+default. Turn it on per engine:
+
+```rust
+let it = Interpreter::new();
+it.set_compiled(true)?;        // loads the compiler and recompiles the prelude, once
+
+let engine = EngineHandle::spawn_with("notes.db".to_string(), |it| {
+    it.set_compiled(true).expect("compiled mode");
+});
+```
+
+From the command line, add `--compiled` to any form: `eelisp --compiled file.eel`,
+`eelisp --serve --compiled`. Setting `EELISP_COMPILED=1` in the environment starts every engine
+in compiled mode, without changing the host.
+
+Running code is somewhat faster compiled (about 1.1–1.7× on the benchmarks), but each evaluation
+pays for compiling first: tens of microseconds for a typical form, and starting an engine takes
+a few milliseconds longer. Agenda rules, sheet formulas and `(eval …)` are still interpreted.
+How it works is told in [docs/self-hosting](self-hosting/README.md).
+
 ## Building
 
 ```bash

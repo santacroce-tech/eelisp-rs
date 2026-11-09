@@ -326,6 +326,8 @@ fn agree(setup: Setup) {
 #[test]
 fn compile_returns_bytecode_a_person_can_read() {
     let it = compiling_engine();
+    // label numbers are the compiler's running count; start it from zero for a stable text
+    it.eval_str("(set! compiler-label-n 0)").unwrap();
     let p = print_value(&it.eval_str("(compile '(if ok 1 2))").unwrap(), true);
     assert_eq!(
         p,
