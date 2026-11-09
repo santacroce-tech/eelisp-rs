@@ -49,8 +49,9 @@
 ;; ── where variables live ───────────────────────────────────────────────
 ;;
 ;; The compiler's picture of the program at any point is a context, `cx`:
-;;   :fx   the function being compiled — {:id :slots :caps :parent}: how many slots it uses so
-;;         far, the outer variables it captures, the function it's inside
+;;   :fx   the function being compiled — {:id :slots :caps :parent :declared}: how many slots it
+;;         uses so far, the outer variables it captures, the function it's inside, and every name
+;;         declared anywhere in this top-level form (shared by all its functions)
 ;;   :lex  the blocks around this point, innermost first — {:fx :names :defs}: the variables
 ;;         each one binds, as a dict of name → slot, and which slots a `def` made
 ;; At the top level :lex is empty, and a `def` is global.
@@ -65,7 +66,8 @@
 ;; A new function, inside `parent` (nil at the top level).
 (defn compiler-new-fx (parent)
   (set! compiler-fx-n (+ compiler-fx-n 1))
-  {:id compiler-fx-n :slots (compiler-box 0) :caps (compiler-box (list)) :parent parent})
+  {:id compiler-fx-n :slots (compiler-box 0) :caps (compiler-box (list)) :parent parent
+   :declared (if (nil? parent) (compiler-box {}) (dict-get parent :declared))})
 
 (defn compiler-new-slot (fx)
   (let (n ((dict-get fx :slots)))
@@ -78,9 +80,17 @@
 ;; Bind name in block, to a new slot of the block's function. A name bound again in the same
 ;; block gets a new slot, and references after that see the new one.
 (defn compiler-declare (name block)
-  (let (slot (compiler-new-slot (dict-get block :fx)))
+  (let (fx (dict-get block :fx)
+        slot (compiler-new-slot fx)
+        declared (dict-get fx :declared))
     ((dict-get block :names) (dict-set ((dict-get block :names)) name slot))
+    (declared (dict-set (declared) name true))
     slot))
+
+;; Could name be local here? Only if it was declared somewhere in this top-level form: most names
+;; a program uses (+, list, its own globals) never are, and this one lookup settles them.
+(defn compiler-maybe-local? (name cx)
+  (dict-has ((dict-get cx :declared)) name))
 
 ;; The slot name has in block, or nil.
 (defn compiler-slot-in (name block)
@@ -88,7 +98,7 @@
 
 ;; cx, inside block.
 (defn compiler-enter (cx block)
-  {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx)})
+  {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx) :declared (dict-get cx :declared)})
 
 ;; The innermost binding of name, as (block slot); nil when it's a global.
 (defn compiler-find (name lex)
@@ -123,7 +133,7 @@
 
 ;; Where name lives, seen from cx: (local slot), (cap index), or nil for a global.
 (defn compiler-resolve (name cx)
-  (let (hit (compiler-find name (dict-get cx :lex))
+  (let (hit (if (compiler-maybe-local? name cx) (compiler-find name (dict-get cx :lex)) nil)
         here (compiler-fx-id (dict-get cx :fx)))
     (if (nil? hit)
       nil
@@ -134,7 +144,8 @@
 
 ;; Is name bound locally here (so it isn't the global macro or builtin of that name)?
 (defn compiler-local? (name cx)
-  (not (nil? (compiler-find name (dict-get cx :lex)))))
+  (and (compiler-maybe-local? name cx)
+       (not (nil? (compiler-find name (dict-get cx :lex))))))
 
 (defn compiler-load (name cx)
   (let (r (compiler-resolve name cx))
@@ -190,8 +201,8 @@
 (defn compiler-expr (x cx tailp)
   (cond
     (symbol? x) (compiler-load x cx)
-    (= (type x) "dict") (compiler-dict x cx)
-    (and (list? x) (not (empty? x))) (compiler-form x cx tailp)
+    (list? x) (if (empty? x) (compiler-const x) (compiler-form x cx tailp))
+    (dict? x) (compiler-dict x cx)
     true (compiler-const x)))
 
 ;; Forms in sequence: every value but the last is dropped. No forms is nil.
@@ -200,9 +211,8 @@
     (empty? forms) (compiler-const nil)
     (empty? (tail forms)) (compiler-expr (head forms) cx tailp)
     true (let (first-code (compiler-expr (head forms) cx false))
-           (compiler-cat first-code
-                         (list (list 'pop))
-                         (compiler-body (tail forms) cx tailp)))))
+           (append (append first-code (list (list 'pop)))
+                   (compiler-body (tail forms) cx tailp)))))
 
 ;; A dict literal: each value is evaluated, keys stay as written.
 (defn compiler-dict (d cx)
@@ -241,10 +251,16 @@
 (defn compiler-call-with (x cx tailp arg-code)
   (let (args (tail x)
         f-code (compiler-expr (head x) cx false))
-    (compiler-cat
-      f-code
-      (reduce (fn (acc i) (append acc (arg-code (nth args i) i cx))) (list) (range 0 (length args)))
+    (append
+      (append f-code (compiler-args args 0 cx arg-code))
       (list (list (if tailp 'tail-call 'call) (length args))))))
+
+;; The arguments' code, in order: (arg-code argument index cx) for each.
+(defn compiler-args (args i cx arg-code)
+  (if (empty? args)
+    (list)
+    (let (code (arg-code (head args) i cx))
+      (append code (compiler-args (tail args) (+ i 1) cx arg-code)))))
 
 ;; ── special forms ──────────────────────────────────────────────────────
 
@@ -479,7 +495,7 @@
 ;; The bytecode for one top-level form, as a (proto …) form.
 (defn compile (form)
   (let (fx (compiler-new-fx nil)
-        code (compiler-expr form {:lex (list) :fx fx} true))
+        code (compiler-expr form {:lex (list) :fx fx :declared (dict-get fx :declared)} true))
     (list 'proto :name nil :params (list) :source (list form)
           :slots ((dict-get fx :slots)) :captures (list) :code code)))
 

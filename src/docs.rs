@@ -650,6 +650,7 @@ pub static CORE: &[Entry] = &[
     doc!("nil?", "(nil? x) → bool", "Is it nil?", "(nil? nil)   → true"),
     doc!("symbol?", "(symbol? x) → bool", "Is it a symbol?", "(symbol? 'a)   → true"),
     doc!("keyword?", "(keyword? x) → bool", "Is it a keyword?", "(keyword? :a)   → true"),
+    doc!("dict?", "(dict? x) → bool", "Is it a dict?", "(dict? {:a 1})   → true"),
     doc!("fn?", "(fn? x) → bool", "Is it callable — a function or a builtin?", "(fn? map)   → true"),
     doc!("->string", "(->string x) → string", "Coerces to a string.", "(->string 42)   → \"42\""),
     doc!("->number", "(->number x) → number", "Coerces to a number; nil when it doesn't read as one.", "(->number \"42\")   → 42"),

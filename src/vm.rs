@@ -415,12 +415,24 @@ fn rebind(m: &Mark, proto: &Proto, slots: &mut [Slot], sb: usize, vals: impl Ite
     }
 }
 
+/// A copy of `v`. Numbers, booleans and nil — most values in a hot loop — are copied directly
+/// rather than through `Value::clone`, which is a large match the compiler doesn't inline.
+#[inline(always)]
+fn copy(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => Value::Number(*n),
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Null => Value::Null,
+        other => other.clone(),
+    }
+}
+
 fn pop(stack: &mut Vec<Value>) -> Value {
     stack.pop().expect("vm stack underflow (malformed bytecode)")
 }
 
 fn top(stack: &[Value]) -> Value {
-    stack.last().cloned().expect("vm stack underflow (malformed bytecode)")
+    copy(stack.last().expect("vm stack underflow (malformed bytecode)"))
 }
 
 impl Vm {
@@ -441,7 +453,7 @@ impl Vm {
             fr.pc += 1;
             match op {
                 Op::Const(i) => {
-                    let v = fr.proto.consts[i as usize].clone();
+                    let v = copy(&fr.proto.consts[i as usize]);
                     self.stack.push(v);
                 }
                 Op::Load(s) => {
@@ -594,7 +606,7 @@ impl Vm {
                 }
                 Op::LoadLocal(i, s) => {
                     let v = match &self.slots[fr.slot_base + i as usize] {
-                        Slot::Val(v) => v.clone(),
+                        Slot::Val(v) => copy(v),
                         Slot::Cell(c) => match &*c.borrow() {
                             Some(v) => v.clone(),
                             None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
@@ -619,7 +631,7 @@ impl Vm {
                 Op::LoadCap(i, s) => {
                     let up = fr.upvals.as_ref().expect("load-cap in a closure with no captures");
                     let v = match &*up[i as usize].borrow() {
-                        Some(v) => v.clone(),
+                        Some(v) => copy(v),
                         None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
                     };
                     self.stack.push(v);

@@ -97,6 +97,7 @@ pub fn register(env: &Env) {
     b!("nil?", is_nil);
     b!("symbol?", is_symbol);
     b!("keyword?", is_keyword);
+    b!("dict?", is_dict);
     b!("fn?", is_fn);
     // io / meta
     b!("print", printf);
@@ -784,6 +785,9 @@ fn is_nil(a: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn is_symbol(a: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Bool(matches!(a[0], Value::Symbol(_))))
+}
+fn is_dict(a: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Bool(matches!(a[0], Value::Dict(_))))
 }
 fn is_keyword(a: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Bool(matches!(a[0], Value::Keyword(_))))
