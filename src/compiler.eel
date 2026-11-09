@@ -29,9 +29,11 @@
 ;; Is x one of the symbols in names?
 (defn compiler-member? (x names) (some? (fn (n) (= n x)) names))
 
-;; The forms the interpreter treats specially, whatever the scope says.
+;; The forms the interpreter treats specially, whatever the scope says — a dict, so asking is one
+;; lookup, not a walk down a list for every form compiled.
 (def compiler-specials
-  '(quote quasiquote if do begin def defn defun fn lambda defmacro set! let cond loop try recur and or for-each))
+  (reduce (fn (d s) (dict-set d s true)) {}
+          '(quote quasiquote if do begin def defn defun fn lambda defmacro set! let cond loop try recur and or for-each)))
 
 ;; The names a parameter list binds, in order: `(a b . rest)` binds a, b and rest.
 (defn compiler-param-names (params)
@@ -50,7 +52,7 @@
 ;;   :fx   the function being compiled — {:id :slots :caps :parent}: how many slots it uses so
 ;;         far, the outer variables it captures, the function it's inside
 ;;   :lex  the blocks around this point, innermost first — {:fx :names :defs}: the variables
-;;         each one binds, as (name slot), and which of them a `def` made
+;;         each one binds, as a dict of name → slot, and which slots a `def` made
 ;; At the top level :lex is empty, and a `def` is global.
 
 ;; A mutable cell: (b) reads it, (b v) sets it.
@@ -71,31 +73,29 @@
     n))
 
 (defn compiler-new-block (fx)
-  {:fx fx :names (compiler-box (list)) :defs (compiler-box (list))})
+  {:fx fx :names (compiler-box {}) :defs (compiler-box (list))})
 
-;; Bind name in block, to a new slot of the block's function.
+;; Bind name in block, to a new slot of the block's function. A name bound again in the same
+;; block gets a new slot, and references after that see the new one.
 (defn compiler-declare (name block)
   (let (slot (compiler-new-slot (dict-get block :fx)))
-    ((dict-get block :names) (cons (list name slot) ((dict-get block :names))))
+    ((dict-get block :names) (dict-set ((dict-get block :names)) name slot))
     slot))
+
+;; The slot name has in block, or nil.
+(defn compiler-slot-in (name block)
+  (dict-get ((dict-get block :names)) name))
 
 ;; cx, inside block.
 (defn compiler-enter (cx block)
   {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx)})
 
-;; The first (name slot) entry for name.
-(defn compiler-lookup (name entries)
-  (cond
-    (empty? entries) nil
-    (= (head (head entries)) name) (head entries)
-    true (compiler-lookup name (tail entries))))
-
 ;; The innermost binding of name, as (block slot); nil when it's a global.
 (defn compiler-find (name lex)
   (if (empty? lex)
     nil
-    (let (e (compiler-lookup name ((dict-get (head lex) :names))))
-      (if e (list (head lex) (second e)) (compiler-find name (tail lex))))))
+    (let (slot (compiler-slot-in name (head lex)))
+      (if (nil? slot) (compiler-find name (tail lex)) (list (head lex) slot)))))
 
 (defn compiler-fx-id (fx) (dict-get fx :id))
 
@@ -154,9 +154,9 @@
 ;; one. A new one is cleared each time its block starts again (`compiler-clears`).
 (defn compiler-def-slot (name cx)
   (let (block (head (dict-get cx :lex))
-        e (compiler-lookup name ((dict-get block :names))))
-    (if e
-      (second e)
+        known (compiler-slot-in name block))
+    (if (not (nil? known))
+      known
       (let (slot (compiler-declare name block))
         ((dict-get block :defs) (cons slot ((dict-get block :defs))))
         slot))))
@@ -214,15 +214,17 @@
 (defn compiler-form (x cx tailp)
   (let (h (head x))
     (cond
-      (and (symbol? h) (compiler-member? h compiler-specials)) (compiler-special h x cx tailp)
-      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "macro"))
-        (compiler-expr (vm-macroexpand x) cx tailp)
-      ;; builtins that don't evaluate all their arguments (deftable, query, …)
-      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "raw"))
-        (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
-      (and (symbol? h) (not (compiler-local? h cx)) (= (vm-global-kind h) "table-first"))
-        (compiler-call-with x cx tailp compiler-table-arg)
-      true (compiler-call x cx tailp))))
+      (not (symbol? h)) (compiler-call x cx tailp)
+      (dict-has compiler-specials h) (compiler-special h x cx tailp)
+      ;; what a global name means here — unless a local variable has that name
+      true
+        (let (kind (if (compiler-local? h cx) nil (vm-global-kind h)))
+          (cond
+            (= kind "macro") (compiler-expr (vm-macroexpand x) cx tailp)
+            ;; builtins that don't evaluate all their arguments (deftable, query, …)
+            (= kind "raw") (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
+            (= kind "table-first") (compiler-call-with x cx tailp compiler-table-arg)
+            true (compiler-call x cx tailp))))))
 
 ;; A table command's first argument names the table as written — `(query contacts)` — unless
 ;; it is a call, which is evaluated: `(query (str "con" "tacts"))`. The rest are evaluated.
