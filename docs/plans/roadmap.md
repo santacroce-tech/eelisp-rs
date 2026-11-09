@@ -93,8 +93,13 @@ binary nobody can reproduce), and it is the reference for testing.
 - **Compiler speed — first round.** Counting calls showed 6,779 per form compiled, mostly list
   walks (special-form membership, name lookup). Dicts and resolving a call's head once: 2,569
   calls per form; loading eeditor's snippets compiled 54 ms → 26 ms; `(+ 1 2)` 12 → 5.8 µs.
-  See docs/self-hosting/08-profiling-the-compiler.md. Next candidates: a cheaper VM call path,
-  a lighter compiler context; then decide whether compiled mode becomes the default.
+  See docs/self-hosting/08-profiling-the-compiler.md.
+- **Compiler and VM speed — second round.** A declared-names set, `dict?` instead of `(type x)`
+  strings, direct argument walking; numbers copied without `Value::clone`. About 2,000 calls per
+  form; snippets compiled 25.2 → 22.7 ms; compiled `loop` 1.45×, `let-heavy` 1.43×. Dropped
+  after measuring: LTO, per-instruction global caches. Remaining costs are spread thinly; bigger
+  gains need bigger changes (value representation in the VM, a compiler without dict/closure
+  records).
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 

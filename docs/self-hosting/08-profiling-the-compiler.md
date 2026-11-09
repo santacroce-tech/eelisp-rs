@@ -102,9 +102,65 @@ snippets and the whole test suite in compiled mode still pass.
 The last row is the one particular to self-hosting. The compiler is also its own heaviest
 user, so speeding it up speeds up building it.
 
+## A second round
+
+The second round went after both the compiler and the machine it runs on.
+
+**The compiler.** Three smaller habits, each repeated at every node of the program being
+compiled:
+
+- Every expression that wasn't a symbol was classified by calling `(type x)`, which builds a
+  string, and comparing it with `"dict"`. EELisp had `list?`, `number?` and `keyword?`, but no
+  `dict?`. Adding that one predicate to the language made the check a single call returning a
+  boolean.
+- A call's arguments were compiled through `(range 0 n)` and `(nth args i)`, which builds a list
+  and then indexes into a list. Walking the arguments directly does the same job.
+- Every global name (`+`, `list`, the program's own functions) still walked every enclosing block
+  before being declared global. Now each top-level form keeps a set of every name declared
+  anywhere in it. A name not in the set can't be local, and one lookup settles it.
+
+**The machine.** The profile showed time in `Value::clone`, which is a large `match` over every
+kind of value, and the Rust compiler doesn't inline it. In a hot loop most values are numbers,
+so the VM now copies numbers, booleans and nil directly when it loads, defines or captures them.
+
+| | after round 1 | after round 2 |
+|---|---|---|
+| calls per form compiled | 2,569 | about 2,000 |
+| load eeditor's snippet files, compiled | 25.2 ms | 22.7 ms |
+| compiled `loop` vs interpreted | 1.41× | 1.45× |
+| compiled `let-heavy` vs interpreted | 1.30× | 1.43× |
+
+## Dead ends
+
+Two ideas were measured and dropped, which is what measuring is for:
+
+- **Link-time optimization** (`lto = "fat"`, one codegen unit) made no difference, and the
+  compiled `loop` was slightly slower with it.
+- **Caching global lookups at each instruction.** The cache has to know when a global changes,
+  and the simple way is a counter bumped on every global write. But the compiler itself writes a
+  global (its label counter) all the time, so the caches would be thrown away constantly. The
+  thorough alternative, a shared cell per global binding, means reworking how the global scope
+  stores values, all to save under 8% of a call.
+
+## Where a tiny form's time goes
+
+For one small evaluation, `(+ 1 2)` in compiled mode, the time splits like this:
+
+| | |
+|---|---|
+| the EELisp compiler producing bytecode | 6.3 µs (92 calls) |
+| assembling it into instructions | 0.35 µs |
+| running it | 0.04 µs |
+
+Almost all of it is the compiler's fixed work per form. It creates a record for the function
+being compiled, with three mutable boxes, plus a context dict, and builds every instruction with
+`list`. Each of those calls allocates, so they average about 68 ns. At 6 µs per evaluation that
+is far below anything a person typing would notice. It's the price of the compiler being an
+ordinary EELisp program, built from ordinary EELisp values.
+
 ## What's left
 
-At 2,569 calls per form, nothing dominates any more. The rest is the compiler's context being
+At about 2,000 calls per form, nothing dominates any more. The rest is the compiler's context being
 dictionaries holding closures (every field read is a `dict-get`, every mutable field a call), and
 instruction lists built with `list` and `append`. Further gains would come from restructuring
 that context, which is a larger change.
