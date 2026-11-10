@@ -219,7 +219,15 @@
   (let (keys (dict-keys d))
     (compiler-cat
       (reduce (fn (acc k) (append acc (compiler-expr (dict-get d k) cx false))) (list) keys)
-      (list (cons 'dict keys)))))
+      (list (cons 'dict (map compiler-dict-key keys))))))
+
+;; A key goes into the instruction as a keyword, `:name`, unless that wouldn't read back (`{"(" 1}`
+;; or `{"a b" 1}`); then as a string. The VM takes either.
+(def compiler-unsafe-in-keyword
+  (reduce (fn (d c) (dict-set d c true)) {} '(" " "\n" "\t" "\r" "(" ")" "[" "]" "{" "}" "\"" ";" "'" "`" ",")))
+(defn compiler-dict-key (k)
+  (let (name (substr (->string k) 1))
+    (if (some? (fn (c) (dict-has compiler-unsafe-in-keyword c)) (str-chars name)) name k)))
 
 (defn compiler-form (x cx tailp)
   (let (h (head x))

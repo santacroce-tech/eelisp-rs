@@ -1,7 +1,7 @@
 //! The bootstrap (roadmap step 3, src/boot.rs): the compiler compiles itself to a fixed point,
 //! and the committed image is that fixed point.
 
-use eelisp::boot::{self, COMPILER};
+use eelisp::boot;
 use eelisp::parser::parse;
 use eelisp::printer::print_value;
 
@@ -31,13 +31,25 @@ fn the_compiled_compiler_compiles_itself_to_the_same_image() {
 }
 
 #[test]
+fn read_by_the_eelisp_reader_too_the_source_compiles_to_the_same_image() {
+    // stage 2: the EELisp reader reads the source and the EELisp compiler compiles it; Rust only
+    // runs the VM and the builtins
+    let image = committed();
+    let image3 = boot::stage2(&image).unwrap();
+    if image3 != image {
+        let (n, (a, b)) = image.lines().zip(image3.lines()).enumerate().find(|(_, (a, b))| a != b).unwrap();
+        panic!("stage 2 differs; line {}:\n  image:   {a}\n  stage 2: {b}", n + 1);
+    }
+}
+
+#[test]
 fn an_image_reads_back_as_itself() {
     // the image is EELisp text: parsing and printing each proto gives the same text
     let image = committed();
     let protos: Vec<&str> = image.lines().filter(|l| !l.starts_with(";;")).collect();
     let parsed = parse(&image).unwrap();
     assert_eq!(parsed.len(), protos.len());
-    assert_eq!(parsed.len(), parse(COMPILER).unwrap().len(), "one proto per top-level form");
+    assert_eq!(parsed.len(), parse(&boot::source()).unwrap().len(), "one proto per top-level form");
     for (line, form) in protos.iter().zip(&parsed) {
         assert_eq!(&print_value(form, true), line);
     }

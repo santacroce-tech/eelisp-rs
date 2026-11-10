@@ -152,8 +152,8 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
         let parent = {
             let s = scope.borrow();
             for (k, v) in s.bindings() {
-                // the compiler's internals (compiled mode) aren't the program's functions
-                if k.starts_with("compiler-") {
+                // the compiler's and reader's internals (compiled mode) aren't the program's functions
+                if k.starts_with("compiler-") || k.starts_with("reader-") {
                     continue;
                 }
                 out.entry(k.to_string()).or_insert_with(|| v.clone());
@@ -607,6 +607,7 @@ pub static CORE: &[Entry] = &[
     doc!("str-replace", "(str-replace s target repl) → string", "Replaces every occurrence of target.",
          "(str-replace \"a-b-c\" \"-\" \"+\")   → \"a+b+c\""),
     doc!("substr", "(substr s start end) → string", "A slice by character index: 0-based, end-exclusive.", "(substr \"hello\" 1 3)   → \"el\""),
+    doc!("str-chars", "(str-chars s) → list", "The characters of s, each a one-character string.", "(str-chars \"héllo\")   → (\"h\" \"é\" \"l\" \"l\" \"o\")"),
     doc!("str-starts-with", "(str-starts-with s prefix) → bool", "Does s begin with prefix?", "(str-starts-with \"hello\" \"he\")   → true"),
     doc!("str-ends-with", "(str-ends-with s suffix) → bool", "Does s end with suffix?", "(str-ends-with \"hello\" \"lo\")   → true"),
     // ── lists ────────────────────────────────────────────────────────
@@ -651,6 +652,8 @@ pub static CORE: &[Entry] = &[
     doc!("symbol?", "(symbol? x) → bool", "Is it a symbol?", "(symbol? 'a)   → true"),
     doc!("keyword?", "(keyword? x) → bool", "Is it a keyword?", "(keyword? :a)   → true"),
     doc!("dict?", "(dict? x) → bool", "Is it a dict?", "(dict? {:a 1})   → true"),
+    doc!("symbol", "(symbol name) → symbol", "The symbol with that name; name is a string, symbol or keyword.", "(symbol \"total\")   → total"),
+    doc!("keyword", "(keyword name) → keyword", "The keyword with that name; name is a string, symbol or keyword.", "(keyword \"total\")   → :total"),
     doc!("fn?", "(fn? x) → bool", "Is it callable — a function or a builtin?", "(fn? map)   → true"),
     doc!("->string", "(->string x) → string", "Coerces to a string.", "(->string 42)   → \"42\""),
     doc!("->number", "(->number x) → number", "Coerces to a number; nil when it doesn't read as one.", "(->number \"42\")   → 42"),

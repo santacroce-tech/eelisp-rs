@@ -4,7 +4,8 @@
 //!
 //! Stage 0 (the interpreter runs the compiler) produces image 1; stage 1 (the compiler loaded
 //! from image 1, as bytecode) produces image 2. They must be identical before the image is
-//! written. See `src/boot.rs`.
+//! written. Stage 2 reads the source with the EELisp reader instead of the Rust one, and must
+//! produce the same image again. See `src/boot.rs`.
 
 use std::time::Instant;
 
@@ -20,10 +21,18 @@ fn main() {
         eprintln!("stage 0 and stage 1 disagree (first differing line: {line:?}); not writing the image");
         std::process::exit(1);
     }
+    let t = Instant::now();
+    let image3 = eelisp::boot::stage2(&image1).unwrap_or_else(|e| panic!("stage 2 failed: {e}"));
+    let t2 = t.elapsed();
+    if image3 != image1 {
+        let line = image1.lines().zip(image3.lines()).position(|(a, b)| a != b);
+        eprintln!("stage 2 (EELisp reader) disagrees (first differing line: {line:?}); not writing the image");
+        std::process::exit(1);
+    }
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/boot/compiler.image");
     std::fs::write(path, &image1).expect("write boot/compiler.image");
     println!(
-        "boot/compiler.image: {} protos, {} bytes. Stage 0 (interpreted compiler) {t0:.2?}, stage 1 (compiled compiler) {t1:.2?}; identical.",
+        "boot/compiler.image: {} protos, {} bytes. Stage 0 (interpreted compiler) {t0:.2?}, stage 1 (compiled compiler) {t1:.2?}, stage 2 (EELisp reader too) {t2:.2?}; identical.",
         image1.lines().filter(|l| l.starts_with("(proto")).count(),
         image1.len()
     );

@@ -62,6 +62,7 @@ pub fn register(env: &Env) {
     b!("substr", substr);
     b!("str-starts-with", str_starts_with);
     b!("str-ends-with", str_ends_with);
+    b!("str-chars", str_chars);
     // lists
     b!("list", listf);
     b!("cons", cons);
@@ -99,6 +100,8 @@ pub fn register(env: &Env) {
     b!("keyword?", is_keyword);
     b!("dict?", is_dict);
     b!("fn?", is_fn);
+    b!("symbol", make_symbol);
+    b!("keyword", make_keyword);
     // io / meta
     b!("print", printf);
     b!("println", printlnf);
@@ -157,6 +160,30 @@ fn substr(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let start = start.min(len);
     let end = end.min(len).max(start);
     Ok(Value::Str(chars[start..end].iter().collect()))
+}
+
+/// `(str-chars s)`: the characters of s, each a one-character string. A reader written in EELisp
+/// walks this list by index (`nth` on a list is constant time; `substr` on a string isn't).
+fn str_chars(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(args.first().unwrap_or(&Value::Null), "str-chars")?;
+    Ok(list_val(s.chars().map(|c| Value::Str(c.to_string())).collect()))
+}
+
+/// `(symbol "name")` and `(keyword "name")`: the symbol or keyword with that name. Strings,
+/// symbols and keywords are all accepted, so `(symbol :a)` is `a`.
+fn name_of<'a>(v: &'a Value, who: &str) -> Result<&'a str, LispError> {
+    match v {
+        Value::Str(s) => Ok(s.as_str()),
+        Value::Symbol(s) => Ok(s.as_ref()),
+        Value::Keyword(k) => Ok(k.as_str()),
+        other => Err(LispError::TypeMismatch { expected: format!("string (in {})", who), got: type_name(other) }),
+    }
+}
+fn make_symbol(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Symbol(name_of(args.first().unwrap_or(&Value::Null), "symbol")?.into()))
+}
+fn make_keyword(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    Ok(Value::Keyword(name_of(args.first().unwrap_or(&Value::Null), "keyword")?.to_string()))
 }
 
 fn str_starts_with(args: &[Value], _: &Env) -> Result<Value, LispError> {

@@ -321,7 +321,10 @@ in compiled mode, without changing the host.
 Running code is somewhat faster compiled (about 1.1–1.7× on the benchmarks), but each evaluation
 pays for compiling first: tens of microseconds for a typical form, and starting an engine takes
 a few milliseconds longer. Agenda rules, sheet formulas and `(eval …)` are still interpreted.
-How it works is told in [docs/self-hosting](self-hosting/README.md).
+Compiled mode also brings the compiler's own functions into the language: `(compile form)`,
+`(compile-run form)`, and `(read-all src)`, the reader written in EELisp, which turns text into
+the same forms as the engine's reader. How it works is told in
+[docs/self-hosting](self-hosting/README.md).
 
 ## Building
 
