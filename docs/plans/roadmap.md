@@ -101,6 +101,17 @@ binary nobody can reproduce), and it is the reference for testing.
   gains need bigger changes (value representation in the VM, a compiler without dict/closure
   records).
 
+- **A reader in EELisp.** `src/reader.eel`: text to forms, built into the image next to the
+  compiler; `(read-all src)` in compiled mode. New builtins: `str-chars`, `symbol`, `keyword`.
+  `tests/reader.rs` checks it against the Rust reader on 75 of the repo's files (~1 MB, Rust and
+  Markdown included), 39 edge cases and 1,500 random strings: same forms or the same error, both
+  interpreted and from the image. **Stage 2** of the bootstrap reads the source with it and
+  compiles it with the EELisp compiler: same image, byte for byte. Two printer fixes it forced: dict
+  keys that aren't keyword-safe print as strings, readable strings escape `\n \t \r`. Speed: 20.7
+  ms for 33K chars vs 0.78 ms in Rust; the cost is allocation (strings and keywords own their
+  text), which points at the value representation. Not yet the engine's reader: needs source
+  positions for `(source f)`, a parse error kind, and speed. See docs/self-hosting/09-a-reader-in-eelisp.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before

@@ -14,8 +14,9 @@ become a book.
 | 6 | [Locals in slots](06-slots.md) | `eval` joins the Lisp family's rule; the compiler resolves every variable to a slot, a captured cell or a global, keeping the interpreter's meaning exactly |
 | 7 | [Switching it on](07-switching-on.md) | Compiled mode as the engine's own `eval`: one switch, the whole test suite run both ways, and what compiling every form costs an editor |
 | 8 | [Profiling the compiler](08-profiling-the-compiler.md) | Counting an EELisp program's calls to find its costs: 6,779 calls per form compiled, two list walks to blame, and half of it gone |
+| 9 | [A reader in EELisp](09-a-reader-in-eelisp.md) | Text to forms in EELisp, agreeing with the Rust reader on a megabyte of hostile input; stage 2 of the bootstrap, where no Rust stands between the source and the bytecode |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
-`src/vm.rs`, `src/compiler.eel` and `src/boot.rs`; the tests that back every claim made here are
-`tests/vm.rs`, `tests/compiler.rs` and `tests/bootstrap.rs`; the numbers come from
+`src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every
+claim made here are `tests/vm.rs`, `tests/compiler.rs`, `tests/reader.rs` and `tests/bootstrap.rs`; the numbers come from
 `examples/bench.rs`.
