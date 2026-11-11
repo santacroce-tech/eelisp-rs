@@ -157,6 +157,43 @@ pub struct Proto {
     pub captures: Vec<CapSource>,
     /// Slot lists for `LoopSlots`.
     pub loop_slots: Vec<Vec<u32>>,
+    /// Per name in `syms`: where `Load` last found it as a global (see `GlobalCache`).
+    globals: Vec<std::cell::Cell<GlobalCache>>,
+}
+
+/// Where a global's value was found: in which global scope, at which layout of the global scopes
+/// (`env::layout`), and at what address. While the frame's scope is that same global scope and
+/// the layout hasn't changed, the value is still at that address, so `Load` reads it there
+/// instead of hashing the name.
+#[derive(Clone, Copy)]
+struct GlobalCache {
+    scope: *const RefCell<crate::env::Scope>,
+    layout: u64,
+    value: *const Value,
+}
+
+impl GlobalCache {
+    const EMPTY: GlobalCache = GlobalCache { scope: std::ptr::null(), layout: u64::MAX, value: std::ptr::null() };
+}
+
+/// `Load`: a global, from the cache when it's still valid, otherwise by name (and cached).
+#[inline(always)]
+fn load_global(env: &Env, proto: &Proto, s: u32) -> Result<Value, LispError> {
+    let cell = &proto.globals[s as usize];
+    let c = cell.get();
+    if c.scope == Rc::as_ptr(env) && c.layout == env::layout() {
+        // SAFETY: same scope, same layout: the map hasn't grown since, so the entry hasn't moved
+        // (`env::layout`). The borrow check refuses while anyone is changing the scope.
+        if unsafe { env.try_borrow_unguarded() }.is_ok() {
+            return Ok(copy(unsafe { &*c.value }));
+        }
+    }
+    let sym = &proto.syms[s as usize];
+    let v = env::get_sym(env, sym)?;
+    if let Some(value) = env::global_slot(env, sym) {
+        cell.set(GlobalCache { scope: Rc::as_ptr(env), layout: env::layout(), value });
+    }
+    Ok(v)
 }
 
 /// The function a proto makes when it closes over `env`.
@@ -269,6 +306,7 @@ pub fn call_proto(
 /// parameters in the first ones, and its environment is the closure's own — a call makes no
 /// scope. Named mode (`bind`): a new scope holds the parameters. `as_call` false runs a slot-mode
 /// top-level form: slots, but no parameters.
+#[inline(never)]
 fn enter(
     slots: &mut Vec<Slot>,
     proto: Rc<Proto>,
@@ -457,7 +495,7 @@ impl Vm {
                     self.stack.push(v);
                 }
                 Op::Load(s) => {
-                    let v = env::get_sym(&fr.env, &fr.proto.syms[s as usize])?;
+                    let v = load_global(&fr.env, &fr.proto, s)?;
                     self.stack.push(v);
                 }
                 Op::Def(s) => env::define_sym(&fr.env, &fr.proto.syms[s as usize], top(&self.stack)),
@@ -659,6 +697,18 @@ impl Vm {
         let base = self.stack.len() - n;
         // A builtin is called where it lies, with its arguments where they lie.
         if let Value::Builtin(b) = &self.stack[base - 1] {
+            // `(+ a b)`, `(< a b)`… on two numbers: computed here, no call through the builtin
+            if let (Some(op), 2) = (b.fast, n) {
+                if let (Value::Number(x), Value::Number(y)) = (&self.stack[base], &self.stack[base + 1]) {
+                    let v = op.apply(*x, *y);
+                    // two numbers need no dropping; only the builtin's reference is released
+                    self.stack.truncate(base - 1);
+                    return Ok(if tail { self.ret(v) } else {
+                        self.stack.push(v);
+                        None
+                    });
+                }
+            }
             let env = &self.frames.last().unwrap().env;
             let v = (b.func)(&self.stack[base..], env)?;
             self.stack.truncate(base - 1);
@@ -677,10 +727,11 @@ impl Vm {
                         let fr = self.frames.last().unwrap();
                         (fr.base, fr.slot_base)
                     };
-                    let args: Vec<Value> = self.stack.drain(base..).collect();
-                    self.stack.truncate(fbase);
+                    // the arguments move straight from the stack into the new frame's slots
                     self.slots.truncate(fsb);
-                    let frame = enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), args, fbase, true);
+                    let frame =
+                        enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), self.stack.drain(base..), fbase, true);
+                    self.stack.truncate(fbase);
                     *self.frames.last_mut().unwrap() = frame;
                 } else {
                     if self.frames.len() >= MAX_FRAMES {
@@ -871,6 +922,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         nslots,
         captures,
         loop_slots: Vec::new(),
+        globals: Vec::new(),
     };
     if let Some(n) = nslots {
         let need = p.params.len() + p.rest.is_some() as usize;
@@ -1014,6 +1066,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         };
         p.code.push(o);
     }
+    p.globals = vec![std::cell::Cell::new(GlobalCache::EMPTY); p.syms.len()];
     Ok(Rc::new(p))
 }
 
@@ -1083,7 +1136,7 @@ fn instr(f: &Value) -> Result<(Sym, Vec<Value>), LispError> {
 }
 
 fn builtin(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) {
-    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.into(), arg_mode: ArgMode::Eval, func: Box::new(f) })));
+    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.into(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })));
 }
 
 fn one<'a>(name: &str, args: &'a [Value]) -> Result<&'a Value, LispError> {

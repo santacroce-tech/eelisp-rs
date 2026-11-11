@@ -158,3 +158,58 @@ fn an_engine_handle_can_start_compiled() {
     assert!(engine.eval("(defn sq (x) (* x x))").contains("\"ok\":true"));
     assert!(engine.eval("(sq 12)").contains("\"result\":144"));
 }
+
+/// `Load` caches where it found a global (src/vm.rs, `load_global`). Every way a global can change
+/// must still be seen: redefined, `set!`, defined again, and the global scope growing until its
+/// map moves its entries.
+#[test]
+fn a_cached_global_sees_every_change() {
+    let it = compiled();
+    ev(&it, "(defn helper (x) (* x 2)) (defn use-it (x) (helper x)) (def k 10) (defn get-k () k)");
+    assert_eq!(ev(&it, "(use-it 5)"), "10");
+    assert_eq!(ev(&it, "(get-k)"), "10");
+    ev(&it, "(defn helper (x) (* x 3))");
+    assert_eq!(ev(&it, "(use-it 5)"), "15");
+    ev(&it, "(set! k 11)");
+    assert_eq!(ev(&it, "(get-k)"), "11");
+    ev(&it, "(def k 12)");
+    assert_eq!(ev(&it, "(get-k)"), "12");
+    // thousands of new globals: the map grows, and every entry moves
+    for i in 0..2000 {
+        ev(&it, &format!("(def filler-{i} {i})"));
+    }
+    assert_eq!(ev(&it, "(use-it 5)"), "15");
+    assert_eq!(ev(&it, "(get-k)"), "12");
+    ev(&it, "(defn helper (x) (+ x 1))");
+    assert_eq!(ev(&it, "(use-it 5)"), "6");
+    assert_eq!(ev(&it, "filler-1999"), "1999");
+}
+
+#[test]
+fn two_engines_keep_their_own_globals() {
+    let (a, b) = (compiled(), compiled());
+    ev(&a, "(def who :a) (defn ask () who)");
+    ev(&b, "(def who :b) (defn ask () who)");
+    for _ in 0..3 {
+        assert_eq!(ev(&a, "(ask)"), ":a");
+        assert_eq!(ev(&b, "(ask)"), ":b");
+        ev(&b, "(def extra-name 1)"); // b's global scope grows between a's calls
+    }
+}
+
+/// `(+ a b)` and friends are computed inline on two numbers (`FastOp`), but only while the name
+/// still means the language's own builtin.
+#[test]
+fn arithmetic_fast_path_follows_redefinition() {
+    let it = compiled();
+    ev(&it, "(defn mul2 (a b) (* a b)) (defn lt (a b) (< a b))");
+    assert_eq!(ev(&it, "(mul2 3 4)"), "12");
+    assert_eq!(ev(&it, "(lt 1 2)"), "true");
+    assert_eq!(ev(&it, "(lt 1 nan)"), "false");
+    // not two numbers: the builtin itself runs, with its own error
+    let e = it.eval_str("(mul2 3 \"x\")").unwrap_err();
+    assert_eq!(e.kind(), "type");
+    // redefined: the program's own `*`, no fast path
+    ev(&it, "(def * (fn (a b) 42))");
+    assert_eq!(ev(&it, "(mul2 3 4)"), "42");
+}

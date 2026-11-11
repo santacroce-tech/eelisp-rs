@@ -12,6 +12,9 @@ use crate::value::*;
 pub fn register(env: &Env) {
     macro_rules! b {
         ($name:expr, $f:expr) => {
+            b!($name, $f, None)
+        };
+        ($name:expr, $f:expr, $fast:expr) => {
             env::define(
                 env,
                 $name,
@@ -19,15 +22,16 @@ pub fn register(env: &Env) {
                     name: $name.to_string(),
                     arg_mode: ArgMode::Eval,
                     func: Box::new($f),
+                    fast: $fast,
                 })),
             );
         };
     }
 
     // arithmetic
-    b!("+", add);
-    b!("-", sub);
-    b!("*", mul);
+    b!("+", add, Some(FastOp::Add));
+    b!("-", sub, Some(FastOp::Sub));
+    b!("*", mul, Some(FastOp::Mul));
     b!("/", div);
     b!("mod", modulo);
     b!("abs", absf);
@@ -41,12 +45,12 @@ pub fn register(env: &Env) {
     b!("pow", powf);
     b!("expt", powf); // Common Lisp / Scheme spelling of pow
     // comparison / logic
-    b!("=", eqf);
-    b!("!=", nef);
-    b!("<", ltf);
-    b!(">", gtf);
-    b!("<=", lef);
-    b!(">=", gef);
+    b!("=", eqf, Some(FastOp::Eq));
+    b!("!=", nef, Some(FastOp::Ne));
+    b!("<", ltf, Some(FastOp::Lt));
+    b!(">", gtf, Some(FastOp::Gt));
+    b!("<=", lef, Some(FastOp::Le));
+    b!(">=", gef, Some(FastOp::Ge));
     b!("not", notf);
     // strings
     b!("str", strf);

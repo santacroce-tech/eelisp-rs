@@ -441,6 +441,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "function-list".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -467,6 +468,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "source-text".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -485,6 +487,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "functions".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -507,6 +510,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 // The name is passed unevaluated, so `(source map)` reads as well as `(source 'map)`.
                 arg_mode: ArgMode::TableFirst,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }

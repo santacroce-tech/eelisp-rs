@@ -384,6 +384,7 @@ impl Interpreter {
                 name: name.into(),
                 arg_mode: crate::value::ArgMode::Eval,
                 func: Box::new(move |args, _| f(args)),
+                fast: None,
             })),
         );
     }

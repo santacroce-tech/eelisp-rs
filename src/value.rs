@@ -194,6 +194,42 @@ pub struct Builtin {
     pub arg_mode: ArgMode,
     // Boxed closure (not a fn pointer) so builtins can capture state — e.g. the database handle.
     pub func: Box<BuiltinFn>,
+    /// Set only on the language's own arithmetic and comparisons. The VM computes these directly
+    /// when called with two numbers, without the call through `func`. It's the builtin value that
+    /// carries it, so a program that redefines `+` gets its own `+`, with no fast path.
+    pub fast: Option<FastOp>,
+}
+
+/// The operations the VM computes inline (see `Builtin::fast`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastOp {
+    Add,
+    Sub,
+    Mul,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
+}
+
+impl FastOp {
+    /// The result for two numbers, exactly as the builtin computes it.
+    #[inline(always)]
+    pub fn apply(self, a: f64, b: f64) -> Value {
+        match self {
+            FastOp::Add => Value::Number(a + b),
+            FastOp::Sub => Value::Number(a - b),
+            FastOp::Mul => Value::Number(a * b),
+            FastOp::Lt => Value::Bool(a < b),
+            FastOp::Gt => Value::Bool(a > b),
+            FastOp::Le => Value::Bool(a <= b),
+            FastOp::Ge => Value::Bool(a >= b),
+            FastOp::Eq => Value::Bool(a == b),
+            FastOp::Ne => Value::Bool(a != b),
+        }
+    }
 }
 
 /// What a builtin runs: its evaluated (or raw, per `arg_mode`) arguments and the caller's

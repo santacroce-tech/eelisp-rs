@@ -1,7 +1,7 @@
 # 12. Sharing strings
 
 *Code: `Value` in `src/value.rs`, and every place that makes or reads a string (about 250 of
-them). Branch: `exp/shared-strings`. The numbers come from `examples/bench.rs` and a few timing
+them). First on its own branch, `exp/shared-strings`. The numbers come from `examples/bench.rs` and a few timing
 scripts, run against the previous commit on the same machine.*
 
 ## The finding
@@ -141,5 +141,5 @@ changes the public type. Code that *makes* values mostly doesn't notice:
 needs `.to_string()`. eeditor's own code talks to the engine through JSON and `EngineHandle`, so it
 doesn't change. The engine's own test files needed two small edits.
 
-Because it's a public type change, it lives on its own branch, `exp/shared-strings`, ready to merge
-into `feat/bytecode-vm` once it's been reviewed.
+Because it's a public type change, it was first kept on its own branch, `exp/shared-strings`, for
+review. It was then merged into `feat/bytecode-vm`.

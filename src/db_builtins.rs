@@ -22,7 +22,7 @@ fn define_db(
     env::define(
         env,
         name,
-        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: mode, func: Box::new(f) })),
+        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: mode, func: Box::new(f), fast: None })),
     );
 }
 

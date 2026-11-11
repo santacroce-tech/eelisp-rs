@@ -743,7 +743,7 @@ struct RuleDef {
 }
 
 fn make_builtin(name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) -> Value {
-    Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f) }))
+    Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None }))
 }
 
 /// Build a child env binding the item's fields + `get` / `has-category` / `overdue?` / `match`.
