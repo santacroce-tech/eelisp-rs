@@ -41,6 +41,10 @@ everything. Only what happens inside `eval` changes: compile the form to bytecod
 3. **Check:** image 1 and image 2 must be byte-for-byte identical.
 4. Commit the image, and the VM starts from it.
 
+That's how the first image was made. Since then (chapter 10) the committed image builds the next
+one: the old compiler compiles the new source, which then compiles itself until it reaches a fixed
+point, and stage 0 runs alongside as a cross-check.
+
 The tree-walker stays. It can rebuild the image from source at any time (so we never depend on a
 binary nobody can reproduce), and it is the reference for testing.
 
@@ -111,6 +115,12 @@ binary nobody can reproduce), and it is the reference for testing.
   ms for 33K chars vs 0.78 ms in Rust; the cost is allocation (strings and keywords own their
   text), which points at the value representation. Not yet the engine's reader: needs source
   positions for `(source f)`, a parse error kind, and speed. See docs/self-hosting/09-a-reader-in-eelisp.md.
+
+- **The old image builds the new one.** `boot::rebuild`: the committed image reads and compiles
+  the new source (generation 1), that compiler does it again (2) and once more (3); 2 and 3 must
+  match. The interpreter only cross-checks: stage 0 must equal generation 2. `--from-source`
+  starts from the interpreter when there's no usable image. A test shows a new macro in the
+  compiler's own source settling in two generations. See docs/self-hosting/10-the-old-builds-the-new.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 

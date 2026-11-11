@@ -70,9 +70,14 @@ pub fn load_image(it: &Interpreter, image: &str) -> Result<(), LispError> {
 
 /// Stage 0: the interpreted compiler compiles itself.
 pub fn stage0() -> Result<String, LispError> {
+    stage0_of(&source())
+}
+
+/// Stage 0 for any source: the interpreter runs it, then it compiles itself.
+pub fn stage0_of(src: &str) -> Result<String, LispError> {
     let it = interpreting()?;
-    it.eval_all(&source())?;
-    compile_image(&it, &source())
+    it.eval_all(src)?;
+    compile_image(&it, src)
 }
 
 /// Stage 1: the compiler loaded from `image` — bytecode only — compiles itself.
@@ -84,9 +89,15 @@ pub fn stage1(image: &str) -> Result<String, LispError> {
 /// source with the EELisp reader (`read-all`) and compiles it with the EELisp compiler. Rust only
 /// runs the VM and the builtins.
 pub fn stage2(image: &str) -> Result<String, LispError> {
+    next_image(image, &source())
+}
+
+/// One generation: the reader and compiler in `image` read and compile `src`. With `src` the
+/// source `image` was made from, that's `image` again; with a newer source, it's the next image.
+pub fn next_image(image: &str, src: &str) -> Result<String, LispError> {
     let it = with_image(image)?;
     let forms = it
-        .call("read-all", &[Value::Str(source())])
+        .call("read-all", &[Value::Str(src.to_string())])
         .ok_or_else(|| {
             LispError::Runtime("the image has no reader (no `read-all` function)".into())
         })??;
@@ -97,6 +108,38 @@ pub fn stage2(image: &str) -> Result<String, LispError> {
             print_value(&other, true)
         ))),
     }
+}
+
+/// The three generations of a rebuild (see `rebuild`).
+pub struct Rebuild {
+    /// The new source, read and compiled by the old image.
+    pub first: String,
+    /// The new source, compiled by itself (by `first`).
+    pub second: String,
+    /// Once more, by `second`. Must equal `second`.
+    pub third: String,
+}
+
+/// Build the image for `src` from an older image, the way self-hosted compilers build their next
+/// version: the old compiler compiles the new source (`first`), that compiler compiles the source
+/// again (`second`), and once more (`third`). `second` and `third` are the new compiler compiled
+/// by itself, so they must be identical; `first` may differ from them, when the new source changes
+/// what the compiler emits. The interpreter isn't involved: `stage0_of` is the cross-check.
+pub fn rebuild(old: &str, src: &str) -> Result<Rebuild, LispError> {
+    let first = next_image(old, src)?;
+    let second = next_image(&first, src)?;
+    let third = next_image(&second, src)?;
+    if second != third {
+        let line = second.lines().zip(third.lines()).position(|(a, b)| a != b);
+        return Err(LispError::Runtime(format!(
+            "the rebuilt compiler is not a fixed point (generations 2 and 3 first differ at line {line:?})"
+        )));
+    }
+    Ok(Rebuild {
+        first,
+        second,
+        third,
+    })
 }
 
 /// A fresh engine with the compiler loaded from `image`; its source is never interpreted.
