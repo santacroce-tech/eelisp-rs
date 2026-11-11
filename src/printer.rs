@@ -17,7 +17,7 @@ pub fn print_value(v: &Value, readable: bool) -> String {
                         .replace('\r', "\\r")
                 )
             } else {
-                s.clone()
+                s.to_string()
             }
         }
         Value::Number(n) => fmt_num(*n),
@@ -147,7 +147,7 @@ fn print_key(k: &str, readable: bool) -> String {
         c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | '\'' | '`' | ',')
     });
     if readable && !keyword_safe {
-        print_value(&Value::Str(k.to_string()), true)
+        print_value(&Value::Str(k.into()), true)
     } else {
         format!(":{}", k)
     }

@@ -205,7 +205,7 @@ pub fn register(env: &Env) {
             (None, None) => (0, b.len()),
             _ => return Err(fail("bytes->base64: give both start and length, or neither")),
         };
-        Ok(Value::Str(base64(&b[s..s + n])))
+        Ok(Value::Str(base64(&b[s..s + n]).into()))
     });
     define(env, "base64->bytes", |a, _| {
         arity("base64->bytes", a, 1, 1)?;

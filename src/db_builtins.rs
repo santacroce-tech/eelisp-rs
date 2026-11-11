@@ -233,9 +233,9 @@ pub fn register(env: &Env, db: Shared) {
 pub fn register_info(env: &Env, db: Shared, error: Rc<RefCell<Option<String>>>) {
     define_db(env, "database-info", ArgMode::Eval, move |_, _| {
         let mut info = OrderedDict::default();
-        info.insert("path".into(), Value::Str(db.borrow().path().to_string()));
+        info.insert("path".into(), Value::Str(db.borrow().path().to_string().into()));
         if let Some(e) = error.borrow().as_ref() {
-            info.insert("error".into(), Value::Str(e.clone()));
+            info.insert("error".into(), Value::Str(e.clone().into()));
         }
         Ok(Value::Dict(Rc::new(info)))
     });
@@ -246,7 +246,7 @@ pub fn register_info(env: &Env, db: Shared, error: Rc<RefCell<Option<String>>>) 
 fn sym_or_str(v: &Value) -> Option<String> {
     match v {
         Value::Symbol(s) => Some(s.to_string()),
-        Value::Str(s) => Some(s.clone()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
@@ -255,7 +255,7 @@ fn kw<'a>(args: &'a [Value], key: &str) -> Option<&'a Value> {
     let mut i = 0;
     while i + 1 < args.len() {
         if let Value::Keyword(k) = &args[i] {
-            if k == key {
+            if **k == *key {
                 return Some(&args[i + 1]);
             }
         }
@@ -267,7 +267,7 @@ fn kw<'a>(args: &'a [Value], key: &str) -> Option<&'a Value> {
 fn table_name(v: Option<&Value>) -> Result<String, LispError> {
     match v {
         Some(Value::Symbol(s)) => Ok(s.to_string()),
-        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(Value::Str(s)) => Ok(s.to_string()),
         _ => Err(LispError::InvalidSyntax("expected a table name".into())),
     }
 }
@@ -307,7 +307,8 @@ fn as_record(v: Option<&Value>) -> Result<Rc<Record>, LispError> {
 fn as_key(v: Option<&Value>) -> Result<String, LispError> {
     match v {
         Some(Value::Symbol(k)) => Ok(k.to_string()),
-        Some(Value::Keyword(k)) | Some(Value::Str(k)) => Ok(k.clone()),
+        Some(Value::Keyword(k)) => Ok(k.to_string()),
+        Some(Value::Str(k)) => Ok(k.to_string()),
         _ => Err(LispError::InvalidSyntax("expected a field name (a keyword or a string)".into())),
     }
 }
@@ -362,7 +363,7 @@ fn parse_field(v: &Value) -> Result<FieldDef, LispError> {
                                     .iter()
                                     .filter_map(|c| match c {
                                         Value::Symbol(s) => Some(s.to_string()),
-                                        Value::Str(s) => Some(s.clone()),
+                                        Value::Str(s) => Some(s.to_string()),
                                         _ => None,
                                     })
                                     .collect();
@@ -394,7 +395,7 @@ fn parse_form_field(v: &Value) -> Option<FieldDef> {
                 let name = parts.next().unwrap_or("").to_string();
                 let ty = parts.next().unwrap_or("string");
                 let choices = l.iter().skip(1).filter_map(|c| match c {
-                    Value::Str(s) => Some(s.clone()),
+                    Value::Str(s) => Some(s.to_string()),
                     _ => None,
                 }).collect();
                 Some(FieldDef { name, ftype: FieldType::parse(ty), required: false, default: None, choices })
@@ -433,8 +434,8 @@ fn blank_record(table: &str, def: &TableDef) -> Record {
         let v = match f.ftype {
             FieldType::Number => Value::Number(0.0),
             FieldType::Bool => Value::Bool(false),
-            FieldType::Choice => Value::Str(f.choices.first().cloned().unwrap_or_default()),
-            _ => Value::Str(String::new()),
+            FieldType::Choice => Value::Str(f.choices.first().cloned().unwrap_or_default().into()),
+            _ => Value::Str((String::new()).into()),
         };
         data.insert(f.name.clone(), v);
     }
@@ -460,7 +461,7 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
             match k.as_str() {
                 "where" => {
                     if let Some(Value::Str(s)) = val {
-                        q.where_ = Some(s.clone());
+                        q.where_ = Some(s.to_string());
                     }
                 }
                 "params" => {
@@ -470,7 +471,7 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
                 }
                 "order" => match val {
                     Some(Value::Symbol(s)) => q.order = Some(s.to_string()),
-                    Some(Value::Str(s)) => q.order = Some(s.clone()),
+                    Some(Value::Str(s)) => q.order = Some(s.to_string()),
                     _ => {}
                 },
                 "asc" => {
@@ -499,7 +500,8 @@ fn parse_query(args: &[Value]) -> Result<Query, LispError> {
                             l.iter()
                                 .filter_map(|x| match x {
                                     Value::Symbol(s) => Some(s.to_string()),
-                                    Value::Str(s) | Value::Keyword(s) => Some(s.clone()),
+                                    Value::Str(s) => Some(s.to_string()),
+                                    Value::Keyword(s) => Some(s.to_string()),
                                     _ => None,
                                 })
                                 .collect(),
@@ -525,7 +527,7 @@ fn parse_where_params(args: &[Value]) -> (Option<String>, Vec<Value>) {
             match k.as_str() {
                 "where" => {
                     if let Some(Value::Str(s)) = args.get(i + 1) {
-                        where_ = Some(s.clone());
+                        where_ = Some(s.to_string());
                     }
                 }
                 "params" => {

@@ -134,7 +134,7 @@ pub fn register(env: &Env) {
 
 fn as_str<'a>(v: &'a Value, who: &str) -> Result<&'a str, LispError> {
     match v {
-        Value::Str(s) => Ok(s.as_str()),
+        Value::Str(s) => Ok(s.as_ref()),
         other => Err(LispError::TypeMismatch { expected: format!("string (in {})", who), got: type_name(other) }),
     }
 }
@@ -144,37 +144,42 @@ fn str_replace(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let target = as_str(args.get(1).unwrap_or(&Value::Null), "str-replace")?;
     let repl = as_str(args.get(2).unwrap_or(&Value::Null), "str-replace")?;
     if target.is_empty() {
-        return Ok(Value::Str(s.to_string()));
+        return Ok(Value::Str(s.into()));
     }
-    Ok(Value::Str(s.replace(target, repl)))
+    Ok(Value::Str(s.replace(target, repl).into()))
 }
 
 fn substr(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let s = as_str(&args[0], "substr")?;
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
     let start = (as_num(&args[1])? as i64).max(0) as usize;
     let end = match args.get(2) {
-        Some(v) => (as_num(v)? as i64).max(0) as usize,
-        None => len,
+        Some(v) => Some((as_num(v)? as i64).max(0) as usize),
+        None => None,
     };
-    let start = start.min(len);
-    let end = end.min(len).max(start);
-    Ok(Value::Str(chars[start..end].iter().collect()))
+    // character positions → byte offsets, clamped to the string, without collecting its chars
+    let byte_at = |n: usize| s.char_indices().nth(n).map_or(s.len(), |(b, _)| b);
+    let from = byte_at(start);
+    let to = match end {
+        Some(e) if e > start => from + s[from..].char_indices().nth(e - start).map_or(s.len() - from, |(b, _)| b),
+        Some(_) => from,
+        None => s.len(),
+    };
+    Ok(Value::Str(Rc::from(&s[from..to])))
 }
 
 /// `(str-chars s)`: the characters of s, each a one-character string. A reader written in EELisp
 /// walks this list by index (`nth` on a list is constant time; `substr` on a string isn't).
 fn str_chars(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let s = as_str(args.first().unwrap_or(&Value::Null), "str-chars")?;
-    Ok(list_val(s.chars().map(|c| Value::Str(c.to_string())).collect()))
+    let mut buf = [0u8; 4];
+    Ok(list_val(s.chars().map(|c| Value::Str(Rc::from(&*c.encode_utf8(&mut buf)))).collect()))
 }
 
 /// `(symbol "name")` and `(keyword "name")`: the symbol or keyword with that name. Strings,
 /// symbols and keywords are all accepted, so `(symbol :a)` is `a`.
 fn name_of<'a>(v: &'a Value, who: &str) -> Result<&'a str, LispError> {
     match v {
-        Value::Str(s) => Ok(s.as_str()),
+        Value::Str(s) => Ok(s.as_ref()),
         Value::Symbol(s) => Ok(s.as_ref()),
         Value::Keyword(k) => Ok(k.as_str()),
         other => Err(LispError::TypeMismatch { expected: format!("string (in {})", who), got: type_name(other) }),
@@ -184,7 +189,7 @@ fn make_symbol(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Symbol(name_of(args.first().unwrap_or(&Value::Null), "symbol")?.into()))
 }
 fn make_keyword(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Keyword(name_of(args.first().unwrap_or(&Value::Null), "keyword")?.to_string()))
+    Ok(Value::Keyword((name_of(args.first().unwrap_or(&Value::Null), "keyword")?.to_string()).into()))
 }
 
 fn str_starts_with(args: &[Value], _: &Env) -> Result<Value, LispError> {
@@ -225,7 +230,7 @@ fn sort_by(args: &[Value], env: &Env) -> Result<Value, LispError> {
 // ---- conversions ----
 
 fn to_string_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Str(display(args.first().unwrap_or(&Value::Null))))
+    Ok(Value::Str((display(args.first().unwrap_or(&Value::Null))).into()))
 }
 
 fn to_number_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
@@ -272,10 +277,10 @@ fn date_format_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
         _ => return Err(LispError::InvalidSyntax("date-format expects a date string or epoch number".into())),
     };
     let fmt = match args.get(1) {
-        Some(Value::Str(f)) => f.as_str(),
+        Some(Value::Str(f)) => f.as_ref(),
         _ => "yyyy-MM-dd HH:mm",
     };
-    Ok(Value::Str(crate::dates::format(fmt, &dt)))
+    Ok(Value::Str((crate::dates::format(fmt, &dt)).into()))
 }
 
 fn date_add_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
@@ -284,11 +289,11 @@ fn date_add_f(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let unit = match args.get(2) {
         Some(Value::Symbol(k)) => &**k,
         Some(Value::Keyword(k)) => k.as_str(),
-        Some(Value::Str(s)) => s.as_str(),
+        Some(Value::Str(s)) => s.as_ref(),
         _ => "days",
     };
     crate::dates::date_add(date, amount, unit)
-        .map(Value::Str)
+        .map(|s| Value::Str(s.into()))
         .ok_or_else(|| LispError::Runtime(format!("date-add: bad date {:?}", date)))
 }
 
@@ -503,7 +508,7 @@ fn notf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 // ---- strings ----
 
 fn strf(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Str(args.iter().map(display).collect()))
+    Ok(Value::Str(args.iter().map(display).collect::<String>().into()))
 }
 fn str_len(args: &[Value], _: &Env) -> Result<Value, LispError> {
     match &args[0] {
@@ -516,7 +521,7 @@ fn str_len(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn str_upper(args: &[Value], _: &Env) -> Result<Value, LispError> {
     match &args[0] {
-        Value::Str(s) => Ok(Value::Str(s.to_uppercase())),
+        Value::Str(s) => Ok(Value::Str(s.to_uppercase().into())),
         other => Err(LispError::TypeMismatch {
             expected: "string".into(),
             got: type_name(other),
@@ -525,7 +530,7 @@ fn str_upper(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn str_lower(args: &[Value], _: &Env) -> Result<Value, LispError> {
     match &args[0] {
-        Value::Str(s) => Ok(Value::Str(s.to_lowercase())),
+        Value::Str(s) => Ok(Value::Str(s.to_lowercase().into())),
         other => Err(LispError::TypeMismatch {
             expected: "string".into(),
             got: type_name(other),
@@ -534,7 +539,7 @@ fn str_lower(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn str_split(args: &[Value], _: &Env) -> Result<Value, LispError> {
     if let (Value::Str(s), Value::Str(sep)) = (&args[0], &args[1]) {
-        let parts = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
+        let parts = s.split(sep.as_ref()).map(|p| Value::Str(p.into())).collect();
         Ok(list_val(parts))
     } else {
         Err(LispError::InvalidSyntax("str-split expects (string string)".into()))
@@ -543,24 +548,24 @@ fn str_split(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn str_join(args: &[Value], _: &Env) -> Result<Value, LispError> {
     // Accept either order: (str-join sep list) [EELisp core] or (str-join list sep) [zzeelisp].
     let (sep, list): (String, Rc<Vec<Value>>) = match (args.first(), args.get(1)) {
-        (Some(Value::Str(sep)), Some(Value::List(l))) => (sep.clone(), l.clone()),
-        (Some(Value::List(l)), Some(Value::Str(sep))) => (sep.clone(), l.clone()),
+        (Some(Value::Str(sep)), Some(Value::List(l))) => (sep.to_string(), l.clone()),
+        (Some(Value::List(l)), Some(Value::Str(sep))) => (sep.to_string(), l.clone()),
         (Some(Value::List(l)), None) => (String::new(), l.clone()),
         _ => return Err(LispError::InvalidSyntax("str-join expects a list and a separator".into())),
     };
     let parts: Vec<String> = list.iter().map(display).collect();
-    Ok(Value::Str(parts.join(&sep)))
+    Ok(Value::Str(parts.join(&sep).into()))
 }
 fn str_contains(args: &[Value], _: &Env) -> Result<Value, LispError> {
     if let (Value::Str(s), Value::Str(sub)) = (&args[0], &args[1]) {
-        Ok(Value::Bool(s.contains(sub.as_str())))
+        Ok(Value::Bool(s.contains(sub.as_ref())))
     } else {
         Err(LispError::InvalidSyntax("str-contains expects (string string)".into()))
     }
 }
 fn str_trim(args: &[Value], _: &Env) -> Result<Value, LispError> {
     match &args[0] {
-        Value::Str(s) => Ok(Value::Str(s.trim().to_string())),
+        Value::Str(s) => Ok(Value::Str(s.trim().into())),
         other => Err(LispError::TypeMismatch {
             expected: "string".into(),
             got: type_name(other),
@@ -579,7 +584,7 @@ fn str_matches(args: &[Value], _: &Env) -> Result<Value, LispError> {
         Some(caps) => {
             let mut out = vec![Value::Bool(true)];
             for i in 0..caps.len() {
-                out.push(caps.get(i).map(|m| Value::Str(m.as_str().to_string())).unwrap_or(Value::Null));
+                out.push(caps.get(i).map(|m| Value::Str(m.as_str().into())).unwrap_or(Value::Null));
             }
             Ok(list_val(out))
         }
@@ -725,7 +730,7 @@ fn dictf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let mut i = 0;
     while i + 1 < args.len() {
         if let Value::Keyword(k) = &args[i] {
-            d.insert(k.clone(), args[i + 1].clone());
+            d.insert(k.to_string(), args[i + 1].clone());
         } else {
             return Err(LispError::InvalidSyntax("dict keys must be keywords".into()));
         }
@@ -737,7 +742,8 @@ fn dictf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn dict_key(v: &Value) -> Option<&str> {
     match v {
         Value::Symbol(k) => Some(&**k),
-        Value::Keyword(k) | Value::Str(k) => Some(k.as_str()),
+        Value::Keyword(k) => Some(k.as_str()),
+        Value::Str(k) => Some(&k[..]),
         _ => None,
     }
 }
@@ -760,7 +766,7 @@ fn dict_set(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 fn dict_keys(args: &[Value], _: &Env) -> Result<Value, LispError> {
     if let Value::Dict(d) = &args[0] {
-        Ok(list_val(d.keys.iter().map(|k| Value::Keyword(k.clone())).collect()))
+        Ok(list_val(d.keys.iter().map(|k| Value::Keyword(k.clone().into())).collect()))
     } else {
         Err(LispError::TypeMismatch {
             expected: "dict".into(),
@@ -808,7 +814,7 @@ fn dict_merge(args: &[Value], _: &Env) -> Result<Value, LispError> {
 // ---- types ----
 
 fn typef(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Str(type_name(&args[0])))
+    Ok(Value::Str(type_name(&args[0]).into()))
 }
 fn is_number(a: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Bool(matches!(a[0], Value::Number(_))))
@@ -866,7 +872,8 @@ fn errorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
     // `(error msg :parse)`: an optional kind, for code that reports the errors the engine's own
     // parts report (the EELisp reader raises parse errors). Any other kind is a runtime error.
     let kind = match args.get(1) {
-        Some(Value::Keyword(k)) | Some(Value::Str(k)) => k.as_str(),
+        Some(Value::Keyword(k)) => k.as_str(),
+        Some(Value::Str(k)) => &k[..],
         _ => "runtime",
     };
     Err(match kind {
@@ -945,7 +952,7 @@ fn csv_parse(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let sep = csv_sep(args.get(1), "csv-parse")?;
     let rows = parse_delimited(&text, sep)
         .into_iter()
-        .map(|r| Value::List(Rc::new(r.into_iter().map(Value::Str).collect())))
+        .map(|r| Value::List(Rc::new(r.into_iter().map(|s| Value::Str(s.into())).collect())))
         .collect();
     Ok(Value::List(Rc::new(rows)))
 }
@@ -1011,7 +1018,7 @@ fn csv_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
             one => cell(one),
         })
         .collect();
-    Ok(Value::Str(lines.join("\n")))
+    Ok(Value::Str(lines.join("\n").into()))
 }
 
 // ── JSON (ANALYSIS §4.11) — plain JSON ⇄ Value; objects↔dicts, arrays↔lists ──
@@ -1028,7 +1035,7 @@ fn json_parse(args: &[Value], _: &Env) -> Result<Value, LispError> {
 }
 
 fn json_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Str(value_to_natural(args.first().unwrap_or(&Value::Null)).to_string()))
+    Ok(Value::Str((value_to_natural(args.first().unwrap_or(&Value::Null)).to_string()).into()))
 }
 
 // ── HTTP (ANALYSIS §4.11) — synchronous, returns {:status N :body "…"} ──
@@ -1037,7 +1044,7 @@ fn json_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
 fn http_dict(status: u16, body: String) -> Value {
     let mut d = OrderedDict::default();
     d.insert("status".into(), Value::Number(status as f64));
-    d.insert("body".into(), Value::Str(body));
+    d.insert("body".into(), Value::Str(body.into()));
     Value::Dict(Rc::new(d))
 }
 
@@ -1090,7 +1097,7 @@ fn http_post(args: &[Value], _: &Env) -> Result<Value, LispError> {
     };
     let body = match args.get(1) {
         Some(Value::Str(b)) => b.clone(),
-        _ => String::new(),
+        _ => (String::new()).into(),
     };
     let opts = http_opts(args, 2, "http-post")?;
     let mut req = ureq::post(url)
@@ -1161,11 +1168,11 @@ fn value_to_natural(v: &Value) -> serde_json::Value {
                 serde_json::json!(n)
             }
         }
-        Value::Str(s) => J::String(s.clone()),
+        Value::Str(s) => J::String(s.to_string()),
         Value::Bool(b) => J::Bool(*b),
         Value::Null => J::Null,
         Value::Symbol(k) => J::String(k.to_string()),
-        Value::Keyword(k) => J::String(k.clone()),
+        Value::Keyword(k) => J::String(k.to_string()),
         Value::List(l) => J::Array(l.iter().map(value_to_natural).collect()),
         Value::Dict(d) => {
             let mut m = serde_json::Map::new(); // BTreeMap → sorted keys, matching EELisp

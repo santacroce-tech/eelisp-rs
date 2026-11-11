@@ -170,7 +170,8 @@ fn filter_text(v: Option<&Value>) -> Option<String> {
     let s: &str = match v {
         None | Some(Value::Null) => return None,
         Some(Value::Symbol(s)) => s,
-        Some(Value::Str(s)) | Some(Value::Keyword(s)) => s,
+        Some(Value::Str(s)) => s,
+        Some(Value::Keyword(s)) => s,
         Some(other) => return Some(print_value(other, false).to_lowercase()),
     };
     let t = s.trim();
@@ -186,11 +187,12 @@ fn filter_text(v: Option<&Value>) -> Option<String> {
 fn name_arg(v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::Symbol(s)) => Some(s.to_string()),
-        Some(Value::Str(s)) | Some(Value::Keyword(s)) => Some(s.clone()),
+        Some(Value::Str(s)) => Some(s.to_string()),
+        Some(Value::Keyword(s)) => Some(s.to_string()),
         Some(Value::List(l)) => match (l.first(), l.get(1)) {
             // (quote x) — what 'x reads as
             (Some(Value::Symbol(q)), Some(Value::Symbol(s))) if &**q == "quote" => Some(s.to_string()),
-            (Some(Value::Symbol(q)), Some(Value::Str(s))) if &**q == "quote" => Some(s.clone()),
+            (Some(Value::Symbol(q)), Some(Value::Str(s))) if &**q == "quote" => Some(s.to_string()),
             _ => None,
         },
         _ => None,
@@ -411,10 +413,10 @@ fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
 
 fn row_dict(r: &Row, index: &SourceIndex) -> Value {
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(r.name.clone()));
-    d.insert("kind".into(), Value::Str(r.kind.to_string()));
-    d.insert("sig".into(), Value::Str(r.sig.clone()));
-    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index)));
+    d.insert("name".into(), Value::Str(r.name.clone().into()));
+    d.insert("kind".into(), Value::Str(r.kind.into()));
+    d.insert("sig".into(), Value::Str(r.sig.clone().into()));
+    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index).into()));
     Value::Dict(Rc::new(d))
 }
 
@@ -448,14 +450,15 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
             // Evaluated, unlike `source`: a program hands it a name it holds in a variable.
             let name = match args.first() {
                 Some(Value::Symbol(s)) => s.to_string(),
-                Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
+                Some(Value::Str(s)) => s.to_string(),
+                Some(Value::Keyword(s)) => s.to_string(),
                 _ => {
                     return Err(LispError::InvalidSyntax(
                         "source-text expects a name, e.g. (source-text \"map\")".into(),
                     ))
                 }
             };
-            Ok(Value::Str(render_source(&name, env, &index.borrow())?))
+            Ok(Value::Str((render_source(&name, env, &index.borrow())?).into()))
         };
         env::define(
             env,

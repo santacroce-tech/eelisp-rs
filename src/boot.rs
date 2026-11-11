@@ -97,7 +97,7 @@ pub fn stage2(image: &str) -> Result<String, LispError> {
 pub fn next_image(image: &str, src: &str) -> Result<String, LispError> {
     let it = with_image(image)?;
     let forms = it
-        .call("read-all", &[Value::Str(src.to_string())])
+        .call("read-all", &[Value::Str(src.into())])
         .ok_or_else(|| {
             LispError::Runtime("the image has no reader (no `read-all` function)".into())
         })??;

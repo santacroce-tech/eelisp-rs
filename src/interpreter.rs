@@ -203,7 +203,7 @@ impl Interpreter {
         let reader = self.reader.borrow().clone();
         match reader {
             Some(read_top) if self.compiled.get() => {
-                let forms = eval::apply_value(&read_top, &[Value::Str(src.to_string())], &self.global)?;
+                let forms = eval::apply_value(&read_top, &[Value::Str(src.into())], &self.global)?;
                 let bad = || LispError::Runtime("read-top returned something other than (form source comments)".into());
                 let Value::List(forms) = forms else { return Err(bad()) };
                 forms
@@ -212,8 +212,8 @@ impl Interpreter {
                         Value::List(t) => match &t[..] {
                             [value, Value::Str(source), Value::Str(comments)] => Ok(parser::TopForm {
                                 value: value.clone(),
-                                source: source.clone(),
-                                comments: comments.clone(),
+                                source: source.to_string(),
+                                comments: comments.to_string(),
                             }),
                             _ => Err(bad()),
                         },

@@ -57,7 +57,7 @@ fn by_rust(src: &str) -> String {
 /// The same, by the EELisp reader's `read-top`.
 fn by_eelisp(it: &Interpreter, src: &str) -> String {
     match it
-        .call("read-top", &[Value::Str(src.to_string())])
+        .call("read-top", &[Value::Str(src.to_string().into())])
         .expect("read-top is defined")
     {
         Ok(Value::List(forms)) => forms

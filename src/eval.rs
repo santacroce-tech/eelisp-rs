@@ -571,8 +571,8 @@ pub fn error_dict(err: &LispError) -> Value {
         other => other.to_string(),
     };
     let mut d = OrderedDict::default();
-    d.insert("message".into(), Value::Str(message));
-    d.insert("kind".into(), Value::Str(err.kind().to_string()));
+    d.insert("message".into(), Value::Str(message.into()));
+    d.insert("kind".into(), Value::Str(err.kind().into()));
     Value::Dict(Rc::new(d))
 }
 

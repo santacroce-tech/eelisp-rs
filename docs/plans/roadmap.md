@@ -129,6 +129,12 @@ binary nobody can reproduce), and it is the reference for testing.
   and allocation cost). The Rust reader remains for loading the image (the seed) and the
   interpreter. See docs/self-hosting/11-the-engine-reads-in-eelisp.md.
 
+- **Shared strings (branch `exp/shared-strings`).** `Value::Str` is `Rc<str>`, `Value::Keyword` an
+  interned `Sym`; `Value` kept at 32 bytes with `repr(align(16))` (24 bytes made number loops ~9%
+  slower). Text-heavy snippets 1.3–1.56× faster in both engines, EELisp reader 1.22×, compiled
+  per-evaluation 1.16–1.18×, synthetic workloads 1.00–1.05×. Public type change; merge pending
+  review. See docs/self-hosting/12-sharing-strings.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before

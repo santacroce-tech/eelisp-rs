@@ -54,7 +54,7 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         let path = resolve(host, str_arg(args, 0, "sheet-new", "a sheet name")?)?;
         writable(reg, "sheet-new")?;
         reg.borrow_mut().create(&path)?;
-        Ok(Value::Str(path.display().to_string()))
+        Ok(Value::Str(path.display().to_string().into()))
     });
 
     def("sheet-open", |reg, host, args, _| {
@@ -68,7 +68,7 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         let path = resolve(host, str_arg(args, 0, "sheet-bytes", "a sheet name")?)?;
         let mut sheets = reg.borrow_mut();
         let bytes = sheets.sheet(&path)?.to_bytes()?;
-        Ok(Value::Str(base64(&bytes)))
+        Ok(Value::Str(base64(&bytes).into()))
     });
 
     // The reverse: a new sheet file made from base64 bytes — a sheet an exported page carried, back
@@ -87,7 +87,7 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         }
         std::fs::write(&path, &bytes).map_err(|e| fail(format!("{}: {e}", path.display())))?;
         reg.borrow_mut().close(&path);
-        Ok(Value::Str(path.display().to_string()))
+        Ok(Value::Str(path.display().to_string().into()))
     });
 
     def("sheet-close", |reg, host, args, _| {
@@ -170,7 +170,7 @@ pub fn register(env: &Env, host: Host, reg: Registry) {
         let rows = (area.start.row..=area.end.row)
             .map(|r| {
                 let row = (area.start.col..=area.end.col)
-                    .map(|c| Value::Str(sheet.input_at(CellRef::new(r, c)).to_string()))
+                    .map(|c| Value::Str((sheet.input_at(CellRef::new(r, c)).to_string()).into()))
                     .collect();
                 Value::List(Rc::new(row))
             })
@@ -625,7 +625,7 @@ fn col_arg(args: &[Value], i: usize, name: &str) -> Result<u32, LispError> {
 /// is a formula and `"1200"` a number. A number or nil is typed the obvious way.
 fn typed(v: &Value) -> String {
     match v {
-        Value::Str(s) => s.clone(),
+        Value::Str(s) => s.to_string(),
         other => input_arg(other),
     }
 }
@@ -640,12 +640,12 @@ fn input_arg(v: &Value) -> String {
             if misreads {
                 format!("'{s}")
             } else {
-                s.clone()
+                s.to_string()
             }
         }
         Value::Number(_) => print_value(v, false),
         Value::Bool(b) => format!("={b}"),
-        other => input_arg(&Value::Str(print_value(other, false))),
+        other => input_arg(&Value::Str(print_value(other, false).into())),
     }
 }
 
@@ -654,7 +654,7 @@ fn input_arg(v: &Value) -> String {
 fn block_of(v: &Value, input: fn(&Value) -> String) -> Vec<Vec<String>> {
     match v {
         Value::ResultSet(rs) => {
-            let mut rows = vec![rs.columns.iter().map(|c| input(&Value::Str(c.clone()))).collect()];
+            let mut rows = vec![rs.columns.iter().map(|c| input(&Value::Str(c.clone().into()))).collect()];
             for rec in &rs.records {
                 rows.push(rs.columns.iter().map(|c| input(rec.data.get(c).unwrap_or(&Value::Null))).collect());
             }

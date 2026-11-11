@@ -95,13 +95,21 @@ impl fmt::Debug for Sym {
     }
 }
 
+// 32 bytes, not the 24 the fields need: the VM indexes its stack and slots by value, and a
+// power-of-two size makes that a shift. Measured: number loops ran ~9% slower at 24 bytes
+// (docs/self-hosting/12-sharing-strings.md).
 #[derive(Clone)]
+#[repr(align(16))]
 pub enum Value {
     Symbol(Sym),
-    Str(String),
+    /// Text. Shared, not owned: copying a string value is a reference-count bump, whatever its
+    /// length. Strings are immutable in EELisp, so nothing ever needs its own copy.
+    Str(Rc<str>),
     Number(f64),
     Bool(bool),
-    Keyword(Symbol),
+    /// Interned, like symbols: copying one is a reference-count bump, comparing two is a pointer
+    /// comparison.
+    Keyword(Sym),
     Null,
     List(Rc<Vec<Value>>),
     Dict(Rc<OrderedDict>),

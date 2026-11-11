@@ -797,7 +797,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         };
         let val = items.get(i + 1).ok_or_else(|| bad(format!(":{key} has no value")))?;
         match (key, val) {
-            ("name", Value::Str(s)) => name = Some(s.clone()),
+            ("name", Value::Str(s)) => name = Some(s.to_string()),
             ("name", Value::Symbol(s)) => name = Some(s.to_string()),
             ("name", Value::Null) => name = None,
             ("params", Value::List(spec)) => {
@@ -967,7 +967,8 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 let keys = args
                     .iter()
                     .map(|k| match k {
-                        Value::Keyword(s) | Value::Str(s) => Ok(s.clone()),
+                        Value::Keyword(s) => Ok(s.to_string()),
+                        Value::Str(s) => Ok(s.to_string()),
                         Value::Symbol(s) => Ok(s.to_string()),
                         other => Err(bad(format!("a dict key must be a keyword, got {}", type_name(other)))),
                     })
@@ -1069,7 +1070,7 @@ fn label_of(v: Option<&Value>) -> Result<String, LispError> {
     match v {
         Some(Value::Symbol(s)) => Ok(s.to_string()),
         Some(Value::Number(n)) => Ok(crate::printer::print_value(&Value::Number(*n), false)),
-        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(Value::Str(s)) => Ok(s.to_string()),
         _ => Err(bad("a label is a symbol, a number or a string")),
     }
 }

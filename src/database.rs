@@ -360,7 +360,7 @@ fn to_sql(v: &Value) -> SqlValue {
                 SqlValue::Real(*n)
             }
         }
-        Value::Str(s) => SqlValue::Text(s.clone()),
+        Value::Str(s) => SqlValue::Text(s.to_string()),
         Value::Bool(b) => SqlValue::Integer(if *b { 1 } else { 0 }),
         Value::Null => SqlValue::Null,
         other => SqlValue::Text(print_value(other, false)),
@@ -375,7 +375,7 @@ fn from_sql(vref: ValueRef, ftype: &FieldType) -> Value {
             _ => Value::Number(i as f64),
         },
         ValueRef::Real(f) => Value::Number(f),
-        ValueRef::Text(t) => Value::Str(String::from_utf8_lossy(t).to_string()),
+        ValueRef::Text(t) => Value::Str((String::from_utf8_lossy(t).to_string()).into()),
         ValueRef::Blob(_) => Value::Null,
     }
 }

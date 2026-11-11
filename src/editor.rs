@@ -152,12 +152,12 @@ fn entry(root: &Path, prefix: &str, p: &Path, meta: &std::fs::Metadata) -> Value
         .map(|d| d.as_secs() as f64)
         .unwrap_or(0.0);
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(name));
-    d.insert("path".into(), Value::Str(rel_path(root, prefix, p)));
+    d.insert("name".into(), Value::Str(name.into()));
+    d.insert("path".into(), Value::Str(rel_path(root, prefix, p).into()));
     d.insert("dir".into(), Value::Bool(is_dir));
     d.insert("size".into(), Value::Number(if is_dir { 0.0 } else { meta.len() as f64 }));
     d.insert("modified".into(), Value::Number(modified));
-    d.insert("ext".into(), Value::Str(ext));
+    d.insert("ext".into(), Value::Str(ext.into()));
     Value::Dict(Rc::new(d))
 }
 
@@ -165,7 +165,7 @@ fn entry(root: &Path, prefix: &str, p: &Path, meta: &std::fs::Metadata) -> Value
 fn folder_arg(fname: &str, args: &[Value]) -> Result<String, LispError> {
     match args.first() {
         None | Some(Value::Null) => Ok(String::new()),
-        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(Value::Str(s)) => Ok(s.to_string()),
         Some(v) => Err(fail(format!("{fname}: expected a folder name, got {}", type_name(v)))),
     }
 }
@@ -183,7 +183,7 @@ pub fn register(env: &Env, host: Host) {
             let mut out = Vec::new();
             walk(&root, &prefix, &under, &mut out, &mut 0);
             out.sort();
-            Ok(Value::List(Rc::new(out.into_iter().map(Value::Str).collect())))
+            Ok(Value::List(Rc::new(out.into_iter().map(|s| Value::Str(s.into())).collect())))
         });
     }
     {
@@ -195,7 +195,7 @@ pub fn register(env: &Env, host: Host) {
             };
             let (_, _, file) = locate(&h, &rel)?;
             match std::fs::read(&file) {
-                Ok(bytes) => String::from_utf8(bytes).map(Value::Str).map_err(|_| fail(format!("{rel}: not a text file"))),
+                Ok(bytes) => String::from_utf8(bytes).map(|s| Value::Str(s.into())).map_err(|_| fail(format!("{rel}: not a text file"))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
                 Err(e) => Err(fail(format!("{rel}: {e}"))),
             }
@@ -207,7 +207,7 @@ pub fn register(env: &Env, host: Host) {
             let rel = folder_arg("dir-list", args)?;
             let hidden = match (args.get(1), args.get(2)) {
                 (None, _) => false,
-                (Some(Value::Keyword(k)), v) if k == "hidden" => v.is_some_and(is_truthy),
+                (Some(Value::Keyword(k)), v) if **k == *"hidden" => v.is_some_and(is_truthy),
                 (Some(v), _) => return Err(fail(format!("dir-list: expected :hidden true after the folder, got {}", type_name(v)))),
             };
             let (root, prefix, dir) = locate(&h, &rel)?;
@@ -254,25 +254,25 @@ pub fn register(env: &Env, host: Host) {
             let mut names: Vec<String> =
                 h.borrow().roots.as_ref().map(|f| f()).unwrap_or_default().into_iter().map(|(n, _)| format!("~{n}")).collect();
             names.sort();
-            Ok(Value::List(Rc::new(names.into_iter().map(Value::Str).collect())))
+            Ok(Value::List(Rc::new(names.into_iter().map(|s| Value::Str(s.into())).collect())))
         });
     }
     {
         let h = host.clone();
         b(env, "buffer-text", move |_, _| {
-            Ok(Value::Str(h.borrow().buffer_text.as_ref().map(|f| f()).unwrap_or_default()))
+            Ok(Value::Str((h.borrow().buffer_text.as_ref().map(|f| f()).unwrap_or_default()).into()))
         });
     }
     {
         let h = host.clone();
         b(env, "current-file", move |_, _| {
-            Ok(Value::Str(h.borrow().current_file.as_ref().map(|f| f()).unwrap_or_default()))
+            Ok(Value::Str((h.borrow().current_file.as_ref().map(|f| f()).unwrap_or_default()).into()))
         });
     }
     {
         let h = host.clone();
         b(env, "current-dir", move |_, _| {
-            Ok(Value::Str(h.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default()))
+            Ok(Value::Str((h.borrow().current_dir.as_ref().map(|f| f()).unwrap_or_default()).into()))
         });
     }
     {
@@ -303,7 +303,7 @@ pub fn register(env: &Env, host: Host) {
             if let (Some(f), Some(Value::Number(p)), Some(Value::Str(t))) =
                 (h.borrow().insert_at.as_ref(), args.first(), args.get(1))
             {
-                f(*p as i64, t.clone());
+                f(*p as i64, t.to_string());
             }
             Ok(Value::Null)
         });
@@ -314,7 +314,7 @@ pub fn register(env: &Env, host: Host) {
             if let (Some(f), Some(Value::Number(s)), Some(Value::Number(e)), Some(Value::Str(t))) =
                 (h.borrow().replace_range.as_ref(), args.first(), args.get(1), args.get(2))
             {
-                f(*s as i64, *e as i64, t.clone());
+                f(*s as i64, *e as i64, t.to_string());
             }
             Ok(Value::Null)
         });
