@@ -14,7 +14,10 @@ fn is_bytecode(v: &Value) -> bool {
 }
 
 fn ev(it: &Interpreter, src: &str) -> String {
-    print_value(&it.eval_str(src).unwrap_or_else(|e| panic!("{src}\n→ {e}")), false)
+    print_value(
+        &it.eval_str(src).unwrap_or_else(|e| panic!("{src}\n→ {e}")),
+        false,
+    )
 }
 
 fn compiled() -> Interpreter {
@@ -35,8 +38,14 @@ fn definitions_become_bytecode() {
 #[test]
 fn the_prelude_is_recompiled() {
     let it = compiled();
-    assert!(is_bytecode(&global(&it, "take")), "prelude functions run on the VM");
-    assert!(matches!(global(&it, "when"), Value::Macro(m) if m.code.is_some()), "and its macros");
+    assert!(
+        is_bytecode(&global(&it, "take")),
+        "prelude functions run on the VM"
+    );
+    assert!(
+        matches!(global(&it, "when"), Value::Macro(m) if m.code.is_some()),
+        "and its macros"
+    );
     assert_eq!(ev(&it, "(take 2 '(1 2 3))"), "(1 2)");
 }
 
@@ -67,28 +76,67 @@ fn a_program_defining_compile_does_not_break_the_engine() {
 }
 
 #[test]
+fn a_program_defining_read_top_does_not_break_the_engine() {
+    // the engine holds the reader's function, not its name, as it does the compiler's
+    let it = compiled();
+    ev(&it, "(defn read-top (src) :mine)");
+    assert_eq!(ev(&it, "(read-top \"x\")"), ":mine");
+    assert_eq!(ev(&it, "(+ 1 2) (* 2 3)"), "6");
+}
+
+#[test]
+fn compiled_mode_reads_with_the_eelisp_reader() {
+    let it = compiled();
+    // what the engine reads with is what `read-top` makes of the text
+    assert_eq!(
+        ev(&it, "(read-top \";; doc\\n(def a 1) ; mine\")"),
+        "(((def a 1) (def a 1) ; mine ;; doc))"
+    );
+    // a reading error is a parse error, with the Rust reader's message
+    let e = it.eval_str("(defn broken (x)").unwrap_err();
+    assert_eq!(
+        (e.kind(), e.to_string().as_str()),
+        ("parse", "Parse error: unclosed list")
+    );
+    let e = it.eval_str("(a ] \"oops").unwrap_err();
+    assert_eq!(e.to_string(), "Parse error: unterminated string");
+    // and the stray closer at the top level is skipped, as before
+    assert_eq!(ev(&it, ") (+ 1 2)"), "3");
+}
+
+#[test]
 fn the_compilers_internals_stay_out_of_listings() {
     let it = compiled();
     assert_eq!(ev(&it, "(length (function-list \"compiler-\"))"), "0");
+    assert_eq!(ev(&it, "(length (function-list \"reader-\"))"), "0");
     assert_ne!(ev(&it, "(length (function-list \"take\"))"), "0");
 }
 
 #[test]
 fn source_and_errors_work_as_interpreted() {
     let it = compiled();
-    ev(&it, ";; Twice x.\n(defn twice (x) (* 2 x))");
+    ev(&it, ";; Twice x.\n(defn twice (x) (* 2 x))  ; doubles\n");
     let src = ev(&it, "(source-text 'twice)");
-    assert!(src.contains("Twice x.") && src.contains("(defn twice (x) (* 2 x))"), "{src}");
+    assert!(
+        src.contains("Twice x.") && src.contains("(defn twice (x) (* 2 x))  ; doubles"),
+        "{src}"
+    );
     let e = it.eval_str("(twice \"a\")").unwrap_err().to_string();
     assert!(e.contains("Type mismatch"), "{e}");
-    assert_eq!(ev(&it, "(try (twice \"a\") (catch e (dict-get e :kind)))"), "type");
+    assert_eq!(
+        ev(&it, "(try (twice \"a\") (catch e (dict-get e :kind)))"),
+        "type"
+    );
 }
 
 #[test]
 fn host_calls_run_compiled_functions() {
     let it = compiled();
     ev(&it, "(defn add (a b) (+ a b))");
-    let r = it.call("add", &[Value::Number(2.0), Value::Number(3.0)]).unwrap().unwrap();
+    let r = it
+        .call("add", &[Value::Number(2.0), Value::Number(3.0)])
+        .unwrap()
+        .unwrap();
     assert_eq!(print_value(&r, false), "5");
     assert!(it.eval_host("(add 1 1)").contains("\"result\":2"));
 }
@@ -105,7 +153,8 @@ fn the_environment_variable_turns_it_on() {
 fn an_engine_handle_can_start_compiled() {
     // How a host such as eeditor opts in: in spawn_with's setup, on the engine's own thread.
     use eelisp::server::EngineHandle;
-    let engine = EngineHandle::spawn_with(":memory:".to_string(), |it| it.set_compiled(true).unwrap());
+    let engine =
+        EngineHandle::spawn_with(":memory:".to_string(), |it| it.set_compiled(true).unwrap());
     assert!(engine.eval("(defn sq (x) (* x x))").contains("\"ok\":true"));
     assert!(engine.eval("(sq 12)").contains("\"result\":144"));
 }

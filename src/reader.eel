@@ -2,6 +2,9 @@
 ;; Rust reader (src/lexer.rs, src/parser.rs) and stops with the same error messages.
 ;;
 ;;   (read-all src)   → the list of every top-level form in src
+;;   (read-top src)   → the same, each as (form source comments): the form's text as written, and
+;;                      the comment block above it. What the engine reads with in compiled mode,
+;;                      and what `(source f)` shows.
 ;;
 ;; Like the Rust reader it has two layers. The lexer cuts characters into tokens, and the parser
 ;; builds forms out of tokens. Here tokens are made on demand: the parser asks for the token at a
@@ -46,6 +49,9 @@
           (= (str-trim c) "") reader-space
           true reader-word)))
 
+;; The characters from position `from` up to `to`, as a string.
+(defn reader-text (cs from to) (str-join "" (slice cs from to)))
+
 ;; Characters that are a token on their own.
 (def reader-punct
   {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close "'" :quote "`" :quasi})
@@ -86,30 +92,39 @@
           (= c "\"") (reader-string cs n i)
           true (reader-atom cs n i))))))
 
-;; A string literal starting at the opening quote.
+;; A string literal starting at the opening quote. Most strings have no backslash, and those are
+;; cut out of the text in one piece; only strings with escapes are built a character at a time.
 (defn reader-string (cs n start)
-  (loop (i (+ start 1) acc "")
+  (loop (i (+ start 1) plain true)
     (if (>= i n)
-      (error "unterminated string")
+      (error "unterminated string" :parse)
       (let (c (nth cs i))
         (cond
-          (= c "\"") (list :str acc start (+ i 1))
-          (and (= c "\\") (< (+ i 1) n))
-            (let (e (nth cs (+ i 1))
-                  meant (dict-get reader-escapes e))
-              (recur (+ i 2) (str acc (if meant meant (str "\\" e)))))
-          true (recur (+ i 1) (str acc c)))))))
+          (= c "\"")
+            (list :str
+                  (if plain (reader-text cs (+ start 1) i) (reader-unescape cs (+ start 1) i))
+                  start (+ i 1))
+          (and (= c "\\") (< (+ i 1) n)) (recur (+ i 2) false)
+          true (recur (+ i 1) plain))))))
+
+;; The text of a string between its quotes, with its escapes replaced.
+(defn reader-unescape (cs from to)
+  (loop (i from acc "")
+    (if (>= i to)
+      acc
+      (let (c (nth cs i))
+        (if (and (= c "\\") (< (+ i 1) to))
+          (let (e (nth cs (+ i 1))
+                meant (dict-get reader-escapes e))
+            (recur (+ i 2) (str acc (if meant meant (str "\\" e)))))
+          (recur (+ i 1) (str acc c)))))))
 
 ;; An atom runs to the next delimiter. Then it's classified, in this order: `:name` is a keyword,
 ;; anything that reads as a number is one, and the rest are symbols.
 (defn reader-atom (cs n start)
-  (let (end+text (loop (i start acc "")
-                   (if (< i n)
-                     (let (c (nth cs i))
-                       (if (= (reader-class c) reader-word) (recur (+ i 1) (str acc c)) (list i acc)))
-                     (list i acc)))
-        end (head end+text)
-        text (nth end+text 1)
+  (let (end (loop (i start)
+              (if (and (< i n) (= (reader-class (nth cs i)) reader-word)) (recur (+ i 1)) i))
+        text (reader-text cs start end)
         c (nth cs start))
     (if (= c ":")
       (list :kw (substr text 1) start end)
@@ -238,19 +253,72 @@
   (loop (i i)
     (let (tok (reader-token cs n i))
       (if (= (head tok) :eof) nil (recur (nth tok 3)))))
-  (error msg))
+  (error msg :parse))
 
 ;; ── reading a whole text ───────────────────────────────────────────────
 
-;; Every top-level form, in order. A stray closer at the top level is skipped, as in the Rust
-;; reader, so one unbalanced paren doesn't lose the rest of a file.
+;; Every top-level form with where it starts and ends: (form start end). A stray closer at the
+;; top level is skipped, as in the Rust reader, so one unbalanced paren doesn't lose the rest of a
+;; file.
+(defn reader-spans (cs n)
+  (loop (i 0 out (list))
+    (let (tok (reader-token cs n i))
+      (cond
+        (= (head tok) :eof) out
+        (= (head tok) :close) (recur (nth tok 3) out)
+        true (let (r (reader-form tok cs n))
+               (recur (nth r 1) (append out (list (list (head r) (nth tok 2) (nth r 1))))))))))
+
+;; Every top-level form, in order.
 (defn read-all (src)
+  (let (cs (str-chars src))
+    (map head (reader-spans cs (length cs)))))
+
+;; Every top-level form as (form source comments).
+(defn read-top (src)
   (let (cs (str-chars src)
         n (length cs))
-    (loop (i 0 out (list))
-      (let (tok (reader-token cs n i))
-        (cond
-          (= (head tok) :eof) out
-          (= (head tok) :close) (recur (nth tok 3) out)
-          true (let (r (reader-form tok cs n))
-                 (recur (nth r 1) (append out (list (head r))))))))))
+    (map (fn (span)
+           (let (start (nth span 1)
+                 end (reader-with-trailing-comment cs n (nth span 2)))
+             (list (head span) (reader-text cs start end) (reader-comments-above cs start))))
+         (reader-spans cs n))))
+
+;; ── a form's text and comments ─────────────────────────────────────────
+
+;; A comment on the same line, right after the form, belongs to it: the `;; toast` in
+;; `(defn ed-message (text) …)  ;; toast`. Anything but spaces and tabs in between means it's
+;; someone else's.
+(defn reader-with-trailing-comment (cs n end)
+  (let (i (loop (i end)
+            (if (and (< i n) (or (= (nth cs i) " ") (= (nth cs i) "\t"))) (recur (+ i 1)) i)))
+    (if (and (< i n) (= (nth cs i) ";")) (reader-line-end cs n i) end)))
+
+;; The position where the line holding position i begins.
+(defn reader-line-start (cs i)
+  (loop (i i)
+    (if (and (> i 0) (!= (nth cs (- i 1)) "\n")) (recur (- i 1)) i)))
+
+;; Is everything from `from` up to `to` whitespace?
+(defn reader-blank? (cs from to)
+  (loop (i from)
+    (cond (>= i to) true
+          (= (reader-class (nth cs i)) reader-space) (recur (+ i 1))
+          true false)))
+
+;; The run of `;` comment lines directly above the form starting at `start`. A blank line or a line
+;; with code ends it, so a form only picks up the comment written for it, and a form that doesn't
+;; begin its line has none.
+(defn reader-comments-above (cs start)
+  (let (line-start (reader-line-start cs start))
+    (if (reader-blank? cs line-start start)
+      (loop (cursor line-start lines (list))
+        (if (= cursor 0)
+          (str-join "\n" lines)
+          (let (end (- cursor 1)
+                begin (reader-line-start cs end)
+                line (reader-text cs begin end))
+            (if (str-starts-with (str-trim line) ";")
+              (recur begin (cons line lines))
+              (str-join "\n" lines)))))
+      "")))

@@ -1,6 +1,7 @@
-//! The reader written in EELisp (`src/reader.eel`) against the Rust one (`parser::parse`).
+//! The reader written in EELisp (`src/reader.eel`) against the Rust one (`parser::top_forms`).
 //!
-//! Both read the same texts. They must agree on every form, or stop with the same message. The
+//! Both read the same texts. They must agree on every top-level form, its text as written and the
+//! comments above it, or stop with the same error: same kind, same message. The
 //! texts are the repository's own files (EELisp, but also Rust and Markdown, which make good
 //! hostile input), a list of edge cases, and random strings over the characters that matter to a
 //! reader. Each runs twice: on the reader interpreted, and on the reader as bytecode from the
@@ -9,9 +10,9 @@
 use std::path::Path;
 
 use eelisp::boot;
-use eelisp::parser::parse;
+use eelisp::parser::{parse, top_forms};
 use eelisp::printer::print_value;
-use eelisp::{Interpreter, LispError, Value};
+use eelisp::{Interpreter, Value};
 
 #[derive(Clone, Copy, Debug)]
 enum Setup {
@@ -31,34 +32,47 @@ fn engine(setup: Setup) -> Interpreter {
     }
 }
 
-fn show(forms: &[Value]) -> String {
-    forms
-        .iter()
-        .map(|f| print_value(f, true))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// One top-level form as both readers describe it: the form, its text as written, and the
+/// comment block above it (what `(source f)` shows).
+fn show_top(form: &Value, source: &str, comments: &str) -> String {
+    format!(
+        "{}\n  source: {source:?}\n  comments: {comments:?}",
+        print_value(form, true)
+    )
 }
 
-/// What the Rust reader makes of src: the forms, printed, or its message.
+/// What the Rust reader makes of src: its top-level forms, or its error. Errors print with
+/// their kind, so a runtime error can't pass for a parse error.
 fn by_rust(src: &str) -> String {
-    match parse(src) {
-        Ok(forms) => show(&forms),
-        Err(LispError::Parse(m)) => format!("error: {m}"),
-        Err(e) => format!("unexpected error: {e}"),
+    match top_forms(src) {
+        Ok(forms) => forms
+            .iter()
+            .map(|f| show_top(&f.value, &f.source, &f.comments))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("error ({}): {e}", e.kind()),
     }
 }
 
-/// The same, by the EELisp reader. Its errors are `(error msg)`, so a runtime error with the
-/// same message.
+/// The same, by the EELisp reader's `read-top`.
 fn by_eelisp(it: &Interpreter, src: &str) -> String {
     match it
-        .call("read-all", &[Value::Str(src.to_string())])
-        .expect("read-all is defined")
+        .call("read-top", &[Value::Str(src.to_string())])
+        .expect("read-top is defined")
     {
-        Ok(Value::List(forms)) => show(&forms),
+        Ok(Value::List(forms)) => forms
+            .iter()
+            .map(|f| match f {
+                Value::List(t) => match &t[..] {
+                    [v, Value::Str(s), Value::Str(c)] => show_top(v, s, c),
+                    _ => format!("bad entry: {}", print_value(f, true)),
+                },
+                _ => format!("bad entry: {}", print_value(f, true)),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         Ok(other) => format!("not a list: {}", print_value(&other, true)),
-        Err(LispError::Runtime(m)) => format!("error: {m}"),
-        Err(e) => format!("unexpected error: {e}"),
+        Err(e) => format!("error ({}): {e}", e.kind()),
     }
 }
 
@@ -122,6 +136,14 @@ const EDGES: &[&str] = &[
     // a lexing error later in the text wins over a parse error earlier, as in Rust
     "(a ] \"unterminated",
     "{1 2} \"x",
+    // a form's text, the comment after it on its line, and the comment block above it
+    ";; doc for f\n;; second line\n(defn f () 1)  ; trailing\n\n;; not g's: a blank line\n\n(def g 2)",
+    "(a) ; mine\n(b)\t;\ttabs\n(c) x ; not c's",
+    "  ;; indented comment\n  (indented)\n(x) (y) ;; y's, not x's",
+    ";; at the very top\n(top)",
+    "(a\n ;; inside a form\n b)",
+    "; no form below",
+    "\r\n;; crlf\r\n(crlf)\r\n",
 ];
 
 /// The repository's own files: whatever they are, both readers must make the same of them.

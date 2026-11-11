@@ -122,6 +122,13 @@ binary nobody can reproduce), and it is the reference for testing.
   starts from the interpreter when there's no usable image. A test shows a new macro in the
   compiler's own source settling in two generations. See docs/self-hosting/10-the-old-builds-the-new.md.
 
+- **The engine reads in EELisp.** In compiled mode `eval_str`/`eval_all` (and the prelude
+  recompile) read with `read-top` from `src/reader.eel`: forms, source text and comments, exactly
+  as `parser::top_forms`; errors are parse errors via `(error msg :parse)`. New builtin `slice`.
+  Cost: compiled `(+ 1 2)` 6 → 22 µs, eeditor snippets 24 → 89 ms (reading is per-character call
+  and allocation cost). The Rust reader remains for loading the image (the seed) and the
+  interpreter. See docs/self-hosting/11-the-engine-reads-in-eelisp.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before

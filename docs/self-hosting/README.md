@@ -16,6 +16,7 @@ become a book.
 | 8 | [Profiling the compiler](08-profiling-the-compiler.md) | Counting an EELisp program's calls to find its costs: 6,779 calls per form compiled, two list walks to blame, and half of it gone |
 | 9 | [A reader in EELisp](09-a-reader-in-eelisp.md) | Text to forms in EELisp, agreeing with the Rust reader on a megabyte of hostile input; stage 2 of the bootstrap, where no Rust stands between the source and the bytecode |
 | 10 | [The old compiler builds the new one](10-the-old-builds-the-new.md) | The committed image builds the next one in three generations; a new feature needs two to settle; the interpreter as an independent witness against "trusting trust" |
+| 11 | [The engine reads in EELisp](11-the-engine-reads-in-eelisp.md) | Compiled mode reads every form with the EELisp reader: source text and comments for `(source f)`, parse errors of the right kind, and what reading costs |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every

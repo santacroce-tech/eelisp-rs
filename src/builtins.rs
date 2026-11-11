@@ -71,6 +71,7 @@ pub fn register(env: &Env) {
     b!("cdr", cdr);
     b!("tail", cdr);
     b!("nth", nth);
+    b!("slice", slice);
     b!("length", length);
     b!("append", append);
     b!("reverse", reversef);
@@ -615,6 +616,20 @@ fn nth(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let i = as_num(&args[1])? as usize;
     Ok(l.get(i).cloned().unwrap_or(Value::Null))
 }
+/// `(slice lst start end)`: the elements from start up to (not including) end, like `substr` for
+/// strings. Out-of-range bounds are clamped; end defaults to the length.
+fn slice(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let l = as_list(args.first().unwrap_or(&Value::Null))?;
+    let len = l.len();
+    let start = (as_num(args.get(1).unwrap_or(&Value::Number(0.0)))? as i64).max(0) as usize;
+    let end = match args.get(2) {
+        Some(v) => (as_num(v)? as i64).max(0) as usize,
+        None => len,
+    };
+    let start = start.min(len);
+    let end = end.min(len).max(start);
+    Ok(list_val(l[start..end].to_vec()))
+}
 fn length(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let n = match &args[0] {
         Value::List(l) => l.len(),
@@ -848,7 +863,17 @@ fn errorf(args: &[Value], _: &Env) -> Result<Value, LispError> {
         Some(v) => crate::printer::print_value(v, false),
         None => "error".to_string(),
     };
-    Err(LispError::Runtime(msg))
+    // `(error msg :parse)`: an optional kind, for code that reports the errors the engine's own
+    // parts report (the EELisp reader raises parse errors). Any other kind is a runtime error.
+    let kind = match args.get(1) {
+        Some(Value::Keyword(k)) | Some(Value::Str(k)) => k.as_str(),
+        _ => "runtime",
+    };
+    Err(match kind {
+        "parse" => LispError::Parse(msg),
+        "syntax" => LispError::InvalidSyntax(msg),
+        _ => LispError::Runtime(msg),
+    })
 }
 
 fn applyf(args: &[Value], env: &Env) -> Result<Value, LispError> {

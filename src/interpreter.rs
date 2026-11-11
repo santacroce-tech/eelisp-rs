@@ -37,6 +37,8 @@ pub struct Interpreter {
     /// The compiler's `compile` function once compiled mode has loaded it (`set_compiled`), held
     /// here so a program defining its own `compile` can't break the engine.
     compiler: RefCell<Option<Value>>,
+    /// The EELisp reader's `read-top`, likewise: in compiled mode, source text is read by it.
+    reader: RefCell<Option<Value>>,
     /// Whether top-level forms are compiled and run on the VM instead of interpreted.
     compiled: std::cell::Cell<bool>,
 }
@@ -135,6 +137,7 @@ impl Interpreter {
             #[cfg(feature = "sqlite")]
             sheets,
             compiler: RefCell::new(None),
+            reader: RefCell::new(None),
             compiled: std::cell::Cell::new(false),
         };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
@@ -157,6 +160,9 @@ impl Interpreter {
     /// its bootstrap image — compiled already, its source never interpreted — and the prelude is
     /// recompiled, so its functions and macros run on the VM too.
     ///
+    /// Source text is read by the EELisp reader (`src/reader.eel`) too, so from text to bytecode
+    /// it's EELisp throughout.
+    ///
     /// Results are the same either way: the differential tests hold both engines to that. What
     /// still runs on the interpreter: `(eval …)`, agenda rules and sheet formulas.
     pub fn set_compiled(&self, on: bool) -> Result<(), LispError> {
@@ -164,8 +170,12 @@ impl Interpreter {
             crate::boot::load_image(self, crate::boot::IMAGE)?;
             let compile = env::get(&self.global, "compile")?;
             *self.compiler.borrow_mut() = Some(compile);
-            for form in parser::parse(prelude::PRELUDE)? {
-                self.compile_and_run(&form)?;
+            *self.reader.borrow_mut() = Some(env::get(&self.global, "read-top")?);
+            // the prelude, read by the EELisp reader and compiled: from here on, nothing the
+            // engine evaluates is read by Rust
+            self.compiled.set(true);
+            for form in self.read(prelude::PRELUDE)? {
+                self.compile_and_run(&form.value)?;
             }
         }
         self.compiled.set(on);
@@ -183,6 +193,35 @@ impl Interpreter {
             self.compile_and_run(form)
         } else {
             eval::eval(form.clone(), self.global.clone())
+        }
+    }
+
+    /// The top-level forms of `src`, with their text and comments: by the EELisp reader in compiled
+    /// mode, by the Rust one otherwise. Both read the same forms and fail with the same errors
+    /// (`tests/reader.rs`).
+    fn read(&self, src: &str) -> Result<Vec<parser::TopForm>, LispError> {
+        let reader = self.reader.borrow().clone();
+        match reader {
+            Some(read_top) if self.compiled.get() => {
+                let forms = eval::apply_value(&read_top, &[Value::Str(src.to_string())], &self.global)?;
+                let bad = || LispError::Runtime("read-top returned something other than (form source comments)".into());
+                let Value::List(forms) = forms else { return Err(bad()) };
+                forms
+                    .iter()
+                    .map(|f| match f {
+                        Value::List(t) => match &t[..] {
+                            [value, Value::Str(source), Value::Str(comments)] => Ok(parser::TopForm {
+                                value: value.clone(),
+                                source: source.clone(),
+                                comments: comments.clone(),
+                            }),
+                            _ => Err(bad()),
+                        },
+                        _ => Err(bad()),
+                    })
+                    .collect()
+            }
+            _ => parser::top_forms(src),
         }
     }
 
@@ -267,7 +306,7 @@ impl Interpreter {
 
     /// Evaluate all top-level forms, return the last result.
     pub fn eval_str(&self, src: &str) -> Result<Value, LispError> {
-        let forms = parser::top_forms(src)?;
+        let forms = self.read(src)?;
         let mut result = Value::Null;
         for f in forms {
             let r = self.eval_form(&f.value);
@@ -280,7 +319,7 @@ impl Interpreter {
 
     /// Evaluate all top-level forms, return each result.
     pub fn eval_all(&self, src: &str) -> Result<Vec<Value>, LispError> {
-        let forms = parser::top_forms(src)?;
+        let forms = self.read(src)?;
         let mut out = Vec::with_capacity(forms.len());
         for f in forms {
             let r = self.eval_form(&f.value);
