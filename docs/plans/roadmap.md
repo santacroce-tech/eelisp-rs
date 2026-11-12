@@ -169,7 +169,9 @@ binary nobody can reproduce), and it is the reference for testing.
   mixing with stack code; hand-written register code runs `fib` 1.24× and a loop 1.79× faster,
   the whitespace loop no faster (its cost is in `nth` and `dict-get`). With intrinsics for those
   two, run inside `call2` with borrowed operands: `fib` 1.57×, the loop 2.66×, the whitespace
-  loop 1.89×. See docs/self-hosting/16-registers.md.
+  loop 1.89×. See docs/self-hosting/16-registers.md. Step 2: the compiler emits register code
+  for calls and the image crossed over in one go; compiled loops and tail calls 1.9×, calls 1.35×,
+  reading 7% faster, compiling 18% slower. See docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 

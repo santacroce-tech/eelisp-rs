@@ -76,7 +76,14 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   `register-vm-2`): `call2` runs `nth` and `dict-get` in place with borrowed operands, giving
   hand-written register code `fib` 1.57×, a loop 2.66× and the whitespace loop 1.89×, with
   stack code unchanged.
-- **Next: step 2**, the compiler's register back end.
+- **Step 2 done, step 3 with it** (tag `register-vm-3`, chapter 17). The compiler emits
+  `call2` for two-argument builtins, `call-global` for known functions and `call-at` (function
+  in a register, then its arguments, as Lua's CALL) for anything else; temporaries `(t k)`
+  after the variables; `if`/`cond` test registers. The committed image built it directly:
+  generations 2 and 3 identical, the interpreter's image the same. Compiled code: loops and
+  tail calls 1.9×, calls 1.35×, `fib` 1.34×; reading 7% faster; compiling 18% slower.
+- **Next:** profile the compiler (its own cost now), then `let`/`or`/`recur` in registers, then
+  more intrinsics. Step 4 (retiring stack code) waits until stack code is rare.
 
 ## What has to stay true
 
