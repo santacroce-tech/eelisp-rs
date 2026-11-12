@@ -510,6 +510,22 @@ fn top(stack: &[Value]) -> Value {
     copy(stack.last().expect("vm stack underflow (malformed bytecode)"))
 }
 
+/// `LoadLocal`'s value: slot `i` of the frame whose slots start at `sb`, or, while it's unbound,
+/// the global of the same name. A macro, not a method: as a method taking `&self` it made the
+/// whole dispatch loop slower (docs/self-hosting/14).
+macro_rules! local {
+    ($vm:ident, $sb:expr, $i:expr, $s:expr, $proto:expr) => {
+        match &$vm.slots[$sb + $i as usize] {
+            Slot::Val(v) => copy(v),
+            Slot::Cell(c) => match &*c.borrow() {
+                Some(v) => v.clone(),
+                None => env::get_sym(&$vm.frames.last().unwrap().env, &$proto.syms[$s as usize])?,
+            },
+            Slot::Unbound => env::get_sym(&$vm.frames.last().unwrap().env, &$proto.syms[$s as usize])?,
+        }
+    };
+}
+
 impl Vm {
     fn run(&mut self) -> Result<Value, LispError> {
         loop {
@@ -602,11 +618,11 @@ impl Vm {
                 Op::LoadThenLocal(g, i, x) => {
                     let v = load_global(&self.frames.last().unwrap().env, &proto, g)?;
                     self.stack.push(v);
-                    let v = self.local(sb, i as u32, x as u32, &proto)?;
+                    let v = local!(self, sb, i, x, proto);
                     self.stack.push(v);
                 }
                 Op::LocalThenConst(i, x, c) => {
-                    let v = self.local(sb, i as u32, x as u32, &proto)?;
+                    let v = local!(self, sb, i, x, proto);
                     self.stack.push(v);
                     self.stack.push(copy(&proto.consts[c as usize]));
                 }
@@ -619,7 +635,7 @@ impl Vm {
                     }
                 }
                 Op::LocalThenCall(i, x, n) => {
-                    let v = self.local(sb, i as u32, x as u32, &proto)?;
+                    let v = local!(self, sb, i, x, proto);
                     self.stack.push(v);
                     self.frames.last_mut().unwrap().pc = pc;
                     match self.call(n as usize, false)? {
@@ -763,7 +779,7 @@ impl Vm {
                     self.stack.push(close_macro(proto, &fr.env, up));
                 }
                 Op::LoadLocal(i, s) => {
-                    let v = self.local(sb, i, s, &proto)?;
+                    let v = local!(self, sb, i, s, proto);
                     self.stack.push(v);
                 }
                 Op::DefLocal(i) => def_slot(&mut self.slots[sb + i as usize], top(&self.stack)),
@@ -803,20 +819,6 @@ impl Vm {
             }
         }
         }
-    }
-
-    /// `LoadLocal`'s value: slot `i` of the frame whose slots start at `sb`, or, while it's
-    /// unbound, the global of the same name.
-    #[inline(always)]
-    fn local(&self, sb: usize, i: u32, s: u32, proto: &Proto) -> Result<Value, LispError> {
-        Ok(match &self.slots[sb + i as usize] {
-            Slot::Val(v) => copy(v),
-            Slot::Cell(c) => match &*c.borrow() {
-                Some(v) => v.clone(),
-                None => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
-            },
-            Slot::Unbound => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
-        })
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
