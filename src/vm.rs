@@ -703,16 +703,10 @@ fn rebind(m: &Mark, proto: &Proto, slots: &mut [Slot], sb: usize, vals: impl Ite
     }
 }
 
-/// A copy of `v`. Numbers, booleans and nil — most values in a hot loop — are copied directly
-/// rather than through `Value::clone`, which is a large match the compiler doesn't inline.
+/// A copy of `v`, inline for the common kinds (`Value::copy`).
 #[inline(always)]
 fn copy(v: &Value) -> Value {
-    match v {
-        Value::Number(n) => Value::Number(*n),
-        Value::Bool(b) => Value::Bool(*b),
-        Value::Null => Value::Null,
-        other => other.clone(),
-    }
+    v.copy()
 }
 
 fn pop(stack: &mut Vec<Value>) -> Value {
