@@ -60,6 +60,8 @@
 //! operand is a register `r` (a number: a temporary the code has written), `(local i name)` (a
 //! variable's slot, read like `load-local`), `(cap i name)` (like `load-cap`) or `(const v)`. A
 //! destination `d` is a register, or `push` for the stack, so register and stack code mix freely.
+//! A register gets a fresh value, as `init-local` binds one: a slot a closure captured is
+//! replaced, not written through (`def-local` and `set-local` write through).
 //!
 //! | form | effect |
 //! |---|---|
@@ -621,17 +623,23 @@ fn operand_ref<'a>(x: u32, slots: &'a [Slot], sb: usize, proto: &'a Proto) -> Op
     }
 }
 
-/// Put a register instruction's result where it goes.
+/// Put a register instruction's result where it goes. A register gets a fresh value, as
+/// `init-local` binds one: a slot a closure captured is replaced, not written through. That's
+/// what a `let` binding computed straight into its slot needs, and temporaries are never shared.
 #[inline(always)]
 fn deliver(stack: &mut Vec<Value>, slots: &mut [Slot], sb: usize, d: u32, v: Value) {
     if d == STACK {
         stack.push(v)
     } else {
-        match &mut slots[sb + d as usize] {
-            Slot::Val(old) => *old = v,
-            Slot::Cell(c) => *c.borrow_mut() = Some(v),
-            s => *s = Slot::Val(v),
-        }
+        init_slot(&mut slots[sb + d as usize], v)
+    }
+}
+
+#[inline(always)]
+fn init_slot(slot: &mut Slot, v: Value) {
+    match slot {
+        Slot::Val(old) => *old = v,
+        s => *s = Slot::Val(v),
     }
 }
 
@@ -986,7 +994,7 @@ impl Vm {
                 }
                 Op::PopTo(r) => {
                     let v = pop(&mut self.stack);
-                    def_slot(&mut self.slots[sb + r as usize], v);
+                    init_slot(&mut self.slots[sb + r as usize], v);
                 }
                 Op::JumpIfNot(x, t) => {
                     let fr = self.frames.last().expect("vm has no frame");
@@ -1317,7 +1325,7 @@ impl Vm {
             // a register call: the callee may have been entered at the caller's argument
             // registers, which come back before the result goes into one of them
             restore_slots(&mut self.slots, caller);
-            def_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
+            init_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
         }
         None
     }

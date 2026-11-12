@@ -85,9 +85,11 @@
 ;; Bind name in block, to a new slot of the block's function. A name bound again in the same
 ;; block gets a new slot, and references after that see the new one.
 (defn compiler-declare (name block)
-  (let (fx (dict-get block :fx)
-        slot (compiler-new-slot fx)
-        declared (dict-get fx :declared))
+  (compiler-name-slot name block (compiler-new-slot (dict-get block :fx))))
+
+;; Bind name in block to slot, a slot of the block's function.
+(defn compiler-name-slot (name block slot)
+  (let (declared (dict-get (dict-get block :fx) :declared))
     ((dict-get block :names) (dict-set ((dict-get block :names)) name slot))
     (declared (dict-set (declared) name true))
     slot))
@@ -326,20 +328,66 @@
     nil))
 
 ;; Code leaving x's value in temporary d.
-(defn compiler-to-reg (x cx d)
+(defn compiler-to-reg (x cx d) (compiler-to-dest x cx d (compiler-tmp d)))
+
+;; Code leaving x's value in register r, using temporaries from d up. r is (t d) or a variable's
+;; slot (a let binding computed straight into it).
+(defn compiler-to-dest (x cx d r)
   (compiler-use-tmp cx d)
   (let (op (compiler-operand x cx))
-    (if op
-      (list (list 'move (compiler-tmp d) op))
-      (if (symbol? x)
-        (list (list 'global (compiler-tmp d) x))
+    (cond
+      op (list (list 'move r op))
+      (symbol? x) (list (list 'global r x))
+      true
         (let (kind (compiler-head-kind x cx))
           (cond
-            (= kind "macro") (compiler-to-reg (vm-macroexpand x) cx d)
-            (compiler-reg-call? kind x) (compiler-call-into x cx d kind)
-            (compiler-call-at? x kind) (compiler-call-at-into x cx d)
+            (= kind "macro") (compiler-to-dest (vm-macroexpand x) cx d r)
+            (compiler-reg-call? kind x) (compiler-call-into x cx d kind r)
+            (compiler-call-at? x kind)
+              (if (compiler-into-special? x)
+                (compiler-special-into x (dict-set cx :tmp d) d r)
+                (compiler-call-at-into x cx d r))
             true (compiler-cat (compiler-to-stack x (dict-set cx :tmp d) kind)
-                               (list (list 'pop-to (compiler-tmp d))))))))))
+                               (list (list 'pop-to r))))))))
+
+;; if, and, or: computed into a register, with jumps, not through the stack. (compiler-head-kind
+;; gives them no kind, as for any special form, so they arrive here with the calls.)
+(def compiler-into-specials {"if" true "and" true "or" true})
+(defn compiler-into-special? (x) (and (symbol? (head x)) (dict-has compiler-into-specials (head x))))
+
+(defn compiler-special-into (x cx d r)
+  (let (h (head x) n (length x))
+    (cond
+      (= h 'if)
+        (if (< n 3)
+          (compiler-cat (compiler-expr x cx false) (list (list 'pop-to r)))
+          (let (else-l (compiler-label) end-l (compiler-label))
+            (compiler-cat
+              (compiler-jump-unless (nth x 1) cx else-l)
+              (compiler-to-dest (nth x 2) cx d r)
+              (list (list 'jump end-l) (list 'label else-l))
+              (if (> n 3) (compiler-to-dest (nth x 3) cx d r) (list (list 'move r (list 'const nil))))
+              (list (list 'label end-l)))))
+      (= n 1) (list (list 'move r (list 'const (= h 'and))))
+      (= h 'and) (compiler-and-into (tail x) cx d r (compiler-label))
+      true (compiler-or-into (tail x) cx d r (compiler-label)))))
+
+;; and: each value into r; a false one ends it, and is its value.
+(defn compiler-and-into (forms cx d r end-l)
+  (if (empty? (tail forms))
+    (compiler-cat (compiler-to-dest (head forms) cx d r) (list (list 'label end-l)))
+    (compiler-cat (compiler-to-dest (head forms) cx d r)
+                  (list (list 'jump-if-not r end-l))
+                  (compiler-and-into (tail forms) cx d r end-l))))
+
+;; or: each value into r; a true one ends it, and is its value.
+(defn compiler-or-into (forms cx d r end-l)
+  (if (empty? (tail forms))
+    (compiler-cat (compiler-to-dest (head forms) cx d r) (list (list 'label end-l)))
+    (let (next-l (compiler-label))
+      (compiler-cat (compiler-to-dest (head forms) cx d r)
+                    (list (list 'jump-if-not r next-l) (list 'jump end-l) (list 'label next-l))
+                    (compiler-or-into (tail forms) cx d r end-l)))))
 
 ;; x's code for the stack, when compiler-head-kind already said what its head means.
 (defn compiler-to-stack (x cx kind)
@@ -360,33 +408,33 @@
 (defn compiler-reg-call? (kind x)
   (or (= kind "function") (and (= kind "builtin") (or (= (length x) 3) (= (length x) 2)))))
 
-;; A call of a global, its result into temporary d (see compiler-reg-call?). A first operand
-;; that is a variable is copied before a second one that must be computed, in case computing it
-;; changes the variable; reading a global changes nothing.
-(defn compiler-call-into (x cx d kind)
+;; A call of a global, its result into register r (see compiler-reg-call?), its arguments in
+;; temporaries from d up. A first operand that is a variable is copied before a second one that
+;; must be computed, in case computing it changes the variable; reading a global changes nothing.
+(defn compiler-call-into (x cx d kind r)
   (let (f (head x) args (tail x))
     (cond
       (and (= kind "builtin") (empty? (tail args)))
         (let (a (compiler-operand (head args) cx)
               a-code (if a (list) (compiler-to-reg (head args) cx d)))
           (compiler-use-tmp cx d)
-          (compiler-cat a-code (list (list 'call1 (compiler-tmp d) f (if a a (compiler-tmp d))))))
+          (compiler-cat a-code (list (list 'call1 r f (if a a (compiler-tmp d))))))
       (= kind "builtin")
-      (let (a (compiler-operand (head args) cx)
-            b (compiler-operand (second args) cx)
-            a-now (and a (or b (= (head a) 'const) (symbol? (second args))))
-            a-code (if a-now (list) (compiler-to-reg (head args) cx d))
-            b-code (if b (list) (compiler-to-reg (second args) cx (+ d 1))))
-        (compiler-use-tmp cx d)
-        (compiler-cat a-code b-code
-                      (list (list 'call2 (compiler-tmp d) f
-                                  (if a-now a (compiler-tmp d))
-                                  (if b b (compiler-tmp (+ d 1)))))))
+        (let (a (compiler-operand (head args) cx)
+              b (compiler-operand (second args) cx)
+              a-now (and a (or b (= (head a) 'const) (symbol? (second args))))
+              a-code (if a-now (list) (compiler-to-reg (head args) cx d))
+              b-code (if b (list) (compiler-to-reg (second args) cx (+ d 1))))
+          (compiler-use-tmp cx d)
+          (compiler-cat a-code b-code
+                        (list (list 'call2 r f
+                                    (if a-now a (compiler-tmp d))
+                                    (if b b (compiler-tmp (+ d 1)))))))
       true
-      (do
-        (compiler-use-tmp cx d)
-        (compiler-cat (compiler-args-to args cx d)
-                      (list (list 'call-global (compiler-tmp d) f (compiler-tmp d) (length args))))))))
+        (do
+          (compiler-use-tmp cx d)
+          (compiler-cat (compiler-args-to args cx d)
+                        (list (list 'call-global r f (compiler-tmp d) (length args))))))))
 
 ;; A call of a global, its value left on the stack (or, in tail position, a tail call).
 (defn compiler-call-reg (x cx tailp kind)
@@ -403,23 +451,25 @@
         (let (a (compiler-operand (head args) cx) b (and a (not (empty? (tail args))) (compiler-operand (second args) cx)))
           (if b
             (list (list 'call2 'push (head x) a b))
-            (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d))))))
-      true (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d)))))))
+            (compiler-cat (compiler-call-into x cx d kind (compiler-tmp d)) (list (list 'push (compiler-tmp d))))))
+      true (compiler-cat (compiler-call-into x cx d kind (compiler-tmp d)) (list (list 'push (compiler-tmp d)))))))
 
 ;; A call compiled with call-at: one whose head is a local variable, a global not known when
-;; compiling (a function defined later, or the one being defined), or not a name at all.
+;; compiling (a function defined later, or the one being defined), or not a name at all. (The
+;; special forms if, and, or get here too, and compiler-to-dest sends them on.)
 (defn compiler-call-at? (x kind)
   (and (nil? kind) (list? x) (not (empty? x))
-       (not (and (symbol? (head x)) (dict-has compiler-specials (head x))))))
+       (not (and (symbol? (head x)) (dict-has compiler-specials (head x))
+                 (not (compiler-into-special? x))))))
 
-;; The function into temporary d, then its arguments after it, then call-at: the function is
-;; read first, as stack code reads it, so a name that isn't defined fails before any argument
-;; is computed.
-(defn compiler-call-at-into (x cx d)
+;; The function into temporary d, then its arguments after it, then call-at into r: the
+;; function is read first, as stack code reads it, so a name that isn't defined fails before any
+;; argument is computed.
+(defn compiler-call-at-into (x cx d r)
   (compiler-use-tmp cx d)
   (compiler-cat (compiler-to-reg (head x) cx d)
                 (compiler-args-to (tail x) cx (+ d 1))
-                (list (list 'call-at (compiler-tmp d) (compiler-tmp d) (length (tail x))))))
+                (list (list 'call-at r (compiler-tmp d) (length (tail x))))))
 
 ;; The same, its value left on the stack (or, in tail position, a tail call).
 (defn compiler-call-at (x cx tailp)
@@ -430,19 +480,37 @@
         (compiler-cat (compiler-to-reg (head x) cx d)
                       (compiler-args-to (tail x) cx (+ d 1))
                       (list (list 'tail-call-at (compiler-tmp d) (length (tail x))))))
-      (compiler-cat (compiler-call-at-into x cx d) (list (list 'push (compiler-tmp d)))))))
+      (compiler-cat (compiler-call-at-into x cx d (compiler-tmp d)) (list (list 'push (compiler-tmp d)))))))
 
 ;; Jump to label unless test is true: a register test needs no trip through the stack.
 (defn compiler-jump-unless (test cx label)
   (let (op (compiler-operand test cx))
-    (if op
-      (list (list 'jump-if-not op label))
+    (cond
+      op (list (list 'jump-if-not op label))
+      ;; (and a b): unless a, unless b
+      (and (list? test) (> (length test) 1) (= (head test) 'and))
+        (reduce (fn (acc f) (compiler-cat acc (compiler-jump-unless f cx label))) (list) (tail test))
+      ;; (or a b): if a, go on; if b, go on; otherwise jump
+      (and (list? test) (> (length test) 1) (= (head test) 'or))
+        (let (go-l (compiler-label) forms (tail test))
+          (compiler-cat
+            (reduce (fn (acc f)
+                      (let (next-l (compiler-label))
+                        (compiler-cat acc (compiler-jump-unless f cx next-l)
+                                      (list (list 'jump go-l) (list 'label next-l)))))
+                    (list) (take (- (length forms) 1) forms))
+            (compiler-jump-unless (last forms) cx label)
+            (list (list 'label go-l))))
+      true
       (let (kind (compiler-head-kind test cx) d (compiler-tmp-base cx))
         (cond
           (compiler-reg-call? kind test)
-            (compiler-cat (compiler-call-into test cx d kind) (list (list 'jump-if-not (compiler-tmp d) label)))
+            (compiler-cat (compiler-call-into test cx d kind (compiler-tmp d)) (list (list 'jump-if-not (compiler-tmp d) label)))
           (compiler-call-at? test kind)
-            (compiler-cat (compiler-call-at-into test cx d) (list (list 'jump-if-not (compiler-tmp d) label)))
+            (compiler-cat (if (compiler-into-special? test)
+                            (compiler-special-into test (dict-set cx :tmp d) d (compiler-tmp d))
+                            (compiler-call-at-into test cx d (compiler-tmp d)))
+                          (list (list 'jump-if-not (compiler-tmp d) label)))
           true (compiler-cat (compiler-expr test cx false) (list (list 'jump-if-false label))))))))
 
 ;; ── special forms ──────────────────────────────────────────────────────
@@ -537,14 +605,17 @@
     (symbol? (head binds)) (compiler-flat-pairs binds)
     true (filter (fn (p) (and (list? p) (>= (length p) 2) (symbol? (head p)))) binds)))
 
-;; Each value is computed with the bindings before it in view (let*), then gets its slot.
+;; Each value is computed straight into its slot, with the bindings before it in view (let*):
+;; the slot is taken first, the name bound to it only after the value is compiled.
 ;; → (code slots)
 (defn compiler-bind (pairs block cx)
-  (let (code (compiler-box (list)) slots (compiler-box (list)))
+  (let (code (compiler-box (list)) slots (compiler-box (list)) d (compiler-tmp-base cx)
+        fx (dict-get block :fx))
     (for-each p pairs
-      (let (value-code (compiler-expr (second p) cx false)
-            slot (compiler-declare (head p) block))
-        (code (compiler-cat (code) value-code (list (list 'init-local slot))))
+      (let (slot (compiler-new-slot fx)
+            value-code (compiler-to-dest (second p) cx d slot))
+        (compiler-name-slot (head p) block slot)
+        (code (compiler-cat (code) value-code))
         (slots (append (slots) (list slot)))))
     (list (code) (slots))))
 

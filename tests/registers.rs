@@ -401,3 +401,35 @@ fn one_argument_intrinsics_mean_what_the_builtins_mean() {
     def(&it, "g", "(proto :params (a) :slots 1 :code ((call1 push twice (local 0 a)) (return)))");
     assert_eq!(s(&it, "(g 21)"), "42");
 }
+
+#[test]
+fn a_register_write_replaces_a_captured_slot_as_a_new_binding_does() {
+    let it = Interpreter::new();
+    // the closure captures slot 0; move then gives slot 0 a new value of its own, as init-local
+    // would: the closure keeps the old one (set-local would have written through)
+    def(&it, "f", r#"(proto :params (x) :slots 2 :code (
+        (closure (proto :params () :slots 0 :captures ((local 0)) :code ((return-value (cap 0 x)))))
+        (pop-to 1)
+        (move 0 (const 99))
+        (call-at 1 1 0)
+        (call2 1 list 1 (local 0 x))
+        (return-value 1)))"#);
+    assert_eq!(s(&it, "(f 1)"), "(1 99)");
+}
+
+#[test]
+fn let_bindings_in_registers_keep_each_closure_its_own_value() {
+    let src = r#"(defn mk ()
+                   (let (out (list))
+                     (for-each i (list 1 2 3)
+                       (let (x (* i 10) y (if (> i 1) (+ x 1) (and x nil)) z (or y x))
+                         (set! out (append out (list (fn () (list x y z)))))))
+                     (map (fn (f) (f)) out)))
+                 (mk)"#;
+    let i = Interpreter::new();
+    let c = Interpreter::new();
+    c.set_compiled(true).unwrap();
+    let expected = print_value(&i.eval_str(src).unwrap(), false);
+    assert_eq!(expected, "((10 nil 10) (20 21 21) (30 31 31))");
+    assert_eq!(print_value(&c.eval_str(src).unwrap(), false), expected);
+}
