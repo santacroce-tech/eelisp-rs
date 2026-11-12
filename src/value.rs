@@ -130,29 +130,6 @@ pub enum Value {
     Bytes(Rc<RefCell<Vec<u8>>>),
 }
 
-impl Value {
-    /// A copy, made inline for the kinds a running program copies most: numbers, booleans and
-    /// nil by value, strings, symbols, keywords, lists, dicts, functions and builtins by a
-    /// reference-count bump. `Value::clone` is one large match the compiler doesn't inline, so
-    /// the VM and the intrinsics copy with this instead; the rarer kinds go to `clone`.
-    #[inline(always)]
-    pub fn copy(&self) -> Value {
-        match self {
-            Value::Number(n) => Value::Number(*n),
-            Value::Bool(b) => Value::Bool(*b),
-            Value::Null => Value::Null,
-            Value::Str(s) => Value::Str(Rc::clone(s)),
-            Value::Symbol(s) => Value::Symbol(s.clone()),
-            Value::Keyword(s) => Value::Keyword(s.clone()),
-            Value::List(l) => Value::List(Rc::clone(l)),
-            Value::Dict(d) => Value::Dict(Rc::clone(d)),
-            Value::Function(f) => Value::Function(Rc::clone(f)),
-            Value::Builtin(b) => Value::Builtin(Rc::clone(b)),
-            other => other.clone(),
-        }
-    }
-}
-
 /// Insertion-ordered map — load-bearing for record/dict/form ordering (ANALYSIS §4.1).
 #[derive(Clone, Default)]
 pub struct OrderedDict {
@@ -253,7 +230,7 @@ impl Intrinsic {
     #[inline(always)]
     pub fn apply1(self, a: &Value) -> Option<Value> {
         Some(match (self, a) {
-            (Intrinsic::Head, Value::List(l)) => l.first().map_or(Value::Null, Value::copy),
+            (Intrinsic::Head, Value::List(l)) => l.first().cloned().unwrap_or(Value::Null),
             (Intrinsic::Length, Value::List(l)) => Value::Number(l.len() as f64),
             (Intrinsic::Length, Value::Str(s)) => Value::Number(s.chars().count() as f64),
             (Intrinsic::Length, Value::Dict(d)) => Value::Number(d.keys.len() as f64),
@@ -277,7 +254,7 @@ impl Intrinsic {
     #[inline(always)]
     pub fn apply(self, a: &Value, b: &Value) -> Option<Value> {
         match (self, a, b) {
-            (Intrinsic::Nth, Value::List(l), Value::Number(i)) => Some(l.get(*i as usize).map_or(Value::Null, Value::copy)),
+            (Intrinsic::Nth, Value::List(l), Value::Number(i)) => Some(l.get(*i as usize).cloned().unwrap_or(Value::Null)),
             (Intrinsic::DictGet, Value::Dict(d), k) => {
                 let k = match k {
                     Value::Str(k) => &k[..],
@@ -285,7 +262,7 @@ impl Intrinsic {
                     Value::Symbol(k) => &**k,
                     _ => return None,
                 };
-                Some(d.get(k).map_or(Value::Null, Value::copy))
+                Some(d.get(k).cloned().unwrap_or(Value::Null))
             }
             // as the builtins compare: the second argument against the first
             (Intrinsic::Eq, a, b) => Some(Value::Bool(b == a)),
