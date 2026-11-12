@@ -413,6 +413,22 @@ struct Handler {
     marks: usize,
 }
 
+/// What a call did to the frames: nothing (a builtin ran), moved control to another frame (a
+/// compiled function was entered, or a tail call returned), or finished the run.
+enum Next {
+    Stay,
+    Switch,
+    Done(Value),
+}
+
+/// `Next` after leaving a frame with `Vm::ret`.
+fn left(r: Option<Value>) -> Next {
+    match r {
+        Some(v) => Next::Done(v),
+        None => Next::Switch,
+    }
+}
+
 struct Frame {
     proto: Rc<Proto>,
     pc: usize,
@@ -492,41 +508,50 @@ impl Vm {
 
     /// Run instructions until the entry frame returns or one fails.
     fn step(&mut self) -> Result<Value, LispError> {
-        loop {
+        // The current frame's code and position are held here, not re-read from the frame for
+        // every instruction. They change only when control moves to another frame: a call that
+        // enters a compiled function, a tail call, a return. Then they are reloaded.
+        'frame: loop {
+            let (proto, mut pc) = {
+                let fr = self.frames.last().expect("vm has no frame");
+                (fr.proto.clone(), fr.pc)
+            };
+            let code: &[Op] = &proto.code;
+            loop {
+            let op = code.get(pc).copied().unwrap_or(Op::Return);
+            pc += 1;
             let fr = self.frames.last_mut().expect("vm has no frame");
-            let op = fr.proto.code.get(fr.pc).copied().unwrap_or(Op::Return);
-            fr.pc += 1;
             match op {
                 Op::Const(i) => {
-                    let v = copy(&fr.proto.consts[i as usize]);
+                    let v = copy(&proto.consts[i as usize]);
                     self.stack.push(v);
                 }
                 Op::Load(s) => {
-                    let v = load_global(&fr.env, &fr.proto, s)?;
+                    let v = load_global(&fr.env, &proto, s)?;
                     self.stack.push(v);
                 }
-                Op::Def(s) => env::define_sym(&fr.env, &fr.proto.syms[s as usize], top(&self.stack)),
-                Op::DefPop(s) => env::define_sym(&fr.env, &fr.proto.syms[s as usize], pop(&mut self.stack)),
-                Op::Set(s) => env::set(&fr.env, &fr.proto.syms[s as usize], top(&self.stack))?,
+                Op::Def(s) => env::define_sym(&fr.env, &proto.syms[s as usize], top(&self.stack)),
+                Op::DefPop(s) => env::define_sym(&fr.env, &proto.syms[s as usize], pop(&mut self.stack)),
+                Op::Set(s) => env::set(&fr.env, &proto.syms[s as usize], top(&self.stack))?,
                 Op::Pop => {
                     pop(&mut self.stack);
                 }
-                Op::Jump(t) => fr.pc = t as usize,
+                Op::Jump(t) => pc = t as usize,
                 Op::JumpIfFalse(t) => {
                     if !is_truthy(&pop(&mut self.stack)) {
-                        fr.pc = t as usize;
+                        pc = t as usize;
                     }
                 }
                 Op::JumpIfFalseOrPop(t) => {
                     if is_truthy(&top(&self.stack)) {
                         pop(&mut self.stack);
                     } else {
-                        fr.pc = t as usize;
+                        pc = t as usize;
                     }
                 }
                 Op::JumpIfTrueOrPop(t) => {
                     if is_truthy(&top(&self.stack)) {
-                        fr.pc = t as usize;
+                        pc = t as usize;
                     } else {
                         pop(&mut self.stack);
                     }
@@ -537,19 +562,27 @@ impl Vm {
                     fr.env = parent.expect("pop-scope at the root environment");
                 }
                 Op::Closure(i) => {
-                    let proto = &fr.proto.protos[i as usize];
+                    let proto = &proto.protos[i as usize];
                     let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
                     self.stack.push(close_with(proto, &fr.env, up));
                 }
                 Op::Call(n) => {
-                    self.call(n as usize, false)?;
+                    fr.pc = pc;
+                    match self.call(n as usize, false)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
                 }
                 Op::TailCall(n) => {
                     // A frame inside a `try` or a `loop` keeps its frame: the handler or the
                     // restart point must survive the call.
                     let tail = self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
-                    if let Some(v) = self.call(n as usize, tail)? {
-                        return Ok(v);
+                    fr.pc = pc;
+                    match self.call(n as usize, tail)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
                     }
                 }
                 Op::Return => {
@@ -557,9 +590,10 @@ impl Vm {
                     if let Some(done) = self.ret(v) {
                         return Ok(done);
                     }
+                    continue 'frame;
                 }
                 Op::Dict(i) => {
-                    let keys = &fr.proto.dict_keys[i as usize];
+                    let keys = &proto.dict_keys[i as usize];
                     let vals = self.stack.split_off(self.stack.len() - keys.len());
                     let mut d = OrderedDict::default();
                     for (k, v) in keys.iter().zip(vals) {
@@ -569,7 +603,7 @@ impl Vm {
                 }
                 Op::Loop(i) | Op::LoopSlots(i) => {
                     let mark = Mark {
-                        start: fr.pc,
+                        start: pc,
                         env: fr.env.clone(),
                         sp: self.stack.len(),
                         handlers: self.handlers.len(),
@@ -582,10 +616,10 @@ impl Vm {
                     // The loop is this frame's own (the usual case): rebind and jump, here.
                     if self.marks.len() > fr.mark0 as usize {
                         let m = self.marks.last().unwrap();
-                        rebind(m, &fr.proto, &mut self.slots, fr.slot_base, self.stack.drain(base..));
+                        rebind(m, &proto, &mut self.slots, fr.slot_base, self.stack.drain(base..));
                         let (start, sp, handlers, menv) = (m.start, m.sp, m.handlers, m.env.clone());
                         fr.env = menv;
-                        fr.pc = start;
+                        pc = start;
                         self.handlers.truncate(handlers);
                         self.stack.truncate(sp);
                         continue;
@@ -605,12 +639,12 @@ impl Vm {
                     self.handlers.pop();
                 }
                 Op::Interp(i) => {
-                    let form = fr.proto.consts[i as usize].clone();
+                    let form = proto.consts[i as usize].clone();
                     let v = crate::eval::eval(form, fr.env.clone())?;
                     self.stack.push(v);
                 }
                 Op::MakeList(i) => {
-                    let shape = &fr.proto.list_shapes[i as usize];
+                    let shape = &proto.list_shapes[i as usize];
                     let vals = self.stack.split_off(self.stack.len() - shape.len());
                     let mut out = Vec::with_capacity(vals.len());
                     for (splice, v) in shape.iter().zip(vals) {
@@ -641,12 +675,12 @@ impl Vm {
                         }
                         None => {
                             self.stack.truncate(n - 2);
-                            fr.pc = end as usize;
+                            pc = end as usize;
                         }
                     }
                 }
                 Op::Macro(i) => {
-                    let proto = &fr.proto.protos[i as usize];
+                    let proto = &proto.protos[i as usize];
                     let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
                     self.stack.push(close_macro(proto, &fr.env, up));
                 }
@@ -655,9 +689,9 @@ impl Vm {
                         Slot::Val(v) => copy(v),
                         Slot::Cell(c) => match &*c.borrow() {
                             Some(v) => v.clone(),
-                            None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                            None => env::get_sym(&fr.env, &proto.syms[s as usize])?,
                         },
-                        Slot::Unbound => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                        Slot::Unbound => env::get_sym(&fr.env, &proto.syms[s as usize])?,
                     };
                     self.stack.push(v);
                 }
@@ -671,14 +705,14 @@ impl Vm {
                         Slot::Val(old) => *old = v,
                         Slot::Cell(c) if c.borrow().is_some() => *c.borrow_mut() = Some(v),
                         // not defined in this scope yet: set! looks further out, to the global
-                        _ => env::set(&fr.env, &fr.proto.syms[s as usize], v)?,
+                        _ => env::set(&fr.env, &proto.syms[s as usize], v)?,
                     }
                 }
                 Op::LoadCap(i, s) => {
                     let up = fr.upvals.as_ref().expect("load-cap in a closure with no captures");
                     let v = match &*up[i as usize].borrow() {
                         Some(v) => copy(v),
-                        None => env::get_sym(&fr.env, &fr.proto.syms[s as usize])?,
+                        None => env::get_sym(&fr.env, &proto.syms[s as usize])?,
                     };
                     self.stack.push(v);
                 }
@@ -689,17 +723,18 @@ impl Vm {
                     if cell.borrow().is_some() {
                         *cell.borrow_mut() = Some(v);
                     } else {
-                        env::set(&fr.env, &fr.proto.syms[s as usize], v)?;
+                        env::set(&fr.env, &proto.syms[s as usize], v)?;
                     }
                 }
             }
+        }
         }
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
     /// one when `tail`); anything else is applied here. Returns the value when a tail call
     /// finished the entry frame.
-    fn call(&mut self, n: usize, tail: bool) -> Result<Option<Value>, LispError> {
+    fn call(&mut self, n: usize, tail: bool) -> Result<Next, LispError> {
         // The arguments are the top `n` values, the function just below them. They are passed
         // from where they lie: no vector is made for them.
         let base = self.stack.len() - n;
@@ -711,18 +746,18 @@ impl Vm {
                     let v = op.apply(*x, *y);
                     // two numbers need no dropping; only the builtin's reference is released
                     self.stack.truncate(base - 1);
-                    return Ok(if tail { self.ret(v) } else {
+                    return Ok(if tail { left(self.ret(v)) } else {
                         self.stack.push(v);
-                        None
+                        Next::Stay
                     });
                 }
             }
             let env = &self.frames.last().unwrap().env;
             let v = (b.func)(&self.stack[base..], env)?;
             self.stack.truncate(base - 1);
-            return Ok(if tail { self.ret(v) } else {
+            return Ok(if tail { left(self.ret(v)) } else {
                 self.stack.push(v);
-                None
+                Next::Stay
             });
         }
         let f = self.stack[base - 1].clone();
@@ -757,17 +792,17 @@ impl Vm {
                     self.stack.pop();
                     self.frames.push(frame);
                 }
-                Ok(None)
+                Ok(Next::Switch)
             }
             Value::Function(_) | Value::Builtin(_) => {
                 let env = self.frames.last().unwrap().env.clone();
                 let v = apply_value(&f, &self.stack[base..], &env)?;
                 self.stack.truncate(base - 1);
                 if tail {
-                    Ok(self.ret(v))
+                    Ok(left(self.ret(v)))
                 } else {
                     self.stack.push(v);
-                    Ok(None)
+                    Ok(Next::Stay)
                 }
             }
             Value::Macro(m) => Err(LispError::Runtime(format!(
