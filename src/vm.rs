@@ -219,9 +219,12 @@ pub struct Proto {
     pub captures: Vec<CapSource>,
     /// Slot lists for `LoopSlots`.
     pub loop_slots: Vec<Vec<u32>>,
-    /// For `(local i name)` and `(cap i name)` operands: the slot or capture, and the name's
-    /// index in `syms` (the global meant while the variable isn't bound).
+    /// For `(cap i name)` operands: the capture, and the name's index in `syms` (the global
+    /// meant while the variable isn't bound).
     pub named: Vec<(u32, u32)>,
+    /// For `(local i name)` operands, which hold the slot itself: each slot's name, as an index
+    /// in `syms` (`u32::MAX` for none), read only when the slot isn't bound.
+    pub slot_names: Vec<u32>,
     /// Per name in `syms`: where `Load` last found it as a global (see `GlobalCache`).
     globals: Vec<std::cell::Cell<GlobalCache>>,
 }
@@ -583,17 +586,14 @@ fn operand(x: u32, slots: &[Slot], sb: usize, proto: &Proto, fr: &Frame) -> Resu
             _ => panic!("register {i} read before it was written (malformed bytecode)"),
         },
         OPERAND_CONST => Ok(copy(&proto.consts[i])),
-        OPERAND_LOCAL => {
-            let (j, s) = proto.named[i];
-            match &slots[sb + j as usize] {
-                Slot::Val(v) => Ok(copy(v)),
-                Slot::Cell(c) => match &*c.borrow() {
-                    Some(v) => Ok(v.clone()),
-                    None => env::get_sym(&fr.env, &proto.syms[s as usize]),
-                },
-                Slot::Unbound => env::get_sym(&fr.env, &proto.syms[s as usize]),
-            }
-        }
+        OPERAND_LOCAL => match &slots[sb + i] {
+            Slot::Val(v) => Ok(copy(v)),
+            Slot::Cell(c) => match &*c.borrow() {
+                Some(v) => Ok(v.clone()),
+                None => env::get_sym(&fr.env, &proto.syms[proto.slot_names[i] as usize]),
+            },
+            Slot::Unbound => env::get_sym(&fr.env, &proto.syms[proto.slot_names[i] as usize]),
+        },
         _ => {
             let (j, s) = proto.named[i];
             let up = fr.upvals.as_ref().expect("a capture operand in a closure with no captures");
@@ -614,7 +614,7 @@ fn operand_ref<'a>(x: u32, slots: &'a [Slot], sb: usize, proto: &'a Proto) -> Op
     let slot = match x >> OPERAND_SHIFT {
         OPERAND_REG => &slots[sb + i],
         OPERAND_CONST => return Some(&proto.consts[i]),
-        OPERAND_LOCAL => &slots[sb + proto.named[i].0 as usize],
+        OPERAND_LOCAL => &slots[sb + i],
         _ => return None,
     };
     match slot {
@@ -1518,6 +1518,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         captures,
         loop_slots: Vec::new(),
         named: Vec::new(),
+        slot_names: vec![u32::MAX; nslots.map_or(0, |n| n as usize)],
         globals: Vec::new(),
     };
     if let Some(n) = nslots {
@@ -1798,10 +1799,24 @@ fn operand_of(v: &Value, p: &mut Proto, tbase: u32) -> Result<u32, LispError> {
             p.consts.push(args[0].clone());
             Ok(OPERAND_CONST << OPERAND_SHIFT | index(p.consts.len() - 1)?)
         }
-        "local" | "cap" if args.len() == 2 => {
-            let j = if &*kind == "local" {
-                reg_of(&args[0], p.nslots, tbase)?
-            } else {
+        "local" if args.len() == 2 => {
+            // the operand is the slot itself; its name is kept per slot, for when it's unbound
+            let j = reg_of(&args[0], p.nslots, tbase)?;
+            let s = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
+            match p.slot_names[j as usize] {
+                u32::MAX => p.slot_names[j as usize] = s,
+                known if known != s => {
+                    return Err(bad(format!(
+                        "slot {j} is named both {} and {}",
+                        p.syms[known as usize], p.syms[s as usize]
+                    )))
+                }
+                _ => {}
+            }
+            Ok(OPERAND_LOCAL << OPERAND_SHIFT | j)
+        }
+        "cap" if args.len() == 2 => {
+            let j = {
                 let i = count_of(args.first(), "a capture")?;
                 if i as usize >= p.captures.len() {
                     return Err(bad(format!("capture {i} is out of range ({} captured)", p.captures.len())));
@@ -1810,8 +1825,7 @@ fn operand_of(v: &Value, p: &mut Proto, tbase: u32) -> Result<u32, LispError> {
             };
             let s = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
             p.named.push((j, s));
-            let tag = if &*kind == "local" { OPERAND_LOCAL } else { OPERAND_CAP };
-            Ok(tag << OPERAND_SHIFT | index(p.named.len() - 1)?)
+            Ok(OPERAND_CAP << OPERAND_SHIFT | index(p.named.len() - 1)?)
         }
         _ => Err(bad("an operand is r, (local i name), (cap i name) or (const v)")),
     }

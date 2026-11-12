@@ -234,6 +234,7 @@ fn malformed_register_code_is_refused() {
         ("(proto :code ((move 0 (const 1))))", "needs a proto with :slots"),
         ("(proto :slots 1 :code ((push (cap 0 x))))", "capture 0 is out of range"),
         ("(proto :slots 1 :code ((call2 0 + 0)))", "takes 4"),
+        ("(proto :slots 1 :code ((push (local 0 a)) (push (local 0 b)) (return)))", "named both a and b"),
     ] {
         let e = err(&it, &format!("(vm-assemble '{code})"));
         assert!(e.contains(what), "{code}: {e}");
