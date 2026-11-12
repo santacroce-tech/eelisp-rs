@@ -1014,8 +1014,13 @@ impl Vm {
                     init_slot(&mut self.slots[sb + r as usize], v);
                 }
                 Op::JumpIfNot(x, t) => {
-                    let fr = self.frames.last().expect("vm has no frame");
-                    if !is_truthy(&operand(x, &self.slots, sb, &proto, fr)?) {
+                    // read in place when it can be (a register, a constant, a bound local): no
+                    // copy of the value to test and drop
+                    let truthy = match operand_ref(x, &self.slots, sb, &proto) {
+                        Some(v) => is_truthy(v),
+                        None => is_truthy(&operand(x, &self.slots, sb, &proto, self.frames.last().expect("vm has no frame"))?),
+                    };
+                    if !truthy {
                         pc = t as usize;
                     }
                 }
