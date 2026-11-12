@@ -1281,6 +1281,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
     let mut source = Vec::new();
     let mut code_forms: &[Value] = &[];
     let mut nslots = None;
+    let mut temps = 0u32;
     let mut captures = Vec::new();
     let mut i = 1;
     while i < items.len() {
@@ -1307,6 +1308,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             }
             ("source", Value::List(forms)) => source = forms.to_vec(),
             ("slots", Value::Number(_)) => nslots = Some(count_of(Some(val), ":slots")?),
+            ("temps", Value::Number(_)) => temps = count_of(Some(val), ":temps")?,
             ("captures", Value::List(caps)) => {
                 for c in caps.iter() {
                     let (kind, args) = instr(c)?;
@@ -1323,6 +1325,13 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             (k, _) => return Err(bad(format!("unknown or malformed field :{k}"))),
         }
         i += 2;
+    }
+
+    // Temporaries come after the variables: `(t k)` is register `:slots + k`.
+    let tbase = nslots.unwrap_or(0);
+    if temps > 0 {
+        let Some(n) = nslots else { return Err(bad(":temps needs :slots")) };
+        nslots = Some(n + temps);
     }
 
     // Pass 0: fuse `(def s) (pop)` into `(def-pop s)`, before labels are counted.
@@ -1507,43 +1516,43 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             }
             "move" => {
                 arity(2)?;
-                Op::Move(dest(&args[0], p.nslots)?, operand_of(&args[1], &mut p)?)
+                Op::Move(dest(&args[0], p.nslots, tbase)?, operand_of(&args[1], &mut p, tbase)?)
             }
             "global" => {
                 arity(2)?;
-                Op::Global(dest(&args[0], p.nslots)?, intern(&mut p.syms, sym_of(&args[1], "global's name")?))
+                Op::Global(dest(&args[0], p.nslots, tbase)?, intern(&mut p.syms, sym_of(&args[1], "global's name")?))
             }
             "push" => {
                 arity(1)?;
-                Op::Push(operand_of(&args[0], &mut p)?)
+                Op::Push(operand_of(&args[0], &mut p, tbase)?)
             }
             "pop-to" => {
                 arity(1)?;
-                Op::PopTo(reg_of(&args[0], p.nslots)?)
+                Op::PopTo(reg_of(&args[0], p.nslots, tbase)?)
             }
             "jump-if-not" => {
                 arity(2)?;
-                Op::JumpIfNot(operand_of(&args[0], &mut p)?, target(args.get(1))?)
+                Op::JumpIfNot(operand_of(&args[0], &mut p, tbase)?, target(args.get(1))?)
             }
             "return-value" => {
                 arity(1)?;
-                Op::ReturnValue(operand_of(&args[0], &mut p)?)
+                Op::ReturnValue(operand_of(&args[0], &mut p, tbase)?)
             }
             "call2" => {
                 arity(4)?;
-                let d = dest(&args[0], p.nslots)?;
+                let d = dest(&args[0], p.nslots, tbase)?;
                 let f = intern(&mut p.syms, sym_of(&args[1], "call2's function")?);
-                let (x, y) = (operand_of(&args[2], &mut p)?, operand_of(&args[3], &mut p)?);
+                let (x, y) = (operand_of(&args[2], &mut p, tbase)?, operand_of(&args[3], &mut p, tbase)?);
                 p.code.push(Op::Call2(d, f));
                 Op::Ext(x, y)
             }
             "call-global" | "tail-call-global" => {
                 let tail = &*op == "tail-call-global";
                 arity(if tail { 3 } else { 4 })?;
-                let d = if tail { STACK } else { reg_of(&args[0], p.nslots)? };
+                let d = if tail { STACK } else { reg_of(&args[0], p.nslots, tbase)? };
                 let rest = if tail { &args[..] } else { &args[1..] };
                 let f = intern(&mut p.syms, sym_of(&rest[0], "the function")?);
-                let r = reg_of(&rest[1], p.nslots)?;
+                let r = reg_of(&rest[1], p.nslots, tbase)?;
                 let n = count_of(rest.get(2), "the argument count")?;
                 if n > 0 && r + n > p.nslots.unwrap_or(0) {
                     return Err(bad(format!("arguments in registers {r}..{} are out of range", r + n - 1)));
@@ -1574,10 +1583,16 @@ fn width(op: &str) -> u32 {
     }
 }
 
-/// A register: a slot of a slot-mode proto.
-fn reg_of(v: &Value, nslots: Option<u32>) -> Result<u32, LispError> {
+/// A register: a slot of a slot-mode proto, by number, or `(t k)`, the k-th temporary (register
+/// `tbase + k`, after the variables).
+fn reg_of(v: &Value, nslots: Option<u32>, tbase: u32) -> Result<u32, LispError> {
     let Some(n) = nslots else { return Err(bad("a register instruction needs a proto with :slots")) };
-    let i = count_of(Some(v), "a register")?;
+    let i = match v {
+        Value::List(l) if l.len() == 2 && matches!(&l[0], Value::Symbol(s) if &**s == "t") => {
+            tbase + count_of(l.get(1), "a temporary")?
+        }
+        _ => count_of(Some(v), "a register")?,
+    };
     if i < n {
         Ok(i)
     } else {
@@ -1586,15 +1601,15 @@ fn reg_of(v: &Value, nslots: Option<u32>) -> Result<u32, LispError> {
 }
 
 /// A destination: a register, or `push`.
-fn dest(v: &Value, nslots: Option<u32>) -> Result<u32, LispError> {
+fn dest(v: &Value, nslots: Option<u32>, tbase: u32) -> Result<u32, LispError> {
     match v {
         Value::Symbol(s) if &**s == "push" => Ok(STACK),
-        _ => reg_of(v, nslots),
+        _ => reg_of(v, nslots, tbase),
     }
 }
 
 /// An operand: `r`, `(local i name)`, `(cap i name)` or `(const v)`, packed into a `u32`.
-fn operand_of(v: &Value, p: &mut Proto) -> Result<u32, LispError> {
+fn operand_of(v: &Value, p: &mut Proto, tbase: u32) -> Result<u32, LispError> {
     let index = |i: usize| -> Result<u32, LispError> {
         if i as u32 <= OPERAND_INDEX {
             Ok(i as u32)
@@ -1602,8 +1617,9 @@ fn operand_of(v: &Value, p: &mut Proto) -> Result<u32, LispError> {
             Err(bad("too many operands in one proto"))
         }
     };
-    if let Value::Number(_) = v {
-        return Ok(OPERAND_REG << OPERAND_SHIFT | reg_of(v, p.nslots)?);
+    let temporary = matches!(v, Value::List(l) if matches!(l.first(), Some(Value::Symbol(s)) if &**s == "t"));
+    if matches!(v, Value::Number(_)) || temporary {
+        return Ok(OPERAND_REG << OPERAND_SHIFT | reg_of(v, p.nslots, tbase)?);
     }
     let (kind, args) = instr(v).map_err(|_| bad("an operand is r, (local i name), (cap i name) or (const v)"))?;
     match &*kind {
@@ -1613,7 +1629,7 @@ fn operand_of(v: &Value, p: &mut Proto) -> Result<u32, LispError> {
         }
         "local" | "cap" if args.len() == 2 => {
             let j = if &*kind == "local" {
-                reg_of(&args[0], p.nslots)?
+                reg_of(&args[0], p.nslots, tbase)?
             } else {
                 let i = count_of(args.first(), "a capture")?;
                 if i as usize >= p.captures.len() {
@@ -1707,13 +1723,17 @@ fn one<'a>(name: &str, args: &'a [Value]) -> Result<&'a Value, LispError> {
 }
 
 /// What a global name means to the compiler: "macro" (expand it when compiling), "table-first"
-/// or "raw" (a builtin whose arguments are not all evaluated), or nil (compile an ordinary call).
+/// or "raw" (a builtin whose arguments are not all evaluated), "builtin" or "function" (an
+/// ordinary call, which can be compiled to register code), or nil (an ordinary call to whatever
+/// is there when it runs). A compiler that knows only the first three treats the other two as
+/// ordinary calls, so an older image still builds a newer compiler.
 fn global_kind(name: &Value, env: &Env) -> Value {
     let Value::Symbol(s) = name else { return Value::Null };
     match env::get_sym(&root_of(env), s) {
         Ok(Value::Macro(_)) => Value::Str("macro".into()),
+        Ok(Value::Function(_)) => Value::Str("function".into()),
         Ok(Value::Builtin(b)) => match b.arg_mode {
-            ArgMode::Eval => Value::Null,
+            ArgMode::Eval => Value::Str("builtin".into()),
             ArgMode::TableFirst => Value::Str("table-first".into()),
             ArgMode::AllRaw => Value::Str("raw".into()),
         },

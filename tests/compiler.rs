@@ -331,7 +331,7 @@ fn compile_returns_bytecode_a_person_can_read() {
     let p = print_value(&it.eval_str("(compile '(if ok 1 2))").unwrap(), true);
     assert_eq!(
         p,
-        "(proto :name nil :params () :source ((if ok 1 2)) :slots 0 :captures () :code ((load ok) (jump-if-false 1) (const 1) (jump 2) (label 1) (const 2) (label 2)))"
+        "(proto :name nil :params () :source ((if ok 1 2)) :slots 0 :temps 0 :captures () :code ((load ok) (jump-if-false 1) (const 1) (jump 2) (label 1) (const 2) (label 2)))"
     );
 }
 

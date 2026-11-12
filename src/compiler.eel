@@ -8,6 +8,10 @@
 ;; variable an inner function uses is captured: the closure and the frame share it. Names that
 ;; aren't local are globals, looked up by name.
 ;;
+;; Calls to a global builtin or function compile to register instructions (see "registers"
+;; below); everything else to stack instructions. The two mix: a register result can be pushed,
+;; a stack result popped into a register.
+;;
 ;; Anything the compiler doesn't handle becomes an (interp form) instruction: the interpreter
 ;; evaluates that form. Only malformed forms (`(def x)`, `(if)`…) end up there, so their error
 ;; is the interpreter's own. `compiler-fallbacks` counts those places.
@@ -66,7 +70,7 @@
 ;; A new function, inside `parent` (nil at the top level).
 (defn compiler-new-fx (parent)
   (set! compiler-fx-n (+ compiler-fx-n 1))
-  {:id compiler-fx-n :slots (compiler-box 0) :caps (compiler-box (list)) :parent parent
+  {:id compiler-fx-n :slots (compiler-box 0) :temps (compiler-box 0) :caps (compiler-box (list)) :parent parent
    :declared (if (nil? parent) (compiler-box {}) (dict-get parent :declared))})
 
 (defn compiler-new-slot (fx)
@@ -98,7 +102,8 @@
 
 ;; cx, inside block.
 (defn compiler-enter (cx block)
-  {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx) :declared (dict-get cx :declared)})
+  {:lex (cons block (dict-get cx :lex)) :fx (dict-get block :fx) :declared (dict-get cx :declared)
+   :tmp (dict-get cx :tmp)})
 
 ;; The innermost binding of name, as (block slot); nil when it's a global.
 (defn compiler-find (name lex)
@@ -235,14 +240,17 @@
       (not (symbol? h)) (compiler-call x cx tailp)
       (dict-has compiler-specials h) (compiler-special h x cx tailp)
       ;; what a global name means here — unless a local variable has that name
-      true
-        (let (kind (if (compiler-local? h cx) nil (vm-global-kind h)))
-          (cond
-            (= kind "macro") (compiler-expr (vm-macroexpand x) cx tailp)
-            ;; builtins that don't evaluate all their arguments (deftable, query, …)
-            (= kind "raw") (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
-            (= kind "table-first") (compiler-call-with x cx tailp compiler-table-arg)
-            true (compiler-call x cx tailp))))))
+      true (compiler-global-call x cx tailp (if (compiler-local? h cx) nil (vm-global-kind h))))))
+
+;; A call whose head is a name that isn't special, given what that name means (`kind`).
+(defn compiler-global-call (x cx tailp kind)
+  (cond
+    (= kind "macro") (compiler-expr (vm-macroexpand x) cx tailp)
+    ;; builtins that don't evaluate all their arguments (deftable, query, …)
+    (= kind "raw") (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
+    (= kind "table-first") (compiler-call-with x cx tailp compiler-table-arg)
+    (compiler-reg-call? kind x) (compiler-call-reg x cx tailp kind)
+    true (compiler-call x cx tailp)))
 
 ;; A table command's first argument names the table as written — `(query contacts)` — unless
 ;; it is a call, which is evaluated: `(query (str "con" "tacts"))`. The rest are evaluated.
@@ -269,6 +277,130 @@
     (list)
     (let (code (arg-code (head args) i cx))
       (append code (compiler-args (tail args) (+ i 1) cx arg-code)))))
+
+;; ── registers ──────────────────────────────────────────────────────────
+;; A call to a global builtin or function computes its arguments into registers and calls with
+;; them in place (docs/self-hosting/16-registers.md). Registers are the function's slots: its
+;; variables, then temporaries `(t k)`, numbered after every variable. Temporaries are used like a
+;; stack: an expression computed into `(t d)` uses only `(t d)` and the ones above it, so a callee
+;; entered at its argument registers, which owns everything above them while it runs, never
+;; overwrites a value still needed. `:tmp` in the context is the first free temporary.
+
+(defn compiler-tmp (k) (list 't k))
+(defn compiler-tmp-base (cx) (or (dict-get cx :tmp) 0))
+
+;; Note that temporary k is used: the function needs k + 1 of them at least.
+(defn compiler-use-tmp (cx k)
+  (let (temps (dict-get (dict-get cx :fx) :temps))
+    (if (> (+ k 1) (temps)) (temps (+ k 1)) nil)))
+
+;; x as an operand an instruction can read directly — (local i name), (cap i name) or (const v)
+;; — or nil when it has to be computed first.
+(defn compiler-operand (x cx)
+  (cond
+    (symbol? x)
+      (let (r (compiler-resolve x cx))
+        (cond
+          (nil? r) nil
+          (= (head r) 'local) (list 'local (second r) x)
+          true (list 'cap (second r) x)))
+    (list? x)
+      (cond
+        (empty? x) (list 'const x)
+        (and (= (head x) 'quote) (= (length x) 2)) (list 'const (second x))
+        true nil)
+    (dict? x) nil
+    true (list 'const x)))
+
+;; What a call's head means, if it is a global name: the kind vm-global-kind gives, or nil.
+(defn compiler-head-kind (x cx)
+  (if (and (list? x) (not (empty? x)) (symbol? (head x))
+           (not (dict-has compiler-specials (head x))) (not (compiler-local? (head x) cx)))
+    (vm-global-kind (head x))
+    nil))
+
+;; Code leaving x's value in temporary d.
+(defn compiler-to-reg (x cx d)
+  (compiler-use-tmp cx d)
+  (let (op (compiler-operand x cx))
+    (if op
+      (list (list 'move (compiler-tmp d) op))
+      (if (symbol? x)
+        (list (list 'global (compiler-tmp d) x))
+        (let (kind (compiler-head-kind x cx))
+          (cond
+            (= kind "macro") (compiler-to-reg (vm-macroexpand x) cx d)
+            (compiler-reg-call? kind x) (compiler-call-into x cx d kind)
+            true (compiler-cat (compiler-to-stack x (dict-set cx :tmp d) kind)
+                               (list (list 'pop-to (compiler-tmp d))))))))))
+
+;; x's code for the stack, when compiler-head-kind already said what its head means.
+(defn compiler-to-stack (x cx kind)
+  (if (nil? kind)
+    (compiler-expr x cx false)
+    (compiler-global-call x cx false kind)))
+
+;; Each argument into its temporary, from d up, in order.
+(defn compiler-args-to (args cx d)
+  (if (empty? args)
+    (list)
+    (compiler-cat (compiler-to-reg (head args) cx d) (compiler-args-to (tail args) cx (+ d 1)))))
+
+;; Is this call worth registers? A builtin of two arguments is a call2, whose operands are read
+;; where they are (the arithmetic and the intrinsics run inside it). A function is entered at its
+;; argument registers. Any other builtin call is cheaper as stack code: the builtin takes its
+;; arguments from the stack anyway.
+(defn compiler-reg-call? (kind x)
+  (or (= kind "function") (and (= kind "builtin") (= (length x) 3))))
+
+;; A call of a global, its result into temporary d (see compiler-reg-call?). A first operand
+;; that is a variable is copied before a second one that must be computed, in case computing it
+;; changes the variable; reading a global changes nothing.
+(defn compiler-call-into (x cx d kind)
+  (let (f (head x) args (tail x))
+    (if (= kind "builtin")
+      (let (a (compiler-operand (head args) cx)
+            b (compiler-operand (second args) cx)
+            a-now (and a (or b (= (head a) 'const) (symbol? (second args))))
+            a-code (if a-now (list) (compiler-to-reg (head args) cx d))
+            b-code (if b (list) (compiler-to-reg (second args) cx (+ d 1))))
+        (compiler-use-tmp cx d)
+        (compiler-cat a-code b-code
+                      (list (list 'call2 (compiler-tmp d) f
+                                  (if a-now a (compiler-tmp d))
+                                  (if b b (compiler-tmp (+ d 1)))))))
+      (do
+        (compiler-use-tmp cx d)
+        (compiler-cat (compiler-args-to args cx d)
+                      (list (list 'call-global (compiler-tmp d) f (compiler-tmp d) (length args))))))))
+
+;; A call of a global, its value left on the stack (or, in tail position, a tail call).
+(defn compiler-call-reg (x cx tailp kind)
+  (let (d (compiler-tmp-base cx) args (tail x))
+    (cond
+      (and tailp (= kind "function"))
+        (do
+          (compiler-use-tmp cx d)
+          (compiler-cat (compiler-args-to args cx d)
+                        (list (list 'tail-call-global (head x) (compiler-tmp d) (length args)))))
+      (= kind "builtin")
+        (let (a (compiler-operand (head args) cx) b (and a (compiler-operand (second args) cx)))
+          (if b
+            (list (list 'call2 'push (head x) a b))
+            (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d))))))
+      true (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d)))))))
+
+;; Jump to label unless test is true: a register test needs no trip through the stack.
+(defn compiler-jump-unless (test cx label)
+  (let (op (compiler-operand test cx))
+    (if op
+      (list (list 'jump-if-not op label))
+      (let (kind (compiler-head-kind test cx))
+        (if (compiler-reg-call? kind test)
+          (let (d (compiler-tmp-base cx))
+            (compiler-cat (compiler-call-into test cx d kind)
+                          (list (list 'jump-if-not (compiler-tmp d) label))))
+          (compiler-cat (compiler-expr test cx false) (list (list 'jump-if-false label))))))))
 
 ;; ── special forms ──────────────────────────────────────────────────────
 
@@ -307,12 +439,11 @@
 (defn compiler-if (x cx tailp)
   (let (else-l (compiler-label)
         end-l (compiler-label)
-        test-code (compiler-expr (nth x 1) cx false)
+        test-code (compiler-jump-unless (nth x 1) cx else-l)
         then-code (compiler-expr (nth x 2) cx tailp)
         else-code (if (> (length x) 3) (compiler-expr (nth x 3) cx tailp) (compiler-const nil)))
     (compiler-cat
       test-code
-      (list (list 'jump-if-false else-l))
       then-code
       (list (list 'jump end-l) (list 'label else-l))
       else-code
@@ -323,9 +454,9 @@
   (let (fx (compiler-new-fx (dict-get cx :fx))
         block (compiler-new-block fx))
     (for-each p (compiler-param-names params) (compiler-declare p block))
-    (let (code (compiler-body body (compiler-enter cx block) true))
+    (let (code (compiler-body body (compiler-enter (dict-set cx :tmp 0) block) true))
       (list 'proto :name name :params params :source body
-            :slots ((dict-get fx :slots))
+            :slots ((dict-get fx :slots)) :temps ((dict-get fx :temps))
             :captures (map second ((dict-get fx :caps)))
             :code code))))
 
@@ -388,11 +519,10 @@
     (let (test (head clauses) result (second clauses) next-l (compiler-label))
       (if (and (symbol? test) (compiler-member? test '(else otherwise)))
         (compiler-cat (compiler-expr result cx tailp) (list (list 'label end-l)))
-        (let (test-code (compiler-expr test cx false)
+        (let (test-code (compiler-jump-unless test cx next-l)
               result-code (compiler-expr result cx tailp))
           (compiler-cat
             test-code
-            (list (list 'jump-if-false next-l))
             result-code
             (list (list 'jump end-l) (list 'label next-l))
             (compiler-cond (drop 2 clauses) cx tailp end-l)))))))
@@ -503,9 +633,9 @@
 ;; The bytecode for one top-level form, as a (proto …) form.
 (defn compile (form)
   (let (fx (compiler-new-fx nil)
-        code (compiler-expr form {:lex (list) :fx fx :declared (dict-get fx :declared)} true))
+        code (compiler-expr form {:lex (list) :fx fx :declared (dict-get fx :declared) :tmp 0} true))
     (list 'proto :name nil :params (list) :source (list form)
-          :slots ((dict-get fx :slots)) :captures (list) :code code)))
+          :slots ((dict-get fx :slots)) :temps ((dict-get fx :temps)) :captures (list) :code code)))
 
 ;; Compile a top-level form and run it, in the global scope.
 (defn compile-run (form) (vm-run (compile form)))
