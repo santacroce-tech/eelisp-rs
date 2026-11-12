@@ -71,9 +71,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   can already run the new instructions. Hand-written register code on the real machine: `fib`
   1.24×, a loop 1.79×, the reader's whitespace loop 1.01×. Stack code within 0.96–0.99× of
   before, after moving the register calls' slow paths out of the dispatch loop.
-- **Found:** registers don't help loops whose cost is in builtin calls (`nth`, `dict-get`),
-  which is the reader. Intrinsics for those builtins and a cheaper dict hash are the candidates;
-  each is measurable on its own.
+- **Found:** registers alone don't help loops whose cost is in builtin calls (`nth`,
+  `dict-get`), which is the reader. A cheaper dict hash: no gain, reverted. **Intrinsics** (tag
+  `register-vm-2`): `call2` runs `nth` and `dict-get` in place with borrowed operands, giving
+  hand-written register code `fib` 1.57×, a loop 2.66× and the whitespace loop 1.89×, with
+  stack code unchanged.
+- **Next: step 2**, the compiler's register back end.
 
 ## What has to stay true
 

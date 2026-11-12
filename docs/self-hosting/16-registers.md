@@ -1,7 +1,8 @@
 # 16. Registers
 
 *Branch: `exp/register-vm`, on top of `exp/compiled-default`. Tags: `register-vm-base` (the
-prototype and the plan), `register-vm-1` (register instructions in the machine). Plan:
+prototype and the plan), `register-vm-1` (register instructions in the machine),
+`register-vm-2` (intrinsics). Plan:
 [docs/plans/register-vm.md](../plans/register-vm.md). Tools: `examples/regvm_proto.rs`,
 `scripts/ab.sh`, `examples/prof_one.rs`.*
 
@@ -117,7 +118,7 @@ Getting there took four commits, each measured:
    noise for most lines). It cost register calls some of their gain: `fib` is 1.24× instead of
    1.41×.
 
-## What it says
+## What step 1 left
 
 Registers pay where the machine itself is the cost: arithmetic, branches, calls between compiled
 functions (1.2–1.8×). They give nothing on the whitespace loop, and that loop matters most,
@@ -136,3 +137,56 @@ So the reader needs more than registers. Two candidates, both measurable on thei
 
 The compiler back end (step 2 of the plan) comes next either way. Calls and loops gain now, and
 every gain to the instructions themselves lands on code that is already compiled to them.
+
+## The cheaper hash, measured first
+
+It was the smaller change, so it went first: dicts hashed with the multiply-and-rotate hash
+rustc uses for its own tables, instead of SipHash. Whitespace went from 125 to 121 ns per
+character, and the snippet files read in 43.4 ms instead of 43.5. That's noise. It was committed
+with those numbers and reverted. Hashing a one-character key was never the cost.
+
+## Profiling before the next guess
+
+That made two wrong guesses about the reader, counting chapter 15's code points. So the reader
+went under the sampler on eeditor's snippet files before anything else changed. The builtins it
+calls barely show: `dict-get` 57 samples, `nth` 35. What shows is the machinery around them:
+
+| where | samples |
+|---|---|
+| the dispatch loop | 1,340 |
+| `call` | 521 |
+| dropping values, mostly after a builtin call | 508 |
+| allocating and freeing | about 500 |
+| copying values | 240 |
+
+`(nth cs i)` in stack code does all of this:
+- copies `nth` out of its global, and the list and the index onto the stack;
+- calls the builtin, whose `as_list` copies the list once more;
+- copies the element out and returns it;
+- drops the builtin, the list (twice) and the index.
+
+Only one of those copies, the element returned, is the work asked for.
+
+## Intrinsics
+
+A register instruction can do better than a stack one here, because its operands stay where
+they are. Builtins gained a second marker beside the arithmetic one: `intrinsic`, set on `nth` and
+`dict-get`. When `call2` finds that its global still holds such a builtin, it reads the builtin
+and both operands in place and copies only the result. Anything the intrinsic doesn't cover takes
+the general path: another kind of value, an operand in a cell or an unbound local, or a program
+that redefined `nth`. The builtin then runs and fails exactly as it does. Arithmetic operands are
+borrowed the same way. Three tests hold every case to the builtin's own result and error.
+
+| hand-written register code | step 1 | with intrinsics |
+|---|---|---|
+| `fib 25` | 1.24× | 1.57× |
+| a loop of 1M | 1.79× | 2.66× |
+| the whitespace loop | 1.01× | 1.89× |
+
+The marker is a separate field, so the stack code's call path didn't change, and `scripts/ab.sh`
+confirms it at 0.98–1.03×.
+
+The register code on the real machine is now faster than the prototype that was meant to be its
+ceiling (whitespace 15.2 ms against 19.8 ms). That prototype copied operands the way the stack
+machine does; the ceiling it measured was the stack machine's habit of copying. The reader's inner
+loop is now almost twice as fast once the compiler emits register code, which is the next step.
