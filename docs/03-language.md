@@ -178,6 +178,17 @@ The reader and evaluator are available from inside the language:
 (eval (list '* 6 7))               ; → 42
 ```
 
+`eval` runs its form at the top level. It sees everything defined globally, but not the local
+variables of the function that calls it, which is the rule in Scheme, Common Lisp and Clojure:
+
+```lisp
+(def x "global")
+(defn f (x) (eval 'x))
+(f "local")                        ; → "global"
+```
+
+To evaluate code that uses a value, put the value in the code: `(eval (list '+ n 1))`.
+
 The agenda's [rules](06-agenda.md#rules) depend on this. A rule's condition is stored as text in
 the database, then read back and evaluated against each item.
 

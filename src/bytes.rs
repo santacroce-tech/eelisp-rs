@@ -24,7 +24,7 @@ fn define(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, Lis
     env::define(
         env,
         name,
-        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f) })),
+        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })),
     );
 }
 
@@ -205,7 +205,7 @@ pub fn register(env: &Env) {
             (None, None) => (0, b.len()),
             _ => return Err(fail("bytes->base64: give both start and length, or neither")),
         };
-        Ok(Value::Str(base64(&b[s..s + n])))
+        Ok(Value::Str(base64(&b[s..s + n]).into()))
     });
     define(env, "base64->bytes", |a, _| {
         arity("base64->bytes", a, 1, 1)?;

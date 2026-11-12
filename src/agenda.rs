@@ -129,9 +129,9 @@ fn serialize_props(props: &OrderedDict) -> String {
     for k in &props.keys {
         let sv = match &props.map[k] {
             Value::Str(s) => s.clone(),
-            other => crate::printer::print_value(other, false),
+            other => (crate::printer::print_value(other, false)).into(),
         };
-        map.insert(k.clone(), serde_json::Value::String(sv));
+        map.insert(k.clone(), serde_json::Value::String(sv.to_string()));
     }
     serde_json::Value::Object(map).to_string()
 }
@@ -144,7 +144,7 @@ fn parse_props(s: &str) -> OrderedDict {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };
-            od.insert(k, Value::Str(sv));
+            od.insert(k, Value::Str(sv.into()));
         }
     }
     od
@@ -154,7 +154,7 @@ fn parse_props(s: &str) -> OrderedDict {
 
 fn sval(od: &OrderedDict, k: &str) -> String {
     match od.get(k) {
-        Some(Value::Str(s)) => s.clone(),
+        Some(Value::Str(s)) => s.to_string(),
         Some(Value::Null) | None => String::new(),
         Some(other) => crate::printer::print_value(other, false),
     }
@@ -174,12 +174,12 @@ fn record_to_item(r: &Record) -> Item {
 
 fn item_row(text: &str, notes: &str, cats: &[String], props: &OrderedDict, created: &str, modified: &str) -> OrderedDict {
     let mut d = OrderedDict::default();
-    d.insert("text".into(), Value::Str(text.to_string()));
-    d.insert("notes".into(), Value::Str(notes.to_string()));
-    d.insert("categories".into(), Value::Str(serialize_cats(cats)));
-    d.insert("properties".into(), Value::Str(serialize_props(props)));
-    d.insert("created".into(), Value::Str(created.to_string()));
-    d.insert("modified".into(), Value::Str(modified.to_string()));
+    d.insert("text".into(), Value::Str(text.into()));
+    d.insert("notes".into(), Value::Str(notes.into()));
+    d.insert("categories".into(), Value::Str(serialize_cats(cats).into()));
+    d.insert("properties".into(), Value::Str(serialize_props(props).into()));
+    d.insert("created".into(), Value::Str(created.into()));
+    d.insert("modified".into(), Value::Str(modified.into()));
     d
 }
 
@@ -217,13 +217,13 @@ pub struct ItemInput {
 fn props_from_input(when: &Option<String>, priority: Option<i64>, recur: &Option<String>) -> OrderedDict {
     let mut p = OrderedDict::default();
     if let Some(w) = when {
-        p.insert("when".into(), Value::Str(w.clone()));
+        p.insert("when".into(), Value::Str(w.clone().into()));
     }
     if let Some(pr) = priority {
-        p.insert("priority".into(), Value::Str(pr.to_string()));
+        p.insert("priority".into(), Value::Str(pr.to_string().into()));
     }
     if let Some(r) = recur {
-        p.insert("recurrence".into(), Value::Str(r.clone()));
+        p.insert("recurrence".into(), Value::Str(r.clone().into()));
     }
     p
 }
@@ -238,7 +238,7 @@ pub fn add_item(db: &Database, input: ItemInput) -> Result<Value, LispError> {
 
 pub fn item_count(db: &Database, category: Option<&str>) -> Result<Value, LispError> {
     match category {
-        Some(c) => db.count("_items", Some("categories LIKE ?"), &[Value::Str(format!("%\"{}\"%", c))]),
+        Some(c) => db.count("_items", Some("categories LIKE ?"), &[Value::Str(format!("%\"{}\"%", c).into())]),
         None => db.count("_items", None, &[]),
     }
 }
@@ -262,7 +262,7 @@ pub fn item_done(db: &Database, id: i64) -> Result<Value, LispError> {
     if let (Some(rec), Some(w)) = (recurrence, when) {
         if let Some(next) = advance_date(&w, &rec) {
             let mut props = item.properties.clone();
-            props.insert("when".into(), Value::Str(next));
+            props.insert("when".into(), Value::Str(next.into()));
             let now = iso_now();
             let row = item_row(&item.text, &item.notes, &item.categories, &props, &now, &now);
             return Ok(item_value(db.insert("_items", &row)?));
@@ -283,7 +283,7 @@ pub fn item_set(db: &Database, id: i64, updates: &[(String, Value)]) -> Result<V
             "notes" => item.notes = as_string(val).unwrap_or_default(),
             _ => {
                 let sv = as_string(val).unwrap_or_else(|| crate::printer::print_value(val, false));
-                item.properties.insert(key.clone(), Value::Str(sv));
+                item.properties.insert(key.clone(), Value::Str(sv.into()));
             }
         }
     }
@@ -309,27 +309,27 @@ pub fn items(db: &Database, f: &ItemFilter) -> Result<Value, LispError> {
     let mut params: Vec<Value> = Vec::new();
     if let Some(s) = &f.search {
         clauses.push("(text LIKE ? OR notes LIKE ?)".into());
-        params.push(Value::Str(format!("%{}%", s)));
-        params.push(Value::Str(format!("%{}%", s)));
+        params.push(Value::Str(format!("%{}%", s).into()));
+        params.push(Value::Str(format!("%{}%", s).into()));
     }
     if let Some(c) = &f.category {
         // A category takes in its children: "work" finds an item filed under "work/calls".
         clauses.push("(categories LIKE ? OR categories LIKE ?)".into());
-        params.push(Value::Str(format!("%\"{}\"%", c)));
-        params.push(Value::Str(format!("%\"{}/%", c)));
+        params.push(Value::Str(format!("%\"{}\"%", c).into()));
+        params.push(Value::Str(format!("%\"{}/%", c).into()));
     }
     if let Some(p) = f.priority {
         clauses.push("properties LIKE ?".into());
-        params.push(Value::Str(format!("%\"priority\":\"{}\"%", p)));
+        params.push(Value::Str(format!("%\"priority\":\"{}\"%", p).into()));
     }
     if let Some(d) = &f.when_before {
         // An empty `when` (a cleared date) sorts before every date; it is not "before" any of them.
         clauses.push("json_extract(properties,'$.when') < ? AND json_extract(properties,'$.when') != ''".into());
-        params.push(Value::Str(d.clone()));
+        params.push(Value::Str(d.clone().into()));
     }
     if let Some(d) = &f.when_after {
         clauses.push("json_extract(properties,'$.when') >= ?".into());
-        params.push(Value::Str(d.clone()));
+        params.push(Value::Str(d.clone().into()));
     }
     let where_ = if clauses.is_empty() { None } else { Some(clauses.join(" AND ")) };
     query_items_display(db, where_, params, Some("created".into()), false)
@@ -339,7 +339,7 @@ pub fn items_on(db: &Database, date: &str) -> Result<Value, LispError> {
     query_items_display(
         db,
         Some("json_extract(properties,'$.when') = ?".into()),
-        vec![Value::Str(date.to_string())],
+        vec![Value::Str(date.into())],
         Some("created".into()),
         false,
     )
@@ -349,7 +349,7 @@ pub fn items_between(db: &Database, start: &str, end: &str) -> Result<Value, Lis
     query_items_display(
         db,
         Some("json_extract(properties,'$.when') >= ? AND json_extract(properties,'$.when') <= ?".into()),
-        vec![Value::Str(start.to_string()), Value::Str(end.to_string())],
+        vec![Value::Str(start.into()), Value::Str(end.into())],
         Some("json_extract(properties,'$.when')".into()),
         true,
     )
@@ -371,11 +371,11 @@ fn query_items_display(
         .map(|r| {
             let item = record_to_item(r);
             let mut data = OrderedDict::default();
-            data.insert("text".into(), Value::Str(item.text.clone()));
-            data.insert("when".into(), Value::Str(sval(&item.properties, "when")));
-            data.insert("priority".into(), Value::Str(sval(&item.properties, "priority")));
-            data.insert("categories".into(), Value::Str(item.categories.join(", ")));
-            data.insert("recurrence".into(), Value::Str(sval(&item.properties, "recurrence")));
+            data.insert("text".into(), Value::Str(item.text.clone().into()));
+            data.insert("when".into(), Value::Str(sval(&item.properties, "when").into()));
+            data.insert("priority".into(), Value::Str(sval(&item.properties, "priority").into()));
+            data.insert("categories".into(), Value::Str(item.categories.join(", ").into()));
+            data.insert("recurrence".into(), Value::Str(sval(&item.properties, "recurrence").into()));
             Record { table: "_items".into(), id: item.id, data, deleted: false }
         })
         .collect();
@@ -402,22 +402,22 @@ pub fn deftemplate(db: &Database, t: TemplateInput) -> Result<Value, LispError> 
     let cats: Vec<String> = t.category.into_iter().collect();
     let now = iso_now();
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(t.name.clone()));
-    d.insert("text_template".into(), Value::Str(t.text));
-    d.insert("notes".into(), Value::Str(t.notes));
-    d.insert("categories".into(), Value::Str(serialize_cats(&cats)));
-    d.insert("properties".into(), Value::Str(serialize_props(&props)));
-    d.insert("created".into(), Value::Str(now.clone()));
-    d.insert("modified".into(), Value::Str(now));
+    d.insert("name".into(), Value::Str(t.name.clone().into()));
+    d.insert("text_template".into(), Value::Str(t.text.into()));
+    d.insert("notes".into(), Value::Str(t.notes.into()));
+    d.insert("categories".into(), Value::Str(serialize_cats(&cats).into()));
+    d.insert("properties".into(), Value::Str(serialize_props(&props).into()));
+    d.insert("created".into(), Value::Str(now.clone().into()));
+    d.insert("modified".into(), Value::Str(now.into()));
     db.insert("_templates", &d)?;
-    Ok(Value::Str(format!("Template defined: {}", t.name)))
+    Ok(Value::Str(format!("Template defined: {}", t.name).into()))
 }
 
 fn template_rows(db: &Database, name: &str) -> Result<Vec<Record>, LispError> {
     let q = Query {
         table: "_templates".into(),
         where_: Some("name = ?".into()),
-        params: vec![Value::Str(name.to_string())],
+        params: vec![Value::Str(name.into())],
         order: None,
         ascending: true,
         limit: None,
@@ -446,14 +446,14 @@ pub fn from_template(
     for (k, v) in overrides {
         match k.as_str() {
             "when" => {
-                props.insert("when".into(), Value::Str(as_string(v).unwrap_or_default()));
+                props.insert("when".into(), Value::Str(as_string(v).unwrap_or_default().into()));
             }
             "priority" => {
                 let p = match v {
                     Value::Number(n) => (*n as i64).to_string(),
                     other => as_string(other).unwrap_or_default(),
                 };
-                props.insert("priority".into(), Value::Str(p));
+                props.insert("priority".into(), Value::Str(p.into()));
             }
             "category" => {
                 if let Some(c) = as_string(v) {
@@ -495,11 +495,11 @@ pub fn templates(db: &Database) -> Result<Value, LispError> {
         .iter()
         .map(|r| format!("{} — {}", sval(&r.data, "name"), sval(&r.data, "text_template")))
         .collect();
-    Ok(Value::Str(lines.join("\n")))
+    Ok(Value::Str(lines.join("\n").into()))
 }
 
 pub fn drop_template(db: &Database, name: &str) -> Result<Value, LispError> {
-    db.soft_delete_where("_templates", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_templates", "name = ?", &[Value::Str(name.into())])?;
     Ok(Value::Null)
 }
 
@@ -511,7 +511,7 @@ fn record_to_json(r: &Record) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     for k in &r.data.keys {
         let jv = match &r.data.map[k] {
-            Value::Str(s) => serde_json::Value::String(s.clone()),
+            Value::Str(s) => serde_json::Value::String(s.to_string()),
             Value::Number(n) => serde_json::json!(n),
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Null => serde_json::Value::Null,
@@ -572,16 +572,16 @@ fn import_json_inner(db: &Database, json: &str) -> Result<Value, LispError> {
         "Imported {} items, {} templates",
         counts.get("_items").copied().unwrap_or(0),
         counts.get("_templates").copied().unwrap_or(0),
-    )))
+    ).into()))
 }
 
 fn json_to_value(v: &serde_json::Value) -> Value {
     match v {
-        serde_json::Value::String(s) => Value::Str(s.clone()),
+        serde_json::Value::String(s) => Value::Str(s.clone().into()),
         serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::Bool(b) => Value::Bool(*b),
         serde_json::Value::Null => Value::Null,
-        other => Value::Str(other.to_string()),
+        other => Value::Str(other.to_string().into()),
     }
 }
 
@@ -590,11 +590,11 @@ fn json_to_value(v: &serde_json::Value) -> Value {
 fn persist_item(db: &Database, item: &Item) -> Result<(), LispError> {
     let now = iso_now();
     let mut row = OrderedDict::default();
-    row.insert("text".into(), Value::Str(item.text.clone()));
-    row.insert("notes".into(), Value::Str(item.notes.clone()));
-    row.insert("categories".into(), Value::Str(serialize_cats(&item.categories)));
-    row.insert("properties".into(), Value::Str(serialize_props(&item.properties)));
-    row.insert("modified".into(), Value::Str(now));
+    row.insert("text".into(), Value::Str(item.text.clone().into()));
+    row.insert("notes".into(), Value::Str(item.notes.clone().into()));
+    row.insert("categories".into(), Value::Str(serialize_cats(&item.categories).into()));
+    row.insert("properties".into(), Value::Str(serialize_props(&item.properties).into()));
+    row.insert("modified".into(), Value::Str(now.into()));
     db.update("_items", item.id, &row)?;
     Ok(())
 }
@@ -618,7 +618,7 @@ fn category_row(db: &Database, name: &str) -> Result<Option<Record>, LispError> 
     let q = Query {
         table: "_categories".into(),
         where_: Some("name = ?".into()),
-        params: vec![Value::Str(name.to_string())],
+        params: vec![Value::Str(name.into())],
         order: None,
         ascending: true,
         limit: Some(1),
@@ -628,10 +628,10 @@ fn category_row(db: &Database, name: &str) -> Result<Option<Record>, LispError> 
 }
 
 fn upsert_category(db: &Database, name: &str, parent: Option<&str>, exclusive: bool) -> Result<(), LispError> {
-    db.soft_delete_where("_categories", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_categories", "name = ?", &[Value::Str(name.into())])?;
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(name.to_string()));
-    d.insert("parent".into(), parent.map(|p| Value::Str(p.to_string())).unwrap_or(Value::Null));
+    d.insert("name".into(), Value::Str(name.into()));
+    d.insert("parent".into(), parent.map(|p| Value::Str(p.into())).unwrap_or(Value::Null));
     d.insert("exclusive".into(), Value::Bool(exclusive));
     d.insert("conditions".into(), Value::Str("[]".into()));
     db.insert("_categories", &d)?;
@@ -658,7 +658,7 @@ pub fn defcategory(db: &Database, name: &str, parent: Option<String>, exclusive:
     for child in children {
         upsert_category(db, &format!("{}/{}", name, child), Some(name), false)?;
     }
-    Ok(Value::Str(format!("Category defined: {}", name)))
+    Ok(Value::Str(format!("Category defined: {}", name).into()))
 }
 
 fn is_exclusive(r: &Record) -> bool {
@@ -675,7 +675,7 @@ fn enforce_exclusivity(db: &Database, item: &mut Item, cat: &str) -> Result<(), 
                 let q = Query {
                     table: "_categories".into(),
                     where_: Some("parent = ?".into()),
-                    params: vec![Value::Str(parent.to_string())],
+                    params: vec![Value::Str(parent.into())],
                     order: None,
                     ascending: true,
                     limit: None,
@@ -731,7 +731,7 @@ pub fn categories(db: &Database) -> Result<Value, LispError> {
             format!("{}{}{}", "  ".repeat(depth), name, tag)
         })
         .collect();
-    Ok(Value::Str(lines.join("\n")))
+    Ok(Value::Str(lines.join("\n").into()))
 }
 
 // ── rules (the reflective engine) ─────────────────────────────────────
@@ -743,22 +743,22 @@ struct RuleDef {
 }
 
 fn make_builtin(name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) -> Value {
-    Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f) }))
+    Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None }))
 }
 
 /// Build a child env binding the item's fields + `get` / `has-category` / `overdue?` / `match`.
 fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> Env {
     let e = env::child(base);
-    env::define(&e, "text", Value::Str(item.text.clone()));
-    env::define(&e, "notes", Value::Str(item.notes.clone()));
+    env::define(&e, "text", Value::Str(item.text.clone().into()));
+    env::define(&e, "notes", Value::Str(item.notes.clone().into()));
     env::define(&e, "id", Value::Number(item.id as f64));
     env::define(
         &e,
         "categories",
-        Value::List(Rc::new(item.categories.iter().cloned().map(Value::Str).collect())),
+        Value::List(Rc::new(item.categories.iter().cloned().map(|s| Value::Str(s.into())).collect())),
     );
-    env::define(&e, "created", Value::Str(item.created.clone()));
-    env::define(&e, "modified", Value::Str(item.modified.clone()));
+    env::define(&e, "created", Value::Str(item.created.clone().into()));
+    env::define(&e, "modified", Value::Str(item.modified.clone().into()));
     for k in &item.properties.keys {
         env::define(&e, k, item.properties.map[k].clone());
     }
@@ -767,7 +767,7 @@ fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> 
     env::define(&e, "get", make_builtin("get", move |args, _| {
         let key = match args.first() {
             Some(Value::Symbol(k)) => k.to_string(),
-            Some(Value::Keyword(k)) => k.clone(),
+            Some(Value::Keyword(k)) => k.to_string(),
             _ => return Ok(Value::Null),
         };
         Ok(props.get(&key).cloned().unwrap_or(Value::Null))
@@ -777,7 +777,7 @@ fn build_item_env(base: &Env, item: &Item, matches: Rc<RefCell<Vec<Value>>>) -> 
     env::define(&e, "has-category", make_builtin("has-category", move |args, _| {
         let path = match args.first() {
             Some(Value::Symbol(s)) => s.to_string(),
-            Some(Value::Str(s)) => s.clone(),
+            Some(Value::Str(s)) => s.to_string(),
             _ => return Ok(Value::Bool(false)),
         };
         let prefix = format!("{}/", path);
@@ -841,16 +841,16 @@ fn parse_one(src: &str) -> Option<Value> {
 }
 
 pub fn defrule(db: &Database, name: &str, condition: Value, actions: Vec<Value>, enabled: bool) -> Result<Value, LispError> {
-    db.soft_delete_where("_rules", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_rules", "name = ?", &[Value::Str(name.into())])?;
     let cond_src = crate::printer::print_value(&condition, true);
     let act_src: Vec<String> = actions.iter().map(|a| crate::printer::print_value(a, true)).collect();
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(name.to_string()));
-    d.insert("condition".into(), Value::Str(cond_src));
-    d.insert("actions".into(), Value::Str(act_src.join("@@")));
+    d.insert("name".into(), Value::Str(name.into()));
+    d.insert("condition".into(), Value::Str(cond_src.into()));
+    d.insert("actions".into(), Value::Str(act_src.join("@@").into()));
     d.insert("enabled".into(), Value::Bool(enabled));
     db.insert("_rules", &d)?;
-    Ok(Value::Str(format!("Rule defined: {}", name)))
+    Ok(Value::Str(format!("Rule defined: {}", name).into()))
 }
 
 /// Apply enabled rules to one item (`Some(id)`) or all items. Returns the count of changed items.
@@ -941,27 +941,27 @@ pub fn list_rules(db: &Database) -> Result<Value, LispError> {
         .iter()
         .map(|r| format!("{}: {}", sval(&r.data, "name"), sval(&r.data, "condition")))
         .collect();
-    Ok(Value::Str(lines.join("\n")))
+    Ok(Value::Str(lines.join("\n").into()))
 }
 
 pub fn drop_rule(db: &Database, name: &str) -> Result<Value, LispError> {
-    db.soft_delete_where("_rules", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_rules", "name = ?", &[Value::Str(name.into())])?;
     Ok(Value::Null)
 }
 
 // ── views ─────────────────────────────────────────────────────────────
 
 pub fn defview(db: &Database, name: &str, filter: Option<Value>, sort_by: Option<String>, group_by: Option<String>, sort_asc: bool) -> Result<Value, LispError> {
-    db.soft_delete_where("_views", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_views", "name = ?", &[Value::Str(name.into())])?;
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(name.to_string()));
-    d.insert("filter".into(), Value::Str(filter.map(|f| crate::printer::print_value(&f, true)).unwrap_or_default()));
-    d.insert("group_by".into(), group_by.map(Value::Str).unwrap_or(Value::Null));
-    d.insert("sort_by".into(), sort_by.map(Value::Str).unwrap_or(Value::Null));
+    d.insert("name".into(), Value::Str(name.into()));
+    d.insert("filter".into(), Value::Str((filter.map(|f| crate::printer::print_value(&f, true)).unwrap_or_default()).into()));
+    d.insert("group_by".into(), group_by.map(|s| Value::Str(s.into())).unwrap_or(Value::Null));
+    d.insert("sort_by".into(), sort_by.map(|s| Value::Str(s.into())).unwrap_or(Value::Null));
     d.insert("sort_asc".into(), Value::Bool(sort_asc));
     d.insert("columns".into(), Value::Str("[]".into()));
     db.insert("_views", &d)?;
-    Ok(Value::Str(format!("View defined: {}", name)))
+    Ok(Value::Str(format!("View defined: {}", name).into()))
 }
 
 fn extract_sort_value(item: &Item, field: &str) -> String {
@@ -983,7 +983,7 @@ pub fn show(db: &Database, base: &Env, name: &str) -> Result<Value, LispError> {
     let vq = Query {
         table: "_views".into(),
         where_: Some("name = ?".into()),
-        params: vec![Value::Str(name.to_string())],
+        params: vec![Value::Str(name.into())],
         order: None,
         ascending: true,
         limit: Some(1),
@@ -1032,7 +1032,7 @@ pub fn show(db: &Database, base: &Env, name: &str) -> Result<Value, LispError> {
                 out.push_str(&format!("    {}\n", it.text));
             }
         }
-        return Ok(Value::Str(out.trim_end().to_string()));
+        return Ok(Value::Str(out.trim_end().into()));
     }
 
     // non-grouped → display result-set
@@ -1041,10 +1041,10 @@ pub fn show(db: &Database, base: &Env, name: &str) -> Result<Value, LispError> {
         .iter()
         .map(|it| {
             let mut data = OrderedDict::default();
-            data.insert("text".into(), Value::Str(it.text.clone()));
-            data.insert("when".into(), Value::Str(sval(&it.properties, "when")));
-            data.insert("priority".into(), Value::Str(sval(&it.properties, "priority")));
-            data.insert("categories".into(), Value::Str(it.categories.join(", ")));
+            data.insert("text".into(), Value::Str(it.text.clone().into()));
+            data.insert("when".into(), Value::Str(sval(&it.properties, "when").into()));
+            data.insert("priority".into(), Value::Str(sval(&it.properties, "priority").into()));
+            data.insert("categories".into(), Value::Str(it.categories.join(", ").into()));
             Record { table: "_items".into(), id: it.id, data, deleted: false }
         })
         .collect();
@@ -1065,11 +1065,11 @@ pub fn list_views(db: &Database) -> Result<Value, LispError> {
     if rows.is_empty() {
         return Ok(Value::Str("(no views defined)".into()));
     }
-    Ok(Value::Str(rows.iter().map(|r| sval(&r.data, "name")).collect::<Vec<_>>().join("\n")))
+    Ok(Value::Str((rows.iter().map(|r| sval(&r.data, "name")).collect::<Vec<_>>().join("\n")).into()))
 }
 
 pub fn drop_view(db: &Database, name: &str) -> Result<Value, LispError> {
-    db.soft_delete_where("_views", "name = ?", &[Value::Str(name.to_string())])?;
+    db.soft_delete_where("_views", "name = ?", &[Value::Str(name.into())])?;
     Ok(Value::Null)
 }
 
@@ -1078,10 +1078,10 @@ pub fn drop_view(db: &Database, name: &str) -> Result<Value, LispError> {
 pub fn smart_parse_dict(input: &str) -> Value {
     let r = crate::smart_parser::parse(input, &today());
     let mut d = OrderedDict::default();
-    d.insert("text".into(), Value::Str(r.text));
-    d.insert("when".into(), r.when.map(Value::Str).unwrap_or(Value::Null));
+    d.insert("text".into(), Value::Str(r.text.into()));
+    d.insert("when".into(), r.when.map(|s| Value::Str(s.into())).unwrap_or(Value::Null));
     d.insert("priority".into(), r.priority.map(|p| Value::Number(p as f64)).unwrap_or(Value::Null));
-    d.insert("who".into(), Value::List(Rc::new(r.who.into_iter().map(Value::Str).collect())));
+    d.insert("who".into(), Value::List(Rc::new(r.who.into_iter().map(|s| Value::Str(s.into())).collect())));
     Value::Dict(Rc::new(d))
 }
 
@@ -1089,13 +1089,13 @@ pub fn add_smart(db: &Database, input: &str) -> Result<Value, LispError> {
     let r = crate::smart_parser::parse(input, &today());
     let mut props = OrderedDict::default();
     if let Some(w) = &r.when {
-        props.insert("when".into(), Value::Str(w.clone()));
+        props.insert("when".into(), Value::Str(w.clone().into()));
     }
     if let Some(p) = r.priority {
-        props.insert("priority".into(), Value::Str(p.to_string()));
+        props.insert("priority".into(), Value::Str(p.to_string().into()));
     }
     if !r.who.is_empty() {
-        props.insert("who".into(), Value::Str(r.who.join(", ")));
+        props.insert("who".into(), Value::Str(r.who.join(", ").into()));
     }
     let now = iso_now();
     let row = item_row(&r.text, "", &[], &props, &now, &now);
@@ -1206,7 +1206,7 @@ pub fn today() -> String {
 
 fn as_string(v: &Value) -> Option<String> {
     match v {
-        Value::Str(s) => Some(s.clone()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }

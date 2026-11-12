@@ -1,0 +1,324 @@
+;; The EELisp reader, written in EELisp: source text in, forms out. It makes the same forms as the
+;; Rust reader (src/lexer.rs, src/parser.rs) and stops with the same error messages.
+;;
+;;   (read-all src)   → the list of every top-level form in src
+;;   (read-top src)   → the same, each as (form source comments): the form's text as written, and
+;;                      the comment block above it. What the engine reads with in compiled mode,
+;;                      and what `(source f)` shows.
+;;
+;; Like the Rust reader it has two layers. The lexer cuts characters into tokens, and the parser
+;; builds forms out of tokens. Here tokens are made on demand: the parser asks for the token at a
+;; position, and gets it back with the position after it. A token is a list
+;;
+;;   (kind value start end)
+;;
+;; where kind is one of :open :close :quote :quasi :unquote :splice :str :num :kw :sym :eof.
+;;
+;; From the host it needs only `str-chars` (a string's characters, so position i is one `nth`),
+;; `symbol` and `keyword` (to make those values from their names) and `->number` (decimal
+;; numbers, read exactly as Rust reads them).
+;;
+;; Names starting with `reader-` are its internals.
+
+;; ── characters ─────────────────────────────────────────────────────────
+
+;; A set of strings, as a dict: asking is one lookup.
+(defn reader-set (items) (reduce (fn (d x) (dict-set d x true)) {} items))
+
+;; Every character the lexer meets is in one of four classes. Characters are looked up in a
+;; table, so the common ones cost a single dict lookup. Whatever isn't in the table (accented
+;; letters, other alphabets, rarer whitespace) is whitespace if `str-trim` removes it, as Rust's
+;; own definition of whitespace says, and otherwise part of an atom.
+;;
+;; The classes are numbers, not keywords, on purpose: the VM copies a number for free, while
+;; copying a keyword copies its text. That was a quarter of the reader's time (chapter 9).
+(def reader-space 0)     ; whitespace
+(def reader-comment 1)   ; `;`, to the end of the line
+(def reader-delim 2)     ; ends an atom: ( ) [ ] { } " ' ` ,
+(def reader-word 3)      ; part of an atom
+
+(def reader-classes
+  (let (add (fn (d chars class) (reduce (fn (d c) (dict-set d c class)) d (str-chars chars))))
+    (add (add (add (add {} " \n\t\r" reader-space) ";" reader-comment) "()[]{}\"'`," reader-delim)
+         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&*+-./:<=>?@\\^_|~"
+         reader-word)))
+
+(defn reader-class (c)
+  (let (class (dict-get reader-classes c))
+    (cond class class
+          (= (str-trim c) "") reader-space
+          true reader-word)))
+
+;; The characters from position `from` up to `to`, as a string.
+(defn reader-text (cs from to) (str-join "" (slice cs from to)))
+
+;; Characters that are a token on their own.
+(def reader-punct
+  {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close "'" :quote "`" :quasi})
+
+;; What a backslash in a string stands for. Any other escaped character is kept with its
+;; backslash: "\d" is the two characters \ and d.
+(def reader-escapes {"n" "\n" "t" "\t" "r" "\r" "\\" "\\" "\"" "\""})
+
+;; ── the lexer ──────────────────────────────────────────────────────────
+
+;; The first position at or after i that isn't whitespace or inside a `;` comment.
+(defn reader-skip (cs n i)
+  (loop (i i)
+    (if (>= i n)
+      i
+      (let (class (reader-class (nth cs i)))
+        (cond
+          (= class reader-space) (recur (+ i 1))
+          (= class reader-comment) (recur (reader-line-end cs n i))
+          true i)))))
+
+(defn reader-line-end (cs n i)
+  (loop (i i)
+    (if (and (< i n) (!= (nth cs i) "\n")) (recur (+ i 1)) i)))
+
+;; The token at position i (after any whitespace and comments).
+(defn reader-token (cs n i)
+  (let (i (reader-skip cs n i))
+    (if (>= i n)
+      (list :eof nil i i)
+      (let (c (nth cs i)
+            kind (dict-get reader-punct c))
+        (cond
+          kind (list kind c i (+ i 1))
+          (= c ",") (if (and (< (+ i 1) n) (= (nth cs (+ i 1)) "@"))
+                      (list :splice ",@" i (+ i 2))
+                      (list :unquote "," i (+ i 1)))
+          (= c "\"") (reader-string cs n i)
+          true (reader-atom cs n i))))))
+
+;; A string literal starting at the opening quote. Most strings have no backslash, and those are
+;; cut out of the text in one piece; only strings with escapes are built a character at a time.
+(defn reader-string (cs n start)
+  (loop (i (+ start 1) plain true)
+    (if (>= i n)
+      (error "unterminated string" :parse)
+      (let (c (nth cs i))
+        (cond
+          (= c "\"")
+            (list :str
+                  (if plain (reader-text cs (+ start 1) i) (reader-unescape cs (+ start 1) i))
+                  start (+ i 1))
+          (and (= c "\\") (< (+ i 1) n)) (recur (+ i 2) false)
+          true (recur (+ i 1) plain))))))
+
+;; The text of a string between its quotes, with its escapes replaced.
+(defn reader-unescape (cs from to)
+  (loop (i from acc "")
+    (if (>= i to)
+      acc
+      (let (c (nth cs i))
+        (if (and (= c "\\") (< (+ i 1) to))
+          (let (e (nth cs (+ i 1))
+                meant (dict-get reader-escapes e))
+            (recur (+ i 2) (str acc (if meant meant (str "\\" e)))))
+          (recur (+ i 1) (str acc c)))))))
+
+;; An atom runs to the next delimiter. Then it's classified, in this order: `:name` is a keyword,
+;; anything that reads as a number is one, and the rest are symbols.
+(defn reader-atom (cs n start)
+  (let (end (loop (i start)
+              (if (and (< i n) (= (reader-class (nth cs i)) reader-word)) (recur (+ i 1)) i))
+        text (reader-text cs start end)
+        c (nth cs start))
+    (if (= c ":")
+      (list :kw (substr text 1) start end)
+      (let (num (if (dict-has reader-number-starts c) (reader-number text) nil))
+        (if (nil? num)
+          (list :sym text start end)
+          (list :num num start end))))))
+
+;; ── numbers ────────────────────────────────────────────────────────────
+
+(def reader-digits (reader-set (str-chars "0123456789")))
+
+;; Only an atom starting with one of these can be a number (a digit, a sign, a dot, inf or nan),
+;; so most symbols never reach the number parsers.
+(def reader-number-starts (reader-set (str-chars "0123456789+-.iInN")))
+
+;; Could Rust's number parser accept it? It takes an optional sign, then digits or a dot, or one of
+;; inf, infinity and nan in any case. Only those atoms are handed to `->number`, so a symbol like
+;; `-` or `->string` never costs a failed parse.
+(defn reader-decimal? (text)
+  (let (u (if (or (str-starts-with text "+") (str-starts-with text "-")) (substr text 1) text)
+        l (str-lower u))
+    (or (dict-has reader-digits (substr u 0 1))
+        (str-starts-with u ".")
+        (= l "inf") (= l "infinity") (= l "nan"))))
+
+(defn reader-number (text)
+  (or (if (reader-decimal? text) (try (->number text) (catch e nil)) nil)
+      (reader-hex text)))
+
+;; Hex digit → value, either case.
+(def reader-hex-digits
+  (reduce (fn (d i)
+            (let (c (substr "0123456789abcdef" i (+ i 1)))
+              (dict-set (dict-set d c i) (str-upper c) i)))
+          {} (range 0 16)))
+
+;; `0xff`, `-0x10`: an optional minus, 0x or 0X, then 1 to 13 hex digits (so the value is an exact
+;; integer). Rust's integer parser also takes a sign after the 0x, so `0x+ff` is 255; this reader
+;; agrees, because agreeing is the point.
+(defn reader-hex (text)
+  (let (neg (str-starts-with text "-")
+        body (if neg (substr text 1) text)
+        digits (if (or (str-starts-with body "0x") (str-starts-with body "0X")) (substr body 2) nil))
+    (if (or (nil? digits) (= digits "") (> (str-len digits) 13))
+      nil
+      (let (v (reader-radix16 (str-chars digits)))
+        (cond (nil? v) nil
+              neg (* -1 v)
+              true v)))))
+
+(defn reader-radix16 (cs)
+  (let (neg (= (head cs) "-")
+        ds (if (or neg (= (head cs) "+")) (tail cs) cs))
+    (if (empty? ds)
+      nil
+      (loop (ds ds v 0)
+        (if (empty? ds)
+          (if neg (- 0 v) v)
+          (let (d (dict-get reader-hex-digits (head ds)))
+            (if (nil? d) nil (recur (tail ds) (+ (* v 16) d)))))))))
+
+;; ── the parser ─────────────────────────────────────────────────────────
+;;
+;; Each reading function takes the position to read from and returns (form next-position).
+
+;; The prefix characters and the forms they stand for: 'x is (quote x), and so on.
+(def reader-wrappers
+  {:quote 'quote :quasi 'quasiquote :unquote 'unquote :splice 'unquote-splicing})
+
+(defn reader-symbol (text)
+  (cond (= text "true") true
+        (= text "false") false
+        (= text "nil") nil
+        true (symbol text)))
+
+;; Read the form at position i.
+(defn reader-expr (cs n i) (reader-form (reader-token cs n i) cs n))
+
+;; The form that starts with token tok.
+(defn reader-form (tok cs n)
+  (let (kind (head tok)
+        v (nth tok 1)
+        next (nth tok 3)
+        wrapper (dict-get reader-wrappers kind))
+    (cond
+      wrapper (let (r (reader-expr cs n next)) (list (list wrapper (head r)) (nth r 1)))
+      (= kind :sym) (list (reader-symbol v) next)
+      (= kind :kw) (list (keyword v) next)
+      (or (= kind :str) (= kind :num)) (list v next)
+      (= kind :open) (cond (= v "(") (reader-seq cs n next ")" (list))
+                           (= v "[") (reader-seq cs n next "]" (list 'list))
+                           true (reader-dict cs n next))
+      (= kind :close) (reader-fail cs n next "unexpected closing delimiter")
+      true (reader-fail cs n next "unexpected EOF"))))
+
+;; The elements of a list up to its closer, added to acc. `[a b]` starts acc with `list`, so it
+;; reads as (list a b).
+(defn reader-seq (cs n i close acc)
+  (loop (i i acc acc)
+    (let (tok (reader-token cs n i))
+      (cond
+        (= (head tok) :eof) (reader-fail cs n (nth tok 3) "unclosed list")
+        (and (= (head tok) :close) (= (nth tok 1) close)) (list acc (nth tok 3))
+        true (let (r (reader-form tok cs n))
+               (recur (nth r 1) (append acc (list (head r)))))))))
+
+;; `{:k v "k2" v2}`: keys are keywords or strings, and both become the dict's string keys.
+(defn reader-dict (cs n i)
+  (loop (i i d {})
+    (let (tok (reader-token cs n i)
+          kind (head tok)
+          next (nth tok 3))
+      (cond
+        (= kind :eof) (reader-fail cs n next "unclosed dict")
+        (and (= kind :close) (= (nth tok 1) "}")) (list d next)
+        (or (= kind :kw) (= kind :str))
+          (let (r (reader-expr cs n next))
+            (recur (nth r 1) (dict-set d (nth tok 1) (head r))))
+        true (reader-fail cs n next "dict keys must be keywords or strings")))))
+
+;; Stop with a syntax error. The Rust reader cuts the whole text into tokens before it parses, so
+;; an unterminated string anywhere wins over a parse error found earlier. Lexing the rest first
+;; keeps that order.
+(defn reader-fail (cs n i msg)
+  (loop (i i)
+    (let (tok (reader-token cs n i))
+      (if (= (head tok) :eof) nil (recur (nth tok 3)))))
+  (error msg :parse))
+
+;; ── reading a whole text ───────────────────────────────────────────────
+
+;; Every top-level form with where it starts and ends: (form start end). A stray closer at the
+;; top level is skipped, as in the Rust reader, so one unbalanced paren doesn't lose the rest of a
+;; file.
+(defn reader-spans (cs n)
+  (loop (i 0 out (list))
+    (let (tok (reader-token cs n i))
+      (cond
+        (= (head tok) :eof) out
+        (= (head tok) :close) (recur (nth tok 3) out)
+        true (let (r (reader-form tok cs n))
+               (recur (nth r 1) (append out (list (list (head r) (nth tok 2) (nth r 1))))))))))
+
+;; Every top-level form, in order.
+(defn read-all (src)
+  (let (cs (str-chars src))
+    (map head (reader-spans cs (length cs)))))
+
+;; Every top-level form as (form source comments).
+(defn read-top (src)
+  (let (cs (str-chars src)
+        n (length cs))
+    (map (fn (span)
+           (let (start (nth span 1)
+                 end (reader-with-trailing-comment cs n (nth span 2)))
+             (list (head span) (reader-text cs start end) (reader-comments-above cs start))))
+         (reader-spans cs n))))
+
+;; ── a form's text and comments ─────────────────────────────────────────
+
+;; A comment on the same line, right after the form, belongs to it: the `;; toast` in
+;; `(defn ed-message (text) …)  ;; toast`. Anything but spaces and tabs in between means it's
+;; someone else's.
+(defn reader-with-trailing-comment (cs n end)
+  (let (i (loop (i end)
+            (if (and (< i n) (or (= (nth cs i) " ") (= (nth cs i) "\t"))) (recur (+ i 1)) i)))
+    (if (and (< i n) (= (nth cs i) ";")) (reader-line-end cs n i) end)))
+
+;; The position where the line holding position i begins.
+(defn reader-line-start (cs i)
+  (loop (i i)
+    (if (and (> i 0) (!= (nth cs (- i 1)) "\n")) (recur (- i 1)) i)))
+
+;; Is everything from `from` up to `to` whitespace?
+(defn reader-blank? (cs from to)
+  (loop (i from)
+    (cond (>= i to) true
+          (= (reader-class (nth cs i)) reader-space) (recur (+ i 1))
+          true false)))
+
+;; The run of `;` comment lines directly above the form starting at `start`. A blank line or a line
+;; with code ends it, so a form only picks up the comment written for it, and a form that doesn't
+;; begin its line has none.
+(defn reader-comments-above (cs start)
+  (let (line-start (reader-line-start cs start))
+    (if (reader-blank? cs line-start start)
+      (loop (cursor line-start lines (list))
+        (if (= cursor 0)
+          (str-join "\n" lines)
+          (let (end (- cursor 1)
+                begin (reader-line-start cs end)
+                line (reader-text cs begin end))
+            (if (str-starts-with (str-trim line) ";")
+              (recur begin (cons line lines))
+              (str-join "\n" lines)))))
+      "")))

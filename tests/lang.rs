@@ -148,6 +148,23 @@ fn eval_arithmetic() {
 }
 
 #[test]
+fn clean_break_eval_runs_at_the_top_level() {
+    // `eval` sees global definitions, never the caller's locals — Scheme's, Common Lisp's and
+    // Clojure's rule, and what lets compiled code keep locals in slots.
+    let i = Interpreter::new();
+    i.eval_str("(def x \"global\")").unwrap();
+    i.eval_str("(defn f (x) (eval 'x))").unwrap();
+    assert_eq!(s(&i, "(f \"local\")"), "global");
+    assert_eq!(s(&i, "(let (y 1) (try (eval 'y) (catch e (dict-get e :kind))))"), "undefined-symbol");
+    // a definition made by eval is global
+    i.eval_str("(defn g () (eval '(def made-by-eval 7)))").unwrap();
+    i.eval_str("(g)").unwrap();
+    assert_eq!(s(&i, "made-by-eval"), "7");
+    // code that needs a value carries it
+    assert_eq!(s(&i, "(defn h (n) (eval (list '+ n 1))) (h 41)"), "42");
+}
+
+#[test]
 fn clean_break_operator_number_splitting_now_errors() {
     // Swift returned (+1 3)=4, (-1 3)=-2, (*2 3)=6. Here these are NOT split, so they error:
     // (+1 3) -> call 1 as a fn; (*2 3) -> undefined symbol `*2`.

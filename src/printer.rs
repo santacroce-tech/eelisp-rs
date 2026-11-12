@@ -8,9 +8,16 @@ pub fn print_value(v: &Value, readable: bool) -> String {
         Value::Symbol(s) => s.to_string(),
         Value::Str(s) => {
             if readable {
-                format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+                format!(
+                    "\"{}\"",
+                    s.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n")
+                        .replace('\t', "\\t")
+                        .replace('\r', "\\r")
+                )
             } else {
-                s.clone()
+                s.to_string()
             }
         }
         Value::Number(n) => fmt_num(*n),
@@ -25,7 +32,7 @@ pub fn print_value(v: &Value, readable: bool) -> String {
             let inner: Vec<String> = d
                 .keys
                 .iter()
-                .map(|k| format!(":{} {}", k, print_value(&d.map[k], readable)))
+                .map(|k| format!("{} {}", print_key(k, readable), print_value(&d.map[k], readable)))
                 .collect();
             format!("{{{}}}", inner.join(" "))
         }
@@ -130,5 +137,18 @@ fn fmt_num(n: f64) -> String {
         format!("{}", n as i64)
     } else {
         format!("{}", n)
+    }
+}
+
+/// A dict key as `:key`. Readably, a key that wouldn't read back as a keyword (`"a b"`, `"("`) is
+/// written as a string instead, which the reader also accepts as a key: `{"a b" 1}`.
+fn print_key(k: &str, readable: bool) -> String {
+    let keyword_safe = !k.chars().any(|c| {
+        c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | '\'' | '`' | ',')
+    });
+    if readable && !keyword_safe {
+        print_value(&Value::Str(k.into()), true)
+    } else {
+        format!(":{}", k)
     }
 }

@@ -15,6 +15,7 @@
 pub mod agenda;
 #[cfg(feature = "sqlite")]
 pub mod agenda_builtins;
+pub mod boot;
 pub mod builtins;
 pub mod bytes;
 #[cfg(feature = "sqlite")]
@@ -44,6 +45,7 @@ pub mod sheet_ref;
 #[cfg(feature = "sqlite")]
 pub mod smart_parser;
 pub mod value;
+pub mod vm;
 
 pub use interpreter::Interpreter;
 pub use value::{LispError, Value};
