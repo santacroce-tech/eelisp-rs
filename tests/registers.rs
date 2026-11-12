@@ -350,3 +350,30 @@ fn tail_call_at_runs_in_constant_space() {
     let e = err(&it, "(vm-assemble '(proto :slots 2 :code ((call-at 0 1 1))))");
     assert!(e.contains("out of range"), "{e}");
 }
+
+#[test]
+fn equality_inside_the_instruction_means_what_the_builtins_mean() {
+    let it = Interpreter::new();
+    let i = Interpreter::new();
+    def(&it, "req", r#"(proto :params (a b) :slots 3 :code ((call2 2 = (local 0 a) (local 1 b)) (return-value 2)))"#);
+    def(&it, "rne", r#"(proto :params (a b) :slots 3 :code ((call2 2 != (local 0 a) (local 1 b)) (return-value 2)))"#);
+    let pairs = [
+        (r#""a""#, r#""a""#),
+        (r#""a""#, r#""b""#),
+        ("'x", "'x"),
+        ("'x", ":x"),
+        (r#""x""#, "'x"),
+        ("(list 1 2)", "(list 1 2)"),
+        ("(list 1 2)", "(list 1 3)"),
+        ("{:a 1}", "{:a 1}"),
+        ("nil", "nil"),
+        ("nil", "false"),
+        ("1", r#""1""#),
+        ("true", "true"),
+        ("1", "1.0"),
+    ];
+    for (a, b) in pairs {
+        assert_eq!(s(&it, &format!("(req {a} {b})")), s(&i, &format!("(= {a} {b})")), "(= {a} {b})");
+        assert_eq!(s(&it, &format!("(rne {a} {b})")), s(&i, &format!("(!= {a} {b})")), "(!= {a} {b})");
+    }
+}

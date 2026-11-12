@@ -210,6 +210,10 @@ pub struct Builtin {
 pub enum Intrinsic {
     Nth,
     DictGet,
+    /// `=` and `!=` on anything that isn't two numbers (those take the arithmetic fast path):
+    /// the reader compares characters, and symbols are compared everywhere.
+    Eq,
+    Ne,
 }
 
 impl Intrinsic {
@@ -228,6 +232,9 @@ impl Intrinsic {
                 };
                 Some(d.get(k).cloned().unwrap_or(Value::Null))
             }
+            // as the builtins compare: the second argument against the first
+            (Intrinsic::Eq, a, b) => Some(Value::Bool(b == a)),
+            (Intrinsic::Ne, a, b) => Some(Value::Bool(!(a == b))),
             _ => None,
         }
     }

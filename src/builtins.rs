@@ -49,8 +49,8 @@ pub fn register(env: &Env) {
     b!("pow", powf);
     b!("expt", powf); // Common Lisp / Scheme spelling of pow
     // comparison / logic
-    b!("=", eqf, Some(FastOp::Eq));
-    b!("!=", nef, Some(FastOp::Ne));
+    b!("=", eqf, Some(FastOp::Eq), Some(Intrinsic::Eq));
+    b!("!=", nef, Some(FastOp::Ne), Some(Intrinsic::Ne));
     b!("<", ltf, Some(FastOp::Lt));
     b!(">", gtf, Some(FastOp::Gt));
     b!("<=", lef, Some(FastOp::Le));
