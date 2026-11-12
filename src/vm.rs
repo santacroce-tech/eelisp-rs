@@ -638,6 +638,12 @@ fn deliver(stack: &mut Vec<Value>, slots: &mut [Slot], sb: usize, d: u32, v: Val
 #[inline(always)]
 fn init_slot(slot: &mut Slot, v: Value) {
     match slot {
+        // a number, a boolean or nil has nothing to drop: overwrite it without calling `Value`'s
+        // drop (an out-of-line function); a register most often holds one of those
+        Slot::Val(old @ (Value::Number(_) | Value::Bool(_) | Value::Null)) => {
+            // SAFETY: `old` is valid and owns nothing, so not dropping it leaks nothing
+            unsafe { std::ptr::write(old, v) }
+        }
         Slot::Val(old) => *old = v,
         s => *s = Slot::Val(v),
     }
