@@ -177,7 +177,8 @@ binary nobody can reproduce), and it is the reference for testing.
   are no longer what reading costs; the reader's per-character work and allocation are. Chapter
   19: scanning builtins and a list builder, reading 35.1 → 27.6 ms. Chapter 20: the reader's
   own costs (comment search, `str-join`, `str-chars`), reading 20.2 ms, 2.1× chapter 15. Chapter
-  21: compiler by builtin, atoms without pairs; loading compiled code 65 → 35 ms. See
+  21: compiler by builtin, atoms without pairs; loading compiled code 65 → 35 ms. Chapter 22:
+  the compiler builds code in one list, compiling 14.5 → 12.5 ms; loading 33 ms. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
