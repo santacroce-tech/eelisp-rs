@@ -368,7 +368,7 @@ fn eval_builtin_args(mode: &ArgMode, items: &[Value], env: &Env) -> Result<Vec<V
 pub fn apply_value(f: &Value, args: &[Value], env: &Env) -> Result<Value, LispError> {
     match f {
         Value::Builtin(b) => (b.func)(args, env),
-        Value::Function(func) if func.code.is_some() => crate::vm::call(func, args.to_vec()),
+        Value::Function(func) if func.code.is_some() => crate::vm::call_with(func, args),
         Value::Function(func) => {
             let scope = bind_params(func, args)?;
             let mut result = Value::Null;

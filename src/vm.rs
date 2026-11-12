@@ -293,6 +293,13 @@ pub fn call(f: &Function, args: Vec<Value>) -> Result<Value, LispError> {
     call_proto(f.code.clone().expect("vm::call on a function with no code"), &f.closure, f.upvals.clone(), args)
 }
 
+/// Call a compiled function with arguments borrowed from a slice — how builtins such as `map`
+/// call back into compiled code, without collecting each element's arguments into a vector.
+pub fn call_with(f: &Function, args: &[Value]) -> Result<Value, LispError> {
+    let proto = f.code.clone().expect("vm::call_with on a function with no code");
+    run_entry(proto, &f.closure, f.upvals.clone(), args.iter().map(copy), false)
+}
+
 /// Run a proto as a call: its parameters bound to `args` in a scope under `closure`. How a
 /// compiled macro expands, too — it is called with its arguments unevaluated.
 pub fn call_proto(
