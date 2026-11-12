@@ -90,9 +90,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
 - **Then** (tag `register-vm-5`): `let` values computed straight into their slots, `if`/`and`/
   `or` in registers and as jump chains in tests; a register write is a new binding (as
   `init-local`). Reading 37.7 → 35.3 ms, compiling 15.7 → 15.1 ms. `recur` stays stack code.
-- **Next:** the cost of a call itself and of copying values (frames, slot churn on register
-  calls, `Value` clone/drop: a quarter of every profile). Step 4 (retiring stack code) waits
-  until stack code is rare.
+- **Then** (tag `register-vm-6`, chapter 18): register calls leave the caller's dead slots
+  alone (`fib` 1.06×, calls 1.03×, kept); inline copies of common values (no gain, reverted).
+  Reading's time is now the reader's instructions per character (40% dispatch) and what it
+  allocates (22%), not the machine's calls.
+- **Next, a decision:** scanning primitives for the reader, a list-building primitive, or
+  word-sized values (chapter 18). Step 4 (retiring stack code) waits until stack code is rare.
 
 ## What has to stay true
 
