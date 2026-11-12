@@ -789,7 +789,8 @@ impl Vm {
                 Next::Stay
             });
         }
-        let f = self.stack[base - 1].clone();
+        // moved out, not copied: the stack's copy would only be dropped again
+        let f = std::mem::replace(&mut self.stack[base - 1], Value::Null);
         match &f {
             Value::Function(func) if func.code.is_some() => {
                 let proto = func.code.clone().unwrap();
