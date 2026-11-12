@@ -225,6 +225,14 @@
 ;; Read the form at position i.
 (defn reader-expr (cs n i) (reader-form (reader-token cs n i) cs n))
 
+;; The tokens that are a form on their own, and how each becomes one.
+(def reader-atom-kinds {:sym true :kw true :str true :num true})
+
+(defn reader-atom-form (kind v)
+  (cond (= kind :sym) (reader-symbol v)
+        (= kind :kw) (keyword v)
+        true v))
+
 ;; The form that starts with token tok.
 (defn reader-form (tok cs n)
   (let (kind (head tok)
@@ -233,9 +241,7 @@
         wrapper (dict-get reader-wrappers kind))
     (cond
       wrapper (let (r (reader-expr cs n next)) (list (list wrapper (head r)) (nth r 1)))
-      (= kind :sym) (list (reader-symbol v) next)
-      (= kind :kw) (list (keyword v) next)
-      (or (= kind :str) (= kind :num)) (list v next)
+      (dict-has reader-atom-kinds kind) (list (reader-atom-form kind v) next)
       (= kind :open) (cond (= v "(") (reader-seq cs n next ")" (list))
                            (= v "[") (reader-seq cs n next "]" (list 'list))
                            true (reader-dict cs n next))
@@ -262,6 +268,9 @@
       (cond
         (= (head tok) :eof) (reader-fail cs n (nth tok 3) "unclosed list")
         (and (= (head tok) :close) (= (nth tok 1) close)) (list (reader-built b) (nth tok 3))
+        ;; an atom is its own form: no (form next) pair to make and take apart
+        (dict-has reader-atom-kinds (head tok))
+          (recur (nth tok 3) (reader-add b (reader-atom-form (head tok) (nth tok 1))))
         true (let (r (reader-form tok cs n))
                (recur (nth r 1) (reader-add b (head r))))))))
 
