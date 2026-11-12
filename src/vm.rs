@@ -649,6 +649,22 @@ fn init_slot(slot: &mut Slot, v: Value) {
     }
 }
 
+/// `slots.truncate(n)`, without calling a drop for each slot when none of them owns anything: a
+/// returning frame's slots usually hold numbers, booleans and nil, or nothing yet.
+#[inline(always)]
+fn drop_slots_to(slots: &mut Vec<Slot>, n: usize) {
+    if n >= slots.len() {
+        return;
+    }
+    let trivial = slots[n..].iter().all(|s| matches!(s, Slot::Unbound | Slot::Val(Value::Number(_) | Value::Bool(_) | Value::Null)));
+    if trivial {
+        // SAFETY: the slots past n own nothing, so forgetting them leaks nothing
+        unsafe { slots.set_len(n) }
+    } else {
+        slots.truncate(n);
+    }
+}
+
 /// A frame's registers can have been cut short by a callee entered at its argument registers;
 /// when control comes back to it, they are all there again (the ones the callee used, unbound).
 #[inline(always)]
@@ -1351,17 +1367,17 @@ impl Vm {
             self.handlers.truncate(fr.handler0 as usize);
         }
         let Some(caller) = self.frames.last() else {
-            self.slots.truncate(fr.slot_base);
+            drop_slots_to(&mut self.slots, fr.slot_base);
             return Some(v);
         };
         if fr.dst == STACK {
-            self.slots.truncate(fr.slot_base);
+            drop_slots_to(&mut self.slots, fr.slot_base);
             self.stack.push(v);
         } else {
             // a register call: a callee entered at the caller's argument registers shares the
             // caller's region; only what lies beyond that region goes
             let end = caller.slot_base + caller.proto.nslots.unwrap_or(0) as usize;
-            self.slots.truncate(fr.slot_base.max(end));
+            drop_slots_to(&mut self.slots, fr.slot_base.max(end));
             restore_slots(&mut self.slots, caller);
             init_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
         }
