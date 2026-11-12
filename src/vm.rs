@@ -70,6 +70,18 @@ pub const MAX_FRAMES: usize = 100_000;
 /// a jump target, so an instruction is a copy, not a clone, when the machine fetches it.
 #[derive(Clone, Copy, Debug)]
 pub enum Op {
+    // Superinstructions: two common neighbours as one, made by the assembler (`fuse_pairs`), so
+    // the machine dispatches once instead of twice. Each does exactly what its two parts do.
+    /// `(load s)` then `(load-local i x)`: a global function, then its first argument.
+    LoadThenLocal(u32, u32, u32),
+    /// `(load-local i x)` then `(call n)`.
+    LocalThenCall(u32, u32, u32),
+    /// `(const c)` then `(call n)`.
+    ConstThenCall(u32, u32),
+    /// `(load-local i x)` then `(const c)`.
+    LocalThenConst(u32, u32, u32),
+    /// `(jump-if-false t)` then, when it doesn't jump, `(load s)`.
+    JumpIfFalseElseLoad(u32, u32),
     Const(u32),
     Load(u32),
     Def(u32),
@@ -585,6 +597,44 @@ impl Vm {
                     let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
                     self.stack.push(close_with(proto, &fr.env, up));
                 }
+                Op::LoadThenLocal(g, i, x) => {
+                    let v = load_global(&self.frames.last().unwrap().env, &proto, g)?;
+                    self.stack.push(v);
+                    let v = self.local(sb, i, x, &proto)?;
+                    self.stack.push(v);
+                }
+                Op::LocalThenConst(i, x, c) => {
+                    let v = self.local(sb, i, x, &proto)?;
+                    self.stack.push(v);
+                    self.stack.push(copy(&proto.consts[c as usize]));
+                }
+                Op::JumpIfFalseElseLoad(t, g) => {
+                    if !is_truthy(&pop(&mut self.stack)) {
+                        pc = t as usize;
+                    } else {
+                        let v = load_global(&self.frames.last().unwrap().env, &proto, g)?;
+                        self.stack.push(v);
+                    }
+                }
+                Op::LocalThenCall(i, x, n) => {
+                    let v = self.local(sb, i, x, &proto)?;
+                    self.stack.push(v);
+                    self.frames.last_mut().unwrap().pc = pc;
+                    match self.call(n as usize, false)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
+                Op::ConstThenCall(c, n) => {
+                    self.stack.push(copy(&proto.consts[c as usize]));
+                    self.frames.last_mut().unwrap().pc = pc;
+                    match self.call(n as usize, false)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
                 Op::Call(n) => {
                     let fr = self.frames.last_mut().expect("vm has no frame");
                     fr.pc = pc;
@@ -711,14 +761,7 @@ impl Vm {
                     self.stack.push(close_macro(proto, &fr.env, up));
                 }
                 Op::LoadLocal(i, s) => {
-                    let v = match &self.slots[sb + i as usize] {
-                        Slot::Val(v) => copy(v),
-                        Slot::Cell(c) => match &*c.borrow() {
-                            Some(v) => v.clone(),
-                            None => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
-                        },
-                        Slot::Unbound => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
-                    };
+                    let v = self.local(sb, i, s, &proto)?;
                     self.stack.push(v);
                 }
                 Op::DefLocal(i) => def_slot(&mut self.slots[sb + i as usize], top(&self.stack)),
@@ -758,6 +801,20 @@ impl Vm {
             }
         }
         }
+    }
+
+    /// `LoadLocal`'s value: slot `i` of the frame whose slots start at `sb`, or, while it's
+    /// unbound, the global of the same name.
+    #[inline(always)]
+    fn local(&self, sb: usize, i: u32, s: u32, proto: &Proto) -> Result<Value, LispError> {
+        Ok(match &self.slots[sb + i as usize] {
+            Slot::Val(v) => copy(v),
+            Slot::Cell(c) => match &*c.borrow() {
+                Some(v) => v.clone(),
+                None => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
+            },
+            Slot::Unbound => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
+        })
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
@@ -972,7 +1029,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
     }
 
     // Pass 0: fuse `(def s) (pop)` into `(def-pop s)`, before labels are counted.
-    let fused = fuse_def_pop(code_forms);
+    let fused = fuse_pairs(&fuse_def_pop(code_forms));
     let code_forms: &[Value] = &fused;
 
     // Pass 1: where each label lands.
@@ -1063,6 +1120,34 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 }
             }
             "pop" => Op::Pop,
+            "load-then-local" => {
+                arity(3)?;
+                let g = intern(&mut p.syms, sym_of(&args[0], "load's name")?);
+                let x = intern(&mut p.syms, sym_of(&args[2], "the variable's name")?);
+                Op::LoadThenLocal(g, slot(args.get(1), p.nslots)?, x)
+            }
+            "local-then-call" => {
+                arity(3)?;
+                let x = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
+                Op::LocalThenCall(slot(args.first(), p.nslots)?, x, count_of(args.get(2), "call")?)
+            }
+            "const-then-call" => {
+                arity(2)?;
+                p.consts.push(args[0].clone());
+                Op::ConstThenCall(p.consts.len() as u32 - 1, count_of(args.get(1), "call")?)
+            }
+            "local-then-const" => {
+                arity(3)?;
+                let x = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
+                let i = slot(args.first(), p.nslots)?;
+                p.consts.push(args[2].clone());
+                Op::LocalThenConst(i, x, p.consts.len() as u32 - 1)
+            }
+            "jump-if-false-else-load" => {
+                arity(2)?;
+                let t = target(args.first())?;
+                Op::JumpIfFalseElseLoad(t, intern(&mut p.syms, sym_of(&args[1], "load's name")?))
+            }
             "load-local" | "set-local" | "load-cap" | "set-cap" => {
                 arity(2)?;
                 let name = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
@@ -1203,6 +1288,53 @@ fn fuse_def_pop(forms: &[Value]) -> Vec<Value> {
             out.push(forms[i].clone());
             i += 1;
         }
+    }
+    out
+}
+
+/// Superinstructions: the neighbours that run together most often, measured on eeditor's snippets
+/// and the call benchmark (docs/self-hosting/14), become one instruction. Only true neighbours
+/// fuse: a `(label …)` between two instructions keeps them apart, so a jump never lands inside one.
+fn fuse_pairs(forms: &[Value]) -> Vec<Value> {
+    let name = |f: &Value| -> Option<String> {
+        match f {
+            Value::List(l) if !l.is_empty() => match &l[0] {
+                Value::Symbol(s) => Some(s.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    let args = |f: &Value| -> Vec<Value> {
+        match f {
+            Value::List(l) => l[1..].to_vec(),
+            _ => vec![],
+        }
+    };
+    let mut out = Vec::with_capacity(forms.len());
+    let mut i = 0;
+    while i < forms.len() {
+        if i + 1 < forms.len() {
+            let (a, b) = (name(&forms[i]), name(&forms[i + 1]));
+            let fused = match (a.as_deref(), b.as_deref()) {
+                (Some("load"), Some("load-local")) => Some("load-then-local"),
+                (Some("load-local"), Some("call")) => Some("local-then-call"),
+                (Some("const"), Some("call")) => Some("const-then-call"),
+                (Some("load-local"), Some("const")) => Some("local-then-const"),
+                (Some("jump-if-false"), Some("load")) => Some("jump-if-false-else-load"),
+                _ => None,
+            };
+            if let Some(f) = fused {
+                let mut l = vec![Value::Symbol(Sym::new(f))];
+                l.extend(args(&forms[i]));
+                l.extend(args(&forms[i + 1]));
+                out.push(Value::List(Rc::new(l)));
+                i += 2;
+                continue;
+            }
+        }
+        out.push(forms[i].clone());
+        i += 1;
     }
     out
 }
