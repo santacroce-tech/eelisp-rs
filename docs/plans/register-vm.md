@@ -97,7 +97,10 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
 - **Decided: scanning primitives, then a list builder** (tag `register-vm-7`, chapter 19).
   `scan-while`/`scan-until` run the reader's runs in one call each; `list-builder` grows lists
   in place. Reading 35.1 → 27.6 ms. Word-sized values wait.
-- **Next:** the reader's per-token cost (token-kind dispatch, token lists, text), in EELisp.
+- **Then** (tag `register-vm-8`, chapter 20): token-kind dispatch by table (no gain, kept for
+  comments); `scan-back-until` for read-top's comment search; `str`/`str-join` append in place;
+  `str-chars` shares ASCII characters; Fx tried again (even, reverted). Reading 27.6 → 20.2 ms.
+- **Next:** the reader's shape (a list per token, a pair per result), or word-sized values.
   Step 4 (retiring stack code) waits until stack code is rare.
 
 ## What has to stay true

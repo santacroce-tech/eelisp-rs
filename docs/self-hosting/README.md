@@ -25,6 +25,7 @@ become a book.
 | 17 | [A register back end](17-a-register-back-end.md) | The compiler emits register code for calls, and the crossing is ordinary; calls not worth registers, a slot that costs more than it saves, a function that isn't defined while it is compiled (`call-at`), and running code up to 1.9× faster; then counting calls to find the reader's and compiler's costs, intrinsics for `=` and one-argument builtins, reading 12% faster and compiling back where it was; `let`, `if`, `and`, `or` in registers |
 | 18 | [What a call costs](18-what-a-call-costs.md) | Register calls that leave the caller's dead slots alone (a few percent), copying values inline (nothing), and the finding that reading's time is no longer in the machine's calls but in the reader's instructions per character and what it allocates |
 | 19 | [Scanning](19-scanning.md) | Two scanning builtins run the reader's per-character loops while every decision stays in EELisp, and a list builder ends three allocations per element: reading 35.1 → 27.6 ms, half the calls |
+| 20 | [The reader's own costs](20-the-readers-own-costs.md) | Fewer comparisons changed nothing; a profile by builtin found the costs: walking back over comments, `str-join` and `str-chars` allocating per character. Reading 27.6 → 20.2 ms, 2.1× faster than chapter 15 |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every
