@@ -429,6 +429,9 @@ fn run_real(entry: Rc<Proto>, args: Vec<Value>, env: &Env) -> Result<Value, Lisp
     }
 }
 
+/// A program's name, its stack-VM call, its register-code call, the prototype's code and arguments.
+type Case = (&'static str, &'static str, &'static str, Rc<Proto>, Vec<Value>);
+
 fn best<F: FnMut() -> Value>(mut f: F) -> (f64, Value) {
     let mut v = Value::Null;
     let ms = (0..5)
@@ -493,7 +496,7 @@ fn main() {
     .unwrap();
     let env = it.global.clone();
     let spaces = env::get(&env, "spaces").unwrap();
-    let cases: Vec<(&str, &str, &str, Rc<Proto>, Vec<Value>)> = vec![
+    let cases: Vec<Case> = vec![
         ("fib 25", "(fib 25)", "(rfib 25)", fib(), vec![Value::Number(25.0)]),
         ("loop 1M", "(sum-to 1000000)", "(rsum-to 1000000)", sum_to(), vec![Value::Number(1e6)]),
         (

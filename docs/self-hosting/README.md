@@ -21,8 +21,9 @@ become a book.
 | 13 | [A cheaper call](13-a-cheaper-call.md) | Arithmetic computed inline, globals read from where they live; measuring changes smaller than the noise of code layout; compiled loops 1.35× faster |
 | 14 | [Reshaping the VM](14-reshaping-the-vm.md) | Four experiments on the VM's shape, each a commit on `exp/vm-redesign`: lighter frames and local dispatch state kept (about 1.1×), superinstructions measured as no gain, and a mistake in the record corrected |
 | 15 | [The way in](15-the-way-in.md) | Builtins calling compiled code 1.44× faster, the reader linear on large files, and where compiled mode's cost really is: reading, at 100–700 ns per character, with a wrong guess measured and reverted |
+| 16 | [Registers](16-registers.md) | Register instructions in the VM, mixing with stack code: calls and loops 1.2–1.8× faster on hand-written code, the reader's loop not at all, and a dispatch loop that slowed stack code until it was made smaller again |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every
-claim made here are `tests/vm.rs`, `tests/compiler.rs`, `tests/reader.rs` and `tests/bootstrap.rs`; the numbers come from
+claim made here are `tests/vm.rs`, `tests/compiler.rs`, `tests/reader.rs`, `tests/registers.rs` and `tests/bootstrap.rs`; the numbers come from
 `examples/bench.rs`.
