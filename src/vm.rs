@@ -69,6 +69,8 @@
 //! | `(call2 d f x y)` | `d` ← `(f x y)`, `f` a global; the arithmetic fast path applies |
 //! | `(call-global d f r n)` | `d` ← `(f r … r+n-1)`, the arguments in consecutive registers; `d` is a register |
 //! | `(tail-call-global f r n)` | the same in tail position |
+//! | `(call-at d r n)` | `d` ← `(r r+1 … r+n)`: the function in register `r`, its arguments after it — the stack's order, function first, for any callee |
+//! | `(tail-call-at r n)` | the same in tail position |
 //! | `(jump-if-not x L)` | jump when `x` is false or nil |
 //! | `(return-value x)` | return `x` |
 //!
@@ -144,6 +146,11 @@ pub enum Op {
     /// `(tail-call-global f r n)`: f; then `Ext(r, n)`, then a `Return` for when the call can't
     /// replace the frame and its result lands on the stack.
     TailCallGlobal(u32),
+    /// `(call-at d r n)`: d (a register), r (the register holding the function); then
+    /// `Ext(n, 0)`. The arguments are in r+1…r+n.
+    CallAt(u32, u32),
+    /// `(tail-call-at r n)`: r; then `Ext(n, 0)`, then a `Return`, as `TailCallGlobal`.
+    TailCallAt(u32),
     JumpIfNot(u32, u32),
     ReturnValue(u32),
     /// The operands of the instruction before it; never run.
@@ -1006,6 +1013,20 @@ impl Vm {
                         Next::Done(v) => return Ok(v),
                     }
                 }
+                Op::CallAt(_, r) | Op::TailCallAt(r) => {
+                    let (tail_op, d) = match op {
+                        Op::CallAt(d, _) => (false, d),
+                        _ => (true, STACK),
+                    };
+                    let Op::Ext(n, _) = code[pc] else { unreachable!("call-at without its operands") };
+                    pc += 1;
+                    self.frames.last_mut().expect("vm has no frame").pc = pc;
+                    match self.call_function_in(d, r, n, tail_op, sb)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
                 Op::Ext(..) => unreachable!("an instruction's operands were run as an instruction"),
             }
         }
@@ -1039,8 +1060,24 @@ impl Vm {
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     fn call_global(&mut self, d: u32, s: u32, r: u32, n: u32, tail_op: bool, proto: &Proto, sb: usize) -> Result<Next, LispError> {
+        let f = load_global(&self.frames.last().expect("vm has no frame").env, proto, s)?;
+        self.call_regs(f, d, r, n, tail_op, sb)
+    }
+
+    /// `call-at` and `tail-call-at`: the function in register `r`, the arguments after it.
+    #[inline(never)]
+    fn call_function_in(&mut self, d: u32, r: u32, n: u32, tail_op: bool, sb: usize) -> Result<Next, LispError> {
+        let f = match &self.slots[sb + r as usize] {
+            Slot::Val(v) => copy(v),
+            _ => panic!("register {r} read before it was written (malformed bytecode)"),
+        };
+        self.call_regs(f, d, r + 1, n, tail_op, sb)
+    }
+
+    /// Call `f` with the arguments in registers `r…r+n-1`, the result to `d`.
+    #[inline(always)]
+    fn call_regs(&mut self, f: Value, d: u32, r: u32, n: u32, tail_op: bool, sb: usize) -> Result<Next, LispError> {
         let fr = self.frames.last_mut().expect("vm has no frame");
-        let f = load_global(&fr.env, proto, s)?;
         let at = sb + r as usize;
         let tail = tail_op && self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
         // entered in place only when the result goes to a register: a frame entered at the
@@ -1566,6 +1603,25 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                     Op::Ext(r, n)
                 }
             }
+            "call-at" | "tail-call-at" => {
+                let tail = &*op == "tail-call-at";
+                arity(if tail { 2 } else { 3 })?;
+                let d = if tail { STACK } else { reg_of(&args[0], p.nslots, tbase)? };
+                let rest = if tail { &args[..] } else { &args[1..] };
+                let r = reg_of(&rest[0], p.nslots, tbase)?;
+                let n = count_of(rest.get(1), "the argument count")?;
+                if r + n >= p.nslots.unwrap_or(0) {
+                    return Err(bad(format!("a function in register {r} and {n} argument(s) are out of range")));
+                }
+                if tail {
+                    p.code.push(Op::TailCallAt(r));
+                    p.code.push(Op::Ext(n, 0));
+                    Op::Return
+                } else {
+                    p.code.push(Op::CallAt(d, r));
+                    Op::Ext(n, 0)
+                }
+            }
             other => return Err(bad(format!("unknown instruction {other}"))),
         };
         p.code.push(o);
@@ -1577,8 +1633,8 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
 /// How many `Op`s an instruction assembles to: some carry their extra operands in an `Ext`.
 fn width(op: &str) -> u32 {
     match op {
-        "call2" | "call-global" => 2,
-        "tail-call-global" => 3,
+        "call2" | "call-global" | "call-at" => 2,
+        "tail-call-global" | "tail-call-at" => 3,
         _ => 1,
     }
 }

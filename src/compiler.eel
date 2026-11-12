@@ -239,7 +239,7 @@
 (defn compiler-form (x cx tailp)
   (let (h (head x))
     (cond
-      (not (symbol? h)) (compiler-call x cx tailp)
+      (not (symbol? h)) (compiler-call-at x cx tailp)
       (dict-has compiler-specials h) (compiler-special h x cx tailp)
       ;; what a global name means here — unless a local variable has that name
       true (compiler-global-call x cx tailp (if (compiler-local? h cx) nil (vm-global-kind h))))))
@@ -252,7 +252,10 @@
     (= kind "raw") (compiler-call-with x cx tailp (fn (a i cx) (compiler-const a)))
     (= kind "table-first") (compiler-call-with x cx tailp compiler-table-arg)
     (compiler-reg-call? kind x) (compiler-call-reg x cx tailp kind)
-    true (compiler-call x cx tailp)))
+    ;; a builtin of another arity takes its arguments from the stack anyway
+    (= kind "builtin") (compiler-call x cx tailp)
+    ;; not known when compiling (defined later, or a local variable): whatever is there
+    true (compiler-call-at x cx tailp)))
 
 ;; A table command's first argument names the table as written — `(query contacts)` — unless
 ;; it is a call, which is evaluated: `(query (str "con" "tacts"))`. The rest are evaluated.
@@ -333,6 +336,7 @@
           (cond
             (= kind "macro") (compiler-to-reg (vm-macroexpand x) cx d)
             (compiler-reg-call? kind x) (compiler-call-into x cx d kind)
+            (compiler-call-at? x kind) (compiler-call-at-into x cx d)
             true (compiler-cat (compiler-to-stack x (dict-set cx :tmp d) kind)
                                (list (list 'pop-to (compiler-tmp d))))))))))
 
@@ -392,17 +396,44 @@
             (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d))))))
       true (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d)))))))
 
+;; A call compiled with call-at: one whose head is a local variable, a global not known when
+;; compiling (a function defined later, or the one being defined), or not a name at all.
+(defn compiler-call-at? (x kind)
+  (and (nil? kind) (list? x) (not (empty? x))
+       (not (and (symbol? (head x)) (dict-has compiler-specials (head x))))))
+
+;; The function into temporary d, then its arguments after it, then call-at: the function is
+;; read first, as stack code reads it, so a name that isn't defined fails before any argument
+;; is computed.
+(defn compiler-call-at-into (x cx d)
+  (compiler-use-tmp cx d)
+  (compiler-cat (compiler-to-reg (head x) cx d)
+                (compiler-args-to (tail x) cx (+ d 1))
+                (list (list 'call-at (compiler-tmp d) (compiler-tmp d) (length (tail x))))))
+
+;; The same, its value left on the stack (or, in tail position, a tail call).
+(defn compiler-call-at (x cx tailp)
+  (let (d (compiler-tmp-base cx))
+    (if tailp
+      (do
+        (compiler-use-tmp cx d)
+        (compiler-cat (compiler-to-reg (head x) cx d)
+                      (compiler-args-to (tail x) cx (+ d 1))
+                      (list (list 'tail-call-at (compiler-tmp d) (length (tail x))))))
+      (compiler-cat (compiler-call-at-into x cx d) (list (list 'push (compiler-tmp d)))))))
+
 ;; Jump to label unless test is true: a register test needs no trip through the stack.
 (defn compiler-jump-unless (test cx label)
   (let (op (compiler-operand test cx))
     (if op
       (list (list 'jump-if-not op label))
-      (let (kind (compiler-head-kind test cx))
-        (if (compiler-reg-call? kind test)
-          (let (d (compiler-tmp-base cx))
-            (compiler-cat (compiler-call-into test cx d kind)
-                          (list (list 'jump-if-not (compiler-tmp d) label))))
-          (compiler-cat (compiler-expr test cx false) (list (list 'jump-if-false label))))))))
+      (let (kind (compiler-head-kind test cx) d (compiler-tmp-base cx))
+        (cond
+          (compiler-reg-call? kind test)
+            (compiler-cat (compiler-call-into test cx d kind) (list (list 'jump-if-not (compiler-tmp d) label)))
+          (compiler-call-at? test kind)
+            (compiler-cat (compiler-call-at-into test cx d) (list (list 'jump-if-not (compiler-tmp d) label)))
+          true (compiler-cat (compiler-expr test cx false) (list (list 'jump-if-false label))))))))
 
 ;; ── special forms ──────────────────────────────────────────────────────
 

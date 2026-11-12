@@ -309,3 +309,44 @@ fn operands_in_cells_or_unbound_take_the_general_path() {
         (return-value 2)))"#);
     assert_eq!(s(&it, "(f 2)"), "30");
 }
+
+#[test]
+fn call_at_calls_whatever_its_register_holds() {
+    let it = Interpreter::new();
+    it.eval_str("(defn pair (a b) (list a b))").unwrap();
+    def(&it, "fib", FIB);
+    // a function passed in, a global read first (the stack's order: the function, then the
+    // arguments), a compiled function entered in place
+    def(&it, "apply2", r#"(proto :params (f x) :slots 2 :temps 4 :code (
+        (move (t 0) (local 0 f)) (move (t 1) (local 1 x)) (move (t 2) (const 2))
+        (call-at (t 0) (t 0) 2)
+        (global (t 1) fib) (move (t 2) (const 10)) (call-at (t 1) (t 1) 1)
+        (call2 (t 0) list (t 0) (t 1))
+        (return-value (t 0))))"#);
+    assert_eq!(s(&it, "(apply2 pair 1)"), "((1 2) 55)");
+    assert_eq!(s(&it, "(apply2 + 1)"), "(3 55)");
+    assert_eq!(s(&it, "(apply2 (fn (a b) (* a b)) 4)"), "(8 55)");
+    let i = Interpreter::new();
+    assert_eq!(err(&it, "(apply2 5 1)"), err(&i, "(5 1 2)"));
+    // an undefined function fails when it's read, before any argument is computed
+    def(&it, "early", r#"(proto :params () :slots 0 :temps 2 :code (
+        (global (t 0) no-such-function) (call2 (t 1) / (const 1) (const 0)) (call-at (t 0) (t 0) 1)
+        (return-value (t 0))))"#);
+    assert!(err(&it, "(early)").contains("no-such-function"));
+}
+
+#[test]
+fn tail_call_at_runs_in_constant_space() {
+    let it = Interpreter::new();
+    def(&it, "down", r#"(proto :name "down" :params (n) :slots 1 :temps 2 :code (
+        (call2 (t 0) = (local 0 n) (const 0))
+        (jump-if-not (t 0) go)
+        (return-value (const "done"))
+        (label go)
+        (global (t 0) down)
+        (call2 (t 1) - (local 0 n) (const 1))
+        (tail-call-at (t 0) 1)))"#);
+    assert_eq!(s(&it, "(down 1000000)"), "done");
+    let e = err(&it, "(vm-assemble '(proto :slots 2 :code ((call-at 0 1 1))))");
+    assert!(e.contains("out of range"), "{e}");
+}
