@@ -158,8 +158,9 @@ binary nobody can reproduce), and it is the reference for testing.
   macro. Dropped after measuring: scanning code points instead of one-character strings. Running
   compiled code beats the interpreter everywhere (1.1–2.1×). Getting code in doesn't: loading
   eeditor's snippets takes 65 ms against 1.4 ms, 43 ms of it reading at 100–700 ns per character.
-  Open decision: a faster VM, the Rust reader in the engine for now, or a read cache. See
-  docs/self-hosting/15-the-way-in.md.
+  Decided: a read cache now (reading is pure; compiling isn't, so only reading is cached):
+  reloading the snippets 60 → 16 ms, a repeated `(+ 1 2)` 18 → 5.4 µs. A faster VM is the real
+  fix, next. See docs/self-hosting/15-the-way-in.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 

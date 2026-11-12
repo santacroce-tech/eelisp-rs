@@ -42,7 +42,7 @@ fn main() {
         }
         texts.push(("snippet files", all));
     }
-    println!("{:<14} {:>10} {:>10} {:>10} {:>10} {:>10}", "", "read", "compile", "assemble", "run", "eval_str");
+    println!("{:<14} {:>10} {:>10} {:>10} {:>10} {:>10}", "", "read", "compile", "assemble", "run", "eval again");
     for (name, src) in &texts {
         let n = if src.len() > 1000 { 5 } else { 2000 };
         let s = Value::Str(src.as_str().into());
@@ -53,8 +53,24 @@ fn main() {
         let protos: Vec<Value> = forms.iter().map(|f| it.call("compile", std::slice::from_ref(f)).unwrap().unwrap()).collect();
         let comp = per(n, || { for f in &forms { it.call("compile", std::slice::from_ref(f)).unwrap().unwrap(); } });
         let asm = per(n, || { for p in &protos { eelisp::vm::assemble(p).unwrap(); } });
-        let eval = if src.len() > 1000 { f64::NAN } else { per(n, || { it.eval_str(src).unwrap(); }) };
-        let run = eval - read - comp - asm;
+        let eval = if src.len() > 1000 {
+            // a fresh engine loading the text the first time, and again: the second read comes
+            // from the read cache
+            let fresh = Interpreter::new();
+            fresh.set_compiled(true).unwrap();
+            let t = Instant::now();
+            let _ = fresh.eval_all(src);
+            let first = t.elapsed().as_secs_f64() * 1e3;
+            let t = Instant::now();
+            let _ = fresh.eval_all(src);
+            let again = t.elapsed().as_secs_f64() * 1e3;
+            println!("{name}: eval_all first {first:.2} ms, again {again:.2} ms");
+            f64::NAN
+        } else {
+            per(n, || { it.eval_str(src).unwrap(); })
+        };
+        // eval_str of the same text again reads it from the cache, so it is compile + assemble + run
+        let run = eval - comp - asm;
         let f = |us: f64| if us.is_nan() { "-".to_string() } else if us > 1000.0 { format!("{:.2} ms", us / 1000.0) } else { format!("{us:.1} µs") };
         println!("{name:<14} {:>10} {:>10} {:>10} {:>10} {:>10}", f(read), f(comp), f(asm), f(run), f(eval));
     }

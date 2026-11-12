@@ -16,6 +16,7 @@ struct Parser {
 }
 
 /// A top-level form together with how it was written.
+#[derive(Clone)]
 pub struct TopForm {
     pub value: Value,
     /// The form's own text, exactly as it appears in the source.

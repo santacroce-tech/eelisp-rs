@@ -1,6 +1,7 @@
 //! High-level API — the surface a host (REPL, native binding, WASM) calls (ANALYSIS §5).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 #[cfg(feature = "sqlite")]
@@ -41,7 +42,23 @@ pub struct Interpreter {
     reader: RefCell<Option<Value>>,
     /// Whether top-level forms are compiled and run on the VM instead of interpreted.
     compiled: std::cell::Cell<bool>,
+    /// Texts the EELisp reader has read, with what it read (`read`).
+    read_cache: RefCell<ReadCache>,
 }
+
+/// What the EELisp reader made of texts it has read before. Reading is pure (the same text gives
+/// the same forms, whatever the engine has defined), so an editor reloading files it has already
+/// loaded doesn't pay for reading them again. Compiling isn't pure (a macro defined since changes
+/// what a form compiles to), so only reading is remembered.
+///
+/// It holds at most `READ_CACHE_BYTES` of source text, and starts over when that fills up.
+#[derive(Default)]
+struct ReadCache {
+    texts: HashMap<Rc<str>, Rc<[parser::TopForm]>>,
+    bytes: usize,
+}
+
+const READ_CACHE_BYTES: usize = 4 << 20;
 
 impl Interpreter {
     /// In-memory database (the default).
@@ -139,6 +156,7 @@ impl Interpreter {
             compiler: RefCell::new(None),
             reader: RefCell::new(None),
             compiled: std::cell::Cell::new(false),
+            read_cache: RefCell::new(ReadCache::default()),
         };
         if let Err(e) = it.eval_str(prelude::PRELUDE) {
             panic!("prelude failed to load: {}", e);
@@ -200,9 +218,28 @@ impl Interpreter {
     /// mode, by the Rust one otherwise. Both read the same forms and fail with the same errors
     /// (`tests/reader.rs`).
     fn read(&self, src: &str) -> Result<Vec<parser::TopForm>, LispError> {
+        if !self.compiled.get() || self.reader.borrow().is_none() {
+            return parser::top_forms(src);
+        }
+        if let Some(forms) = self.read_cache.borrow().texts.get(src) {
+            return Ok(forms.to_vec());
+        }
+        let forms = self.read_uncached(src)?;
+        let mut cache = self.read_cache.borrow_mut();
+        if src.len() <= READ_CACHE_BYTES {
+            if cache.bytes + src.len() > READ_CACHE_BYTES {
+                *cache = ReadCache::default();
+            }
+            cache.bytes += src.len();
+            cache.texts.insert(src.into(), forms.clone().into());
+        }
+        Ok(forms)
+    }
+
+    fn read_uncached(&self, src: &str) -> Result<Vec<parser::TopForm>, LispError> {
         let reader = self.reader.borrow().clone();
         match reader {
-            Some(read_top) if self.compiled.get() => {
+            Some(read_top) => {
                 let forms = eval::apply_value(&read_top, &[Value::Str(src.into())], &self.global)?;
                 let bad = || LispError::Runtime("read-top returned something other than (form source comments)".into());
                 let Value::List(forms) = forms else { return Err(bad()) };

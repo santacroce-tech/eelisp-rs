@@ -134,3 +134,26 @@ per-character cost of EELisp code on this VM is the floor. Three ways forward:
 Switching compiled mode on by default also means accepting, or fixing, the five known differences
 from the interpreter listed in the roadmap. Each is about errors or about definition order, and
 none changes a correct program's result.
+
+## The first answer: read each text once
+
+The third option came first, since it is safe today. In compiled mode the engine now remembers
+what the EELisp reader made of each text it read, keyed by the text itself. The cache holds at
+most 4 MB of source and starts over when it fills.
+
+Only reading is remembered. A cached text's forms are still compiled and run every time, because
+compiling depends on what is defined: a macro redefined since changes what a form compiles to.
+`tests/compiled.rs` checks exactly that. The same text is evaluated before and after its macro is
+redefined, and its definitions run again. A text that fails to read fails every time, since
+errors aren't cached, and `(source f)` still finds a definition's text and comments when the
+definition was read from the cache.
+
+| compiled | first time | again |
+|---|---|---|
+| load eeditor's snippet files | 60.2 ms | 16.0 ms |
+| `eval (+ 1 2)` | 18 µs | 5.4 µs |
+| `eval` a `let` with a `map` | 87 µs | 29 µs |
+
+An editor that reloads its files, or evaluates the same text repeatedly, now pays mostly for
+compiling. The first load still pays for reading. That cost is the faster VM's job, the next
+branch.

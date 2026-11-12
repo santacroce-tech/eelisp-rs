@@ -213,3 +213,31 @@ fn arithmetic_fast_path_follows_redefinition() {
     ev(&it, "(def * (fn (a b) 42))");
     assert_eq!(ev(&it, "(mul2 3 4)"), "42");
 }
+
+/// Texts read before are taken from the read cache. Reading is all it remembers: the forms are
+/// compiled and run again each time, so definitions and macros made since are seen.
+#[test]
+fn a_text_read_again_is_still_compiled_and_run_again() {
+    let it = compiled();
+    let src = "(def counter (+ counter 1)) (m)";
+    ev(&it, "(def counter 0) (defmacro m () 1)");
+    assert_eq!(ev(&it, src), "1");
+    assert_eq!(ev(&it, "counter"), "1");
+    ev(&it, "(defmacro m () 2)");
+    assert_eq!(ev(&it, src), "2", "the macro redefined since is used");
+    assert_eq!(ev(&it, "counter"), "2", "the cached forms ran again");
+    // `(source f)` still finds the text and the comments of a definition read from the cache
+    let def = ";; doubles\n(defn twice (x) (* 2 x))";
+    ev(&it, def);
+    ev(&it, def);
+    assert_eq!(ev(&it, "(source twice)"), ev(&Interpreter::new(), &format!("{def} (source twice)")));
+}
+
+#[test]
+fn a_text_that_fails_to_read_fails_every_time() {
+    let it = compiled();
+    for _ in 0..2 {
+        let err = it.eval_str("(+ 1").unwrap_err();
+        assert!(matches!(err, eelisp::LispError::Parse(_)), "{err:?}");
+    }
+}
