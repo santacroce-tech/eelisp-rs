@@ -249,15 +249,16 @@ fn load_global(env: &Env, proto: &Proto, s: u32) -> Result<Value, LispError> {
     Ok(v)
 }
 
-/// The arithmetic a global stands for, when the cache says where it is and it is a builtin with
-/// a fast path: read in place, without copying the value out (and dropping the copy).
+/// The builtin a global holds, when the cache says where it is: read in place, without copying
+/// the value out (and dropping the copy). The reference must not outlive anything that can run
+/// code — a builtin's call may redefine globals and move them.
 #[inline(always)]
-fn fast_global(env: &Env, proto: &Proto, s: u32) -> Option<FastOp> {
+fn peek_builtin<'a>(env: &Env, proto: &Proto, s: u32) -> Option<&'a Builtin> {
     let c = proto.globals[s as usize].get();
     if c.scope == Rc::as_ptr(env) && c.layout == env::layout() && unsafe { env.try_borrow_unguarded() }.is_ok() {
         // SAFETY: as in `load_global`
         if let Value::Builtin(b) = unsafe { &*c.value } {
-            return b.fast;
+            return Some(&**b);
         }
     }
     None
@@ -561,6 +562,24 @@ fn operand(x: u32, slots: &[Slot], sb: usize, proto: &Proto, fr: &Frame) -> Resu
                 None => env::get_sym(&fr.env, &proto.syms[s as usize]),
             }
         }
+    }
+}
+
+/// A register operand where it lies, without copying it: a register, a constant, or a local
+/// holding a plain value. `None` for the rest (a cell, an unbound local, a capture), which are
+/// read with `operand`.
+#[inline(always)]
+fn operand_ref<'a>(x: u32, slots: &'a [Slot], sb: usize, proto: &'a Proto) -> Option<&'a Value> {
+    let i = (x & OPERAND_INDEX) as usize;
+    let slot = match x >> OPERAND_SHIFT {
+        OPERAND_REG => &slots[sb + i],
+        OPERAND_CONST => return Some(&proto.consts[i]),
+        OPERAND_LOCAL => &slots[sb + proto.named[i].0 as usize],
+        _ => return None,
+    };
+    match slot {
+        Slot::Val(v) => Some(v),
+        _ => None,
     }
 }
 
@@ -949,13 +968,21 @@ impl Vm {
                     let Op::Ext(a, b) = code[pc] else { unreachable!("call2 without its operands") };
                     pc += 1;
                     let fr = self.frames.last_mut().expect("vm has no frame");
-                    // `(< n 2)` and the like: the builtin is read where it lives, not copied
-                    if let Some(op) = fast_global(&fr.env, &proto, s) {
-                        let x = operand(a, &self.slots, sb, &proto, fr)?;
-                        let y = operand(b, &self.slots, sb, &proto, fr)?;
-                        if let (Value::Number(x), Value::Number(y)) = (&x, &y) {
-                            deliver(&mut self.stack, &mut self.slots, sb, d, op.apply(*x, *y));
-                            continue;
+                    // `(< n 2)`, `(nth cs i)` and the like: the builtin and the operands are read
+                    // where they are, not copied
+                    if let Some(bi) = peek_builtin(&fr.env, &proto, s) {
+                        if let (Some(x), Some(y)) =
+                            (operand_ref(a, &self.slots, sb, &proto), operand_ref(b, &self.slots, sb, &proto))
+                        {
+                            let v = match (bi.fast, bi.intrinsic, x, y) {
+                                (Some(op), _, Value::Number(x), Value::Number(y)) => Some(op.apply(*x, *y)),
+                                (_, Some(i), x, y) => i.apply(x, y),
+                                _ => None,
+                            };
+                            if let Some(v) = v {
+                                deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                                continue;
+                            }
                         }
                     }
                     fr.pc = pc;
@@ -1669,7 +1696,7 @@ fn instr(f: &Value) -> Result<(Sym, Vec<Value>), LispError> {
 }
 
 fn builtin(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) {
-    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.into(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })));
+    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.into(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None, intrinsic: None })));
 }
 
 fn one<'a>(name: &str, args: &'a [Value]) -> Result<&'a Value, LispError> {

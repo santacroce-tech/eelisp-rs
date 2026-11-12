@@ -256,3 +256,56 @@ fn labels_count_the_wider_instructions() {
         (jump back)))"#);
     assert_eq!(s(&it, "(f 1)"), "(2)");
 }
+
+#[test]
+fn nth_and_dict_get_inside_the_instruction_mean_what_the_builtins_mean() {
+    let it = Interpreter::new();
+    let i = Interpreter::new();
+    def(&it, "rnth", r#"(proto :params (l k) :slots 3 :code ((call2 2 nth (local 0 l) (local 1 k)) (return-value 2)))"#);
+    def(&it, "rget", r#"(proto :params (d k) :slots 3 :code ((call2 2 dict-get (local 0 d) (local 1 k)) (return-value 2)))"#);
+    let cases = [
+        ("rnth", "nth", "(list 1 2 3)", "1"),
+        ("rnth", "nth", "(list 1 2 3)", "7"),
+        ("rnth", "nth", "(list 1 2 3)", "-1"),
+        ("rnth", "nth", "(list 1 2 3)", "1.7"),
+        ("rnth", "nth", "(list)", "0"),
+        ("rget", "dict-get", r#"{"a" 1 :b 2}"#, r#""a""#),
+        ("rget", "dict-get", r#"{"a" 1 :b 2}"#, ":b"),
+        ("rget", "dict-get", r#"{"a" 1 :b 2}"#, "'b"),
+        ("rget", "dict-get", r#"{"a" 1 :b 2}"#, r#""zz""#),
+    ];
+    for (r, b, x, y) in cases {
+        assert_eq!(s(&it, &format!("({r} {x} {y})")), s(&i, &format!("({b} {x} {y})")), "({b} {x} {y})");
+    }
+    // what they don't cover goes to the builtin, and fails as it does
+    for (r, b, x, y) in [
+        ("rnth", "nth", r#""abc""#, "1"),
+        ("rnth", "nth", "(list 1 2)", r#""x""#),
+        ("rget", "dict-get", "(list 1)", r#""a""#),
+        ("rget", "dict-get", r#"{"a" 1}"#, "5"),
+    ] {
+        assert_eq!(err(&it, &format!("({r} {x} {y})")), err(&i, &format!("({b} {x} {y})")), "({b} {x} {y})");
+    }
+}
+
+#[test]
+fn a_redefined_nth_is_called_not_the_intrinsic() {
+    let it = Interpreter::new();
+    def(&it, "rnth", r#"(proto :params (l k) :slots 3 :code ((call2 2 nth (local 0 l) (local 1 k)) (return-value 2)))"#);
+    assert_eq!(s(&it, "(rnth (list 1 2 3) 0)"), "1");
+    it.eval_str("(defn nth (l k) :mine)").unwrap();
+    assert_eq!(s(&it, "(rnth (list 1 2 3) 0)"), ":mine");
+}
+
+#[test]
+fn operands_in_cells_or_unbound_take_the_general_path() {
+    let it = Interpreter::new();
+    it.eval_str("(def xs (list 10 20 30))").unwrap();
+    // slot 1 unbound: the global xs; slot 0 captured by a closure: a cell
+    def(&it, "f", r#"(proto :params (k) :slots 3 :code (
+        (closure (proto :params () :slots 0 :captures ((local 0)) :code ((return-value (cap 0 k)))))
+        (pop)
+        (call2 2 nth (local 1 xs) (local 0 k))
+        (return-value 2)))"#);
+    assert_eq!(s(&it, "(f 2)"), "30");
+}

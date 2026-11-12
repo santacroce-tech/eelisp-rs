@@ -36,7 +36,7 @@ fn define(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, Lis
     env::define(
         env,
         name,
-        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })),
+        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None, intrinsic: None })),
     );
 }
 

@@ -171,7 +171,7 @@ fn folder_arg(fname: &str, args: &[Value]) -> Result<String, LispError> {
 }
 
 fn b(env: &Env, name: &str, f: impl Fn(&[Value], &Env) -> Result<Value, LispError> + 'static) {
-    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })));
+    env::define(env, name, Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None, intrinsic: None })));
 }
 
 pub fn register(env: &Env, host: Host) {

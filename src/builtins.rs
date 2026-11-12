@@ -15,6 +15,9 @@ pub fn register(env: &Env) {
             b!($name, $f, None)
         };
         ($name:expr, $f:expr, $fast:expr) => {
+            b!($name, $f, $fast, None)
+        };
+        ($name:expr, $f:expr, $fast:expr, $intrinsic:expr) => {
             env::define(
                 env,
                 $name,
@@ -23,6 +26,7 @@ pub fn register(env: &Env) {
                     arg_mode: ArgMode::Eval,
                     func: Box::new($f),
                     fast: $fast,
+                    intrinsic: $intrinsic,
                 })),
             );
         };
@@ -74,7 +78,7 @@ pub fn register(env: &Env) {
     b!("head", car);
     b!("cdr", cdr);
     b!("tail", cdr);
-    b!("nth", nth);
+    b!("nth", nth, None, Some(Intrinsic::Nth));
     b!("slice", slice);
     b!("length", length);
     b!("append", append);
@@ -88,7 +92,7 @@ pub fn register(env: &Env) {
     b!("sort-by", sort_by);
     // dicts
     b!("dict", dictf);
-    b!("dict-get", dict_get);
+    b!("dict-get", dict_get, None, Some(Intrinsic::DictGet));
     b!("dict-set", dict_set);
     b!("dict-keys", dict_keys);
     b!("dict-values", dict_values);

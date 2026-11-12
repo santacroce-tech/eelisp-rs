@@ -422,6 +422,7 @@ impl Interpreter {
                 arg_mode: crate::value::ArgMode::Eval,
                 func: Box::new(move |args, _| f(args)),
                 fast: None,
+                intrinsic: None,
             })),
         );
     }

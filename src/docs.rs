@@ -442,6 +442,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
                 fast: None,
+                intrinsic: None,
             })),
         );
     }
@@ -469,6 +470,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
                 fast: None,
+                intrinsic: None,
             })),
         );
     }
@@ -488,6 +490,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
                 fast: None,
+                intrinsic: None,
             })),
         );
     }
@@ -511,6 +514,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 arg_mode: ArgMode::TableFirst,
                 func: Box::new(f),
                 fast: None,
+                intrinsic: None,
             })),
         );
     }

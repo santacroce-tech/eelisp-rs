@@ -198,6 +198,39 @@ pub struct Builtin {
     /// when called with two numbers, without the call through `func`. It's the builtin value that
     /// carries it, so a program that redefines `+` gets its own `+`, with no fast path.
     pub fast: Option<FastOp>,
+    /// Set on a few builtins that register code runs inside the instruction when the global
+    /// still holds them: `nth` and `dict-get`, which the reader calls for every character. The
+    /// operands are read where they are, not copied into an argument array; anything the
+    /// intrinsic doesn't cover goes to `func` as before.
+    pub intrinsic: Option<Intrinsic>,
+}
+
+/// The builtins register code runs inline (see `Builtin::intrinsic`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Intrinsic {
+    Nth,
+    DictGet,
+}
+
+impl Intrinsic {
+    /// The result for two arguments, exactly as the builtin computes it, or `None` when the
+    /// arguments aren't the kinds covered here (the builtin then runs, and fails as it does).
+    #[inline(always)]
+    pub fn apply(self, a: &Value, b: &Value) -> Option<Value> {
+        match (self, a, b) {
+            (Intrinsic::Nth, Value::List(l), Value::Number(i)) => Some(l.get(*i as usize).cloned().unwrap_or(Value::Null)),
+            (Intrinsic::DictGet, Value::Dict(d), k) => {
+                let k = match k {
+                    Value::Str(k) => &k[..],
+                    Value::Keyword(k) => k.as_str(),
+                    Value::Symbol(k) => &**k,
+                    _ => return None,
+                };
+                Some(d.get(k).cloned().unwrap_or(Value::Null))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The operations the VM computes inline (see `Builtin::fast`).
