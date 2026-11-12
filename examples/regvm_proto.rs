@@ -257,6 +257,178 @@ fn skip() -> Rc<Proto> {
     ))
 }
 
+// ─────────── the same machine, carrying the real machine's costs ───────────
+//
+// `run` above is a ceiling. `run_real` adds what the stack VM's frames and slots carry, to see
+// how much of the gain survives: registers that can be unbound (their name then means the
+// global) or shared with a closure through a cell, a frame holding its environment, its
+// captured cells and where its loop marks and handlers start, and a callee entered through its
+// function value (its closure becomes the frame's environment).
+
+type Shared = Rc<std::cell::RefCell<Option<Value>>>;
+
+#[derive(Clone)]
+enum Reg {
+    Unbound,
+    Val(Value),
+    #[allow(dead_code)]
+    Cell(Shared),
+}
+
+struct RealFrame {
+    proto: Rc<Proto>,
+    pc: usize,
+    base: usize,
+    ret: usize,
+    env: Env,
+    #[allow(dead_code)]
+    upvals: Option<Rc<[eelisp::vm::Cell]>>,
+    #[allow(dead_code)]
+    mark0: u32,
+    #[allow(dead_code)]
+    handler0: u32,
+}
+
+#[inline(always)]
+fn copy(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => Value::Number(*n),
+        Value::Bool(b) => Value::Bool(*b),
+        Value::Null => Value::Null,
+        other => other.clone(),
+    }
+}
+
+/// A register's value. An unbound one would mean the global of the slot's name; the hand-written
+/// programs never read one, but the check is paid.
+#[inline(always)]
+fn reg(r: &Reg) -> Value {
+    match r {
+        Reg::Val(v) => copy(v),
+        Reg::Cell(c) => c.borrow().clone().expect("unbound cell"),
+        Reg::Unbound => panic!("the prototype reads no unbound register"),
+    }
+}
+
+#[inline(always)]
+fn rk_real(regs: &[Reg], base: usize, consts: &[Value], x: Rk) -> Value {
+    match x {
+        Rk::R(r) => reg(&regs[base + r as usize]),
+        Rk::K(k) => copy(&consts[k as usize]),
+    }
+}
+
+#[inline(always)]
+fn set_reg(r: &mut Reg, v: Value) {
+    match r {
+        Reg::Cell(c) => *c.borrow_mut() = Some(v),
+        r => *r = Reg::Val(v),
+    }
+}
+
+fn run_real(entry: Rc<Proto>, args: Vec<Value>, env: &Env) -> Result<Value, LispError> {
+    let mut regs: Vec<Reg> = args.into_iter().map(Reg::Val).collect();
+    regs.resize(entry.nregs, Reg::Unbound);
+    let mut frames =
+        vec![RealFrame { proto: entry, pc: 0, base: 0, ret: 0, env: env.clone(), upvals: None, mark0: 0, handler0: 0 }];
+    'frame: loop {
+        let (proto, mut pc, base, fenv) = {
+            let f = frames.last().unwrap();
+            (f.proto.clone(), f.pc, f.base, f.env.clone())
+        };
+        let code = &proto.code;
+        loop {
+            let op = code[pc];
+            pc += 1;
+            match op {
+                Op::LoadK(d, k) => set_reg(&mut regs[base + d as usize], copy(&proto.consts[k as usize])),
+                Op::Move(d, s) => {
+                    let v = reg(&regs[base + s as usize]);
+                    set_reg(&mut regs[base + d as usize], v)
+                }
+                Op::Global(d, s) => {
+                    let v = global(&fenv, &proto, s)?;
+                    set_reg(&mut regs[base + d as usize], v)
+                }
+                Op::Jump(t) => pc = t as usize,
+                Op::JumpIfNot(r, t) => {
+                    let v = reg(&regs[base + r as usize]);
+                    if !truthy(&v) {
+                        pc = t as usize
+                    }
+                }
+                Op::CallG2(d, s, a, b) => {
+                    let f = global(&fenv, &proto, s)?;
+                    let v = match &f {
+                        Value::Builtin(bi) => {
+                            let (x, y) = (&regs[base..], &proto.consts);
+                            match (bi.fast, a, b) {
+                                (Some(op), a, b) => {
+                                    let (x, y) = (rk_real(x, 0, y, a), rk_real(x, 0, y, b));
+                                    match (&x, &y) {
+                                        (Value::Number(x), Value::Number(y)) => op.apply(*x, *y),
+                                        _ => (bi.func)(&[x, y], &fenv)?,
+                                    }
+                                }
+                                (None, a, b) => {
+                                    let args = [rk_real(x, 0, y, a), rk_real(x, 0, y, b)];
+                                    (bi.func)(&args, &fenv)?
+                                }
+                            }
+                        }
+                        _ => unimplemented!("the prototype calls builtins with call2"),
+                    };
+                    set_reg(&mut regs[base + d as usize], v);
+                }
+                Op::CallG(d, s, a, n) => {
+                    let f = global(&fenv, &proto, s)?;
+                    let at = base + a as usize;
+                    if let (Some(callee), Value::Function(func)) = (proto.callees[s as usize].get(), &f) {
+                        frames.last_mut().unwrap().pc = pc;
+                        let need = at + callee.nregs;
+                        regs.truncate(at + n as usize);
+                        regs.resize(need, Reg::Unbound);
+                        frames.push(RealFrame {
+                            proto: callee.clone(),
+                            pc: 0,
+                            base: at,
+                            ret: base + d as usize,
+                            env: func.closure.clone(),
+                            upvals: func.upvals.clone(),
+                            mark0: 0,
+                            handler0: 0,
+                        });
+                        continue 'frame;
+                    }
+                    let v = match &f {
+                        Value::Builtin(bi) => {
+                            let args: Vec<Value> = regs[at..at + n as usize].iter().map(reg).collect();
+                            (bi.func)(&args, &fenv)?
+                        }
+                        _ => unimplemented!("the prototype calls builtins and register code"),
+                    };
+                    set_reg(&mut regs[base + d as usize], v);
+                }
+                Op::Return(x) => {
+                    let v = rk_real(&regs, base, &proto.consts, x);
+                    let done = frames.pop().unwrap();
+                    match frames.last() {
+                        None => {
+                            regs.clear();
+                            return Ok(v);
+                        }
+                        Some(caller) => {
+                            regs.truncate(caller.base + caller.proto.nregs);
+                            set_reg(&mut regs[done.ret], v);
+                            continue 'frame;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn best<F: FnMut() -> Value>(mut f: F) -> (f64, Value) {
     let mut v = Value::Null;
     let ms = (0..5)
@@ -293,11 +465,13 @@ fn main() {
             vec![spaces, Value::Number(300000.0), Value::Number(0.0)],
         ),
     ];
-    println!("{:<16} {:>12} {:>12} {:>8}", "", "stack VM", "registers", "");
+    println!("{:<16} {:>12} {:>12} {:>8} {:>12} {:>8}", "", "stack VM", "registers", "", "real costs", "");
     for (name, src, proto, args) in cases {
         let (a, va) = best(|| it.eval_str(src).unwrap());
         let (b, vb) = best(|| run(proto.clone(), args.clone(), &env).unwrap());
+        let (c, vc) = best(|| run_real(proto.clone(), args.clone(), &env).unwrap());
         assert_eq!(va, vb, "{name}: the two machines disagree");
-        println!("{name:<16} {a:9.1} ms {b:9.1} ms {:7.2}x", a / b);
+        assert_eq!(va, vc, "{name}: the stack VM and the realistic machine disagree");
+        println!("{name:<16} {a:9.1} ms {b:9.1} ms {:7.2}x {c:9.1} ms {:7.2}x", a / b, a / c);
     }
 }

@@ -20,16 +20,24 @@ in version 5 for the same reasons.
 Hand-written register code, run with the same global cache, the same builtins and the same fast
 path for arithmetic as the real VM:
 
-| | stack VM | registers | |
-|---|---|---|---|
-| `fib 25` | 17.3 ms | 9.4 ms | 1.84× |
-| a loop of 1M | 47.3 ms | 22.2 ms | 2.13× |
-| the reader's whitespace loop | 28.6 ms | 19.8 ms | 1.44× |
+| | stack VM | registers | | with real costs | |
+|---|---|---|---|---|---|
+| `fib 25` | 18.7 ms | 10.0 ms | 1.86× | 12.0 ms | 1.55× |
+| a loop of 1M | 50.6 ms | 24.6 ms | 2.05× | 35.3 ms | 1.43× |
+| the reader's whitespace loop | 30.4 ms | 20.8 ms | 1.46× | 23.2 ms | 1.31× |
 
-It leaves out what the real machine must do: slots that aren't bound yet (whose name then means
-the global), slots captured by closures (cells), `loop` marks and `try` handlers, `def` into a
-named scope, closures, macros, errors. Some of that will show in the numbers. The prototype gives
-a ceiling and a direction, not a result.
+The first runner leaves out what the real machine must do: slots that aren't bound yet (whose
+name then means the global), slots captured by closures (cells), `loop` marks and `try`
+handlers, `def` into a named scope, closures, macros, errors. Chapter 14 found that cutting
+dispatches alone (superinstructions) gained nothing, so the obvious worry was that the gain came
+from those omissions, not from registers.
+
+The second runner (`run_real`) pays the costs the stack VM's frames and slots carry: registers
+that can be unbound or hold a cell, checked on every read and write; a frame holding its
+environment, captured cells and mark/handler bases; a callee entered through its function value,
+whose closure becomes the frame's environment. Most of the gain survives: 1.3–1.55×. What's left
+out (marks for `loop`, which the hand-written loop replaces with a jump) would cost the loop
+some of its 1.43×.
 
 ## Steps
 
