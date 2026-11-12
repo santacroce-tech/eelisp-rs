@@ -343,6 +343,14 @@ fn list_val(v: Vec<Value>) -> Value {
 fn display(v: &Value) -> String {
     crate::printer::print_value(v, false)
 }
+/// `display(v)` appended to `out`: a string as its own text, with no string made for it on the
+/// way. `str` and `str-join` build their result this way, one allocation for the whole.
+fn push_display(out: &mut String, v: &Value) {
+    match v {
+        Value::Str(s) => out.push_str(s),
+        other => out.push_str(&display(other)),
+    }
+}
 
 // ---- arithmetic ----
 
@@ -520,7 +528,11 @@ fn notf(args: &[Value], _: &Env) -> Result<Value, LispError> {
 // ---- strings ----
 
 fn strf(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    Ok(Value::Str(args.iter().map(display).collect::<String>().into()))
+    let mut out = String::new();
+    for a in args {
+        push_display(&mut out, a);
+    }
+    Ok(Value::Str(out.into()))
 }
 fn str_len(args: &[Value], _: &Env) -> Result<Value, LispError> {
     match &args[0] {
@@ -565,8 +577,14 @@ fn str_join(args: &[Value], _: &Env) -> Result<Value, LispError> {
         (Some(Value::List(l)), None) => (String::new(), l.clone()),
         _ => return Err(LispError::InvalidSyntax("str-join expects a list and a separator".into())),
     };
-    let parts: Vec<String> = list.iter().map(display).collect();
-    Ok(Value::Str(parts.join(&sep).into()))
+    let mut out = String::new();
+    for (i, v) in list.iter().enumerate() {
+        if i > 0 {
+            out.push_str(&sep);
+        }
+        push_display(&mut out, v);
+    }
+    Ok(Value::Str(out.into()))
 }
 fn str_contains(args: &[Value], _: &Env) -> Result<Value, LispError> {
     if let (Value::Str(s), Value::Str(sub)) = (&args[0], &args[1]) {
