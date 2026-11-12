@@ -958,24 +958,8 @@ impl Vm {
                             continue;
                         }
                     }
-                    // the same order as the stack code: the function, then each argument
-                    let f = load_global(&fr.env, &proto, s)?;
-                    let x = operand(a, &self.slots, sb, &proto, fr)?;
-                    let y = operand(b, &self.slots, sb, &proto, fr)?;
-                    if let Value::Builtin(bi) = &f {
-                        let v = match (bi.fast, &x, &y) {
-                            (Some(op), Value::Number(x), Value::Number(y)) => op.apply(*x, *y),
-                            _ => (bi.func)(&[x, y], &fr.env)?,
-                        };
-                        deliver(&mut self.stack, &mut self.slots, sb, d, v);
-                        continue;
-                    }
-                    // anything else is called the general way, from the stack
                     fr.pc = pc;
-                    self.stack.push(f);
-                    self.stack.push(x);
-                    self.stack.push(y);
-                    match self.call_to(2, false, d)? {
+                    match self.call2(d, s, a, b, &proto, sb)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -988,55 +972,8 @@ impl Vm {
                     };
                     let Op::Ext(r, n) = code[pc] else { unreachable!("call-global without its operands") };
                     pc += 1;
-                    let fr = self.frames.last_mut().expect("vm has no frame");
-                    let f = load_global(&fr.env, &proto, s)?;
-                    let at = sb + r as usize;
-                    let tail = tail_op && self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
-                    // entered in place only when the result goes to a register: a frame entered at
-                    // the argument registers must give them back on return (`ret`)
-                    let place = if tail || d != STACK { in_place(&f, n) } else { None };
-                    if let Some((func, callee, k)) = place {
-                        if tail {
-                            // the arguments move down to where this frame's slots start, and
-                            // the callee's frame takes this one's place
-                            for j in 0..n as usize {
-                                self.slots.swap(sb + j, at + j);
-                            }
-                            self.slots.truncate(sb + n as usize);
-                            fill_to(&mut self.slots, sb + k);
-                            self.stack.truncate(fr.base);
-                            let mut frame = Frame::new(callee.clone(), func.closure.clone(), fr.base, sb, func.upvals.clone());
-                            frame.mark0 = self.marks.len() as u32;
-                            frame.handler0 = self.handlers.len() as u32;
-                            frame.dst = fr.dst;
-                            *fr = frame;
-                            continue 'frame;
-                        }
-                        fr.pc = pc;
-                        if self.frames.len() >= MAX_FRAMES {
-                            return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
-                        }
-                        // the arguments are already the callee's first slots
-                        self.slots.truncate(at + n as usize);
-                        fill_to(&mut self.slots, at + k);
-                        let mut frame = Frame::new(callee.clone(), func.closure.clone(), self.stack.len(), at, func.upvals.clone());
-                        frame.mark0 = self.marks.len() as u32;
-                        frame.handler0 = self.handlers.len() as u32;
-                        frame.dst = d;
-                        self.frames.push(frame);
-                        continue 'frame;
-                    }
-                    // anything else is called the general way, from the stack
-                    fr.pc = pc;
-                    self.stack.push(f);
-                    for j in 0..n as usize {
-                        let v = match &self.slots[at + j] {
-                            Slot::Val(v) => copy(v),
-                            _ => panic!("register {} read before it was written (malformed bytecode)", r as usize + j),
-                        };
-                        self.stack.push(v);
-                    }
-                    match self.call_to(n as usize, tail, d)? {
+                    self.frames.last_mut().expect("vm has no frame").pc = pc;
+                    match self.call_global(d, s, r, n, tail_op, &proto, sb)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -1046,6 +983,82 @@ impl Vm {
             }
         }
         }
+    }
+
+    /// `call2` when the fast path didn't apply: a builtin called with its two arguments, or
+    /// anything else called the general way. Out of line, to keep the dispatch loop small.
+    #[inline(never)]
+    fn call2(&mut self, d: u32, s: u32, a: u32, b: u32, proto: &Proto, sb: usize) -> Result<Next, LispError> {
+        let fr = self.frames.last().expect("vm has no frame");
+        // the same order as the stack code: the function, then each argument
+        let f = load_global(&fr.env, proto, s)?;
+        let x = operand(a, &self.slots, sb, proto, fr)?;
+        let y = operand(b, &self.slots, sb, proto, fr)?;
+        if let Value::Builtin(bi) = &f {
+            let v = match (bi.fast, &x, &y) {
+                (Some(op), Value::Number(x), Value::Number(y)) => op.apply(*x, *y),
+                _ => (bi.func)(&[x, y], &fr.env)?,
+            };
+            deliver(&mut self.stack, &mut self.slots, sb, d, v);
+            return Ok(Next::Stay);
+        }
+        self.stack.push(f);
+        self.stack.push(x);
+        self.stack.push(y);
+        self.call_to(2, false, d)
+    }
+
+    /// `call-global` and `tail-call-global`: the arguments in registers `r…r+n-1`.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn call_global(&mut self, d: u32, s: u32, r: u32, n: u32, tail_op: bool, proto: &Proto, sb: usize) -> Result<Next, LispError> {
+        let fr = self.frames.last_mut().expect("vm has no frame");
+        let f = load_global(&fr.env, proto, s)?;
+        let at = sb + r as usize;
+        let tail = tail_op && self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
+        // entered in place only when the result goes to a register: a frame entered at the
+        // argument registers must give them back on return (`ret`)
+        let place = if tail || d != STACK { in_place(&f, n) } else { None };
+        if let Some((func, callee, k)) = place {
+            if tail {
+                // the arguments move down to where this frame's slots start, and the callee's
+                // frame takes this one's place
+                for j in 0..n as usize {
+                    self.slots.swap(sb + j, at + j);
+                }
+                self.slots.truncate(sb + n as usize);
+                fill_to(&mut self.slots, sb + k);
+                self.stack.truncate(fr.base);
+                let mut frame = Frame::new(callee.clone(), func.closure.clone(), fr.base, sb, func.upvals.clone());
+                frame.mark0 = self.marks.len() as u32;
+                frame.handler0 = self.handlers.len() as u32;
+                frame.dst = fr.dst;
+                *fr = frame;
+                return Ok(Next::Switch);
+            }
+            if self.frames.len() >= MAX_FRAMES {
+                return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
+            }
+            // the arguments are already the callee's first slots
+            self.slots.truncate(at + n as usize);
+            fill_to(&mut self.slots, at + k);
+            let mut frame = Frame::new(callee.clone(), func.closure.clone(), self.stack.len(), at, func.upvals.clone());
+            frame.mark0 = self.marks.len() as u32;
+            frame.handler0 = self.handlers.len() as u32;
+            frame.dst = d;
+            self.frames.push(frame);
+            return Ok(Next::Switch);
+        }
+        // anything else is called the general way, from the stack
+        self.stack.push(f);
+        for j in 0..n as usize {
+            let v = match &self.slots[at + j] {
+                Slot::Val(v) => copy(v),
+                _ => panic!("register {} read before it was written (malformed bytecode)", r as usize + j),
+            };
+            self.stack.push(v);
+        }
+        self.call_to(n as usize, tail, d)
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
