@@ -861,12 +861,29 @@ impl Vm {
                     // The loop is this frame's own (the usual case): rebind and jump, here.
                     if self.marks.len() > fr.mark0 as usize {
                         let m = self.marks.last().unwrap();
-                        rebind(m, &proto, &mut self.slots, fr.slot_base, self.stack.drain(base..));
-                        let (start, sp, handlers, menv) = (m.start, m.sp, m.handlers, m.env.clone());
-                        fr.env = menv;
-                        pc = start;
-                        self.handlers.truncate(handlers);
-                        self.stack.truncate(sp);
+                        match m.rebind {
+                            // slots (compiled code): each value popped straight into its slot,
+                            // the last first
+                            Rebind::Slots(i) => {
+                                let slots = &proto.loop_slots[i as usize];
+                                for k in (0..n as usize).rev() {
+                                    let v = pop(&mut self.stack);
+                                    if let Some(&j) = slots.get(k) {
+                                        def_slot(&mut self.slots[sb + j as usize], v);
+                                    }
+                                }
+                            }
+                            Rebind::Names(_) => rebind(m, &proto, &mut self.slots, fr.slot_base, self.stack.drain(base..)),
+                        }
+                        // the loop's scope is the frame's own unless a named-mode body pushed one
+                        if !Rc::ptr_eq(&fr.env, &m.env) {
+                            fr.env = m.env.clone();
+                        }
+                        pc = m.start;
+                        if self.handlers.len() > m.handlers {
+                            self.handlers.truncate(m.handlers);
+                        }
+                        self.stack.truncate(m.sp);
                         continue;
                     }
                     // Otherwise it travels, as the interpreter's does, to a caller's loop.
