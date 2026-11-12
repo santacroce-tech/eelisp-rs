@@ -14,9 +14,12 @@
 ;;
 ;; where kind is one of :open :close :quote :quasi :unquote :splice :str :num :kw :sym :eof.
 ;;
-;; From the host it needs only `str-chars` (a string's characters, so position i is one `nth`),
-;; `symbol` and `keyword` (to make those values from their names) and `->number` (decimal
-;; numbers, read exactly as Rust reads them).
+;; From the host it needs `str-chars` (a string's characters, so position i is one `nth`),
+;; `symbol` and `keyword` (to make those values from their names), `->number` (decimal numbers,
+;; read exactly as Rust reads them), and `scan-while` / `scan-until`, which find where a run of
+;; characters from a table ends: the inner loop of a scan, one call instead of one turn of an
+;; EELisp loop per character (docs/self-hosting/19-scanning.md). Which characters make a run,
+;; and what every token is, is decided here.
 ;;
 ;; Names starting with `reader-` are its internals.
 
@@ -52,6 +55,15 @@
   `(let (reader-c ,c)
      (or (dict-get reader-classes reader-c) (reader-class-other reader-c))))
 
+;; The runs the lexer scans in one call each: whitespace; an atom's characters; what ends a
+;; comment; what interrupts a string's plain text. A character in none of these tables (an
+;; accented letter, another alphabet's space) stops a run, and `reader-class` decides it.
+(def reader-spaces (reader-set (str-chars " \n\t\r")))
+(def reader-words
+  (reader-set (str-chars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&*+-./:<=>?@\\^_|~")))
+(def reader-newline (reader-set (list "\n")))
+(def reader-string-stops (reader-set (list "\"" "\\")))
+
 ;; The characters from position `from` up to `to`, as a string.
 (defn reader-text (cs from to) (str-join "" (slice cs from to)))
 
@@ -67,18 +79,16 @@
 
 ;; The first position at or after i that isn't whitespace or inside a `;` comment.
 (defn reader-skip (cs n i)
-  (loop (i i)
+  (loop (i (scan-while cs i reader-spaces))
     (if (>= i n)
       i
       (let (class (reader-class (nth cs i)))
         (cond
-          (= class reader-space) (recur (+ i 1))
+          (= class reader-space) (recur (scan-while cs (+ i 1) reader-spaces))
           (= class reader-comment) (recur (reader-line-end cs n i))
           true i)))))
 
-(defn reader-line-end (cs n i)
-  (loop (i i)
-    (if (and (< i n) (!= (nth cs i) "\n")) (recur (+ i 1)) i)))
+(defn reader-line-end (cs n i) (scan-until cs i reader-newline))
 
 ;; The token at position i (after any whitespace and comments).
 (defn reader-token (cs n i)
@@ -98,7 +108,7 @@
 ;; A string literal starting at the opening quote. Most strings have no backslash, and those are
 ;; cut out of the text in one piece; only strings with escapes are built a character at a time.
 (defn reader-string (cs n start)
-  (loop (i (+ start 1) plain true)
+  (loop (i (scan-until cs (+ start 1) reader-string-stops) plain true)
     (if (>= i n)
       (error "unterminated string" :parse)
       (let (c (nth cs i))
@@ -107,8 +117,8 @@
             (list :str
                   (if plain (reader-text cs (+ start 1) i) (reader-unescape cs (+ start 1) i))
                   start (+ i 1))
-          (and (= c "\\") (< (+ i 1) n)) (recur (+ i 2) false)
-          true (recur (+ i 1) plain))))))
+          (and (= c "\\") (< (+ i 1) n)) (recur (scan-until cs (+ i 2) reader-string-stops) false)
+          true (recur (scan-until cs (+ i 1) reader-string-stops) plain))))))
 
 ;; The text of a string between its quotes, with its escapes replaced.
 (defn reader-unescape (cs from to)
@@ -125,8 +135,10 @@
 ;; An atom runs to the next delimiter. Then it's classified, in this order: `:name` is a keyword,
 ;; anything that reads as a number is one, and the rest are symbols.
 (defn reader-atom (cs n start)
-  (let (end (loop (i start)
-              (if (and (< i n) (= (reader-class (nth cs i)) reader-word)) (recur (+ i 1)) i))
+  (let (end (loop (i (scan-while cs start reader-words))
+              (if (and (< i n) (= (reader-class (nth cs i)) reader-word))
+                (recur (scan-while cs (+ i 1) reader-words))
+                i))
         text (reader-text cs start end)
         c (nth cs start))
     (if (= c ":")

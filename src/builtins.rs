@@ -80,6 +80,8 @@ pub fn register(env: &Env) {
     b!("tail", cdr);
     b!("nth", nth, None, Some(Intrinsic::Nth));
     b!("slice", slice);
+    b!("scan-while", |a, _| scan(a, "scan-while", false));
+    b!("scan-until", |a, _| scan(a, "scan-until", true));
     b!("length", length, None, Some(Intrinsic::Length));
     b!("append", append);
     b!("reverse", reversef);
@@ -629,6 +631,27 @@ fn nth(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let i = as_num(&args[1])? as usize;
     Ok(l.get(i).cloned().unwrap_or(Value::Null))
 }
+/// `(scan-while lst i table)` / `(scan-until lst i table)`: from position i, the first position
+/// whose element is not in `table` (while) or is (until); the list's length if there is none.
+/// An element is in the table when the dict has it as a key with a value other than nil or
+/// false. What a reader does a character at a time, in one call: the EELisp reader scans
+/// whitespace, comments, atoms and strings with these (docs/self-hosting/19-scanning.md).
+fn scan(args: &[Value], name: &str, until: bool) -> Result<Value, LispError> {
+    let (Some(Value::List(l)), Some(Value::Number(i)), Some(Value::Dict(t))) = (args.first(), args.get(1), args.get(2))
+    else {
+        return Err(LispError::InvalidSyntax(format!("{name} expects (list index dict)")));
+    };
+    let mut j = if *i > 0.0 { *i as usize } else { 0 };
+    while j < l.len() {
+        let member = dict_key(&l[j]).and_then(|k| t.get(k)).is_some_and(is_truthy);
+        if member == until {
+            break;
+        }
+        j += 1;
+    }
+    Ok(Value::Number(j.max(*i as usize) as f64))
+}
+
 /// `(slice lst start end)`: the elements from start up to (not including) end, like `substr` for
 /// strings. Out-of-range bounds are clamped; end defaults to the length.
 fn slice(args: &[Value], _: &Env) -> Result<Value, LispError> {

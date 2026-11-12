@@ -272,3 +272,25 @@ fn read_all_makes_ordinary_values() {
     }
     assert_eq!(print_value(&last, true), "144");
 }
+
+/// The two builtins the reader scans with: where a run ends, from any position, with tables
+/// whose values may be false or nil (not members), and what isn't a key (a number) never one.
+#[test]
+fn scan_while_and_scan_until() {
+    let it = Interpreter::new();
+    let ev = |src: &str| print_value(&it.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e}")), false);
+    assert_eq!(ev(r#"(scan-while (str-chars "  ab") 0 {" " true})"#), "2");
+    assert_eq!(ev(r#"(scan-while (str-chars "  ab") 2 {" " true})"#), "2");
+    assert_eq!(ev(r#"(scan-while (str-chars "   ") 1 {" " true})"#), "3");
+    assert_eq!(ev(r#"(scan-while (str-chars "ab") 5 {"a" true})"#), "5");
+    assert_eq!(ev(r#"(scan-while (str-chars "aab") -3 {"a" true})"#), "2");
+    assert_eq!(ev(r#"(scan-while (str-chars "ab") 0 {"a" false})"#), "0");
+    assert_eq!(ev(r#"(scan-while (list "a" 1 "a") 0 {"a" true})"#), "1");
+    assert_eq!(ev(r#"(scan-while (list 'a :a "a" "b") 0 {"a" 0})"#), "3");
+    assert_eq!(ev(r#"(scan-until (str-chars "ab;c") 0 {";" true})"#), "2");
+    assert_eq!(ev(r#"(scan-until (str-chars "abc") 0 {";" true})"#), "3");
+    assert_eq!(ev(r#"(scan-until (str-chars "abc") 0 {"a" nil})"#), "3");
+    assert_eq!(ev(r#"(scan-until (list) 0 {})"#), "0");
+    let e = it.eval_str("(scan-while \"abc\" 0 {})").unwrap_err().to_string();
+    assert!(e.contains("scan-while expects (list index dict)"), "{e}");
+}

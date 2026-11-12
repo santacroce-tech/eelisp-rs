@@ -628,6 +628,8 @@ pub static CORE: &[Entry] = &[
     doc!("car", "(car lst)", "The Lisp spelling of head — the same function.", "(car '(1 2 3))   → 1"),
     doc!("tail", "(tail lst) → list", "Everything after the first element.", "(tail '(1 2 3))   → (2 3)"),
     doc!("slice", "(slice lst start end) → list", "The elements from start up to end, 0-based and end-exclusive, like `substr` for strings. Without end, to the end of the list.", "(slice '(a b c d) 1 3)   → (b c)"),
+    doc!("scan-while", "(scan-while lst i table) → number", "From position i, the first position whose element is not a key of the dict `table` (with a value other than nil or false); the list's length if every element from i is. A reader's inner loop in one call.", "(scan-while '(\" \" \" \" \"a\") 0 {\" \" true})   → 2"),
+    doc!("scan-until", "(scan-until lst i table) → number", "From position i, the first position whose element is a key of the dict `table` (with a value other than nil or false); the list's length if none is.", "(scan-until (str-chars \"ab;c\") 0 {\";\" true})   → 2"),
     doc!("cdr", "(cdr lst) → list", "The Lisp spelling of tail — the same function.", "(cdr '(1 2 3))   → (2 3)"),
     doc!("nth", "(nth lst i)", "The element at index i, 0-based; nil past the end.", "(nth '(1 2 3) 1)   → 2"),
     doc!("length", "(length lst) → number", "How many elements the list has.", "(length '(1 2 3))   → 3"),
