@@ -67,9 +67,11 @@
 ;; The characters from position `from` up to `to`, as a string.
 (defn reader-text (cs from to) (str-join "" (slice cs from to)))
 
-;; Characters that are a token on their own.
+;; What a token's first character says it is: a token on its own, a comma (`,` or `,@`), or a
+;; string. Anything else starts an atom. One lookup decides it.
 (def reader-punct
-  {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close "'" :quote "`" :quasi})
+  {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close "'" :quote "`" :quasi
+   "," :comma "\"" :string})
 
 ;; What a backslash in a string stands for. Any other escaped character is kept with its
 ;; backslash: "\d" is the two characters \ and d.
@@ -82,10 +84,14 @@
   (loop (i (scan-while cs i reader-spaces))
     (if (>= i n)
       i
-      (let (class (reader-class (nth cs i)))
+      (let (c (nth cs i))
         (cond
-          (= class reader-space) (recur (scan-while cs (+ i 1) reader-spaces))
-          (= class reader-comment) (recur (reader-line-end cs n i))
+          (= c ";") (recur (scan-while cs (reader-line-end cs n i) reader-spaces))
+          ;; any other character in the table starts a token (every position the loop gets is
+          ;; past a scan of the table's spaces)
+          (dict-has reader-classes c) i
+          ;; a character outside the table: whitespace if Rust's definition says so
+          (= (reader-class-other c) reader-space) (recur (scan-while cs (+ i 1) reader-spaces))
           true i)))))
 
 (defn reader-line-end (cs n i) (scan-until cs i reader-newline))
@@ -98,12 +104,12 @@
       (let (c (nth cs i)
             kind (dict-get reader-punct c))
         (cond
-          kind (list kind c i (+ i 1))
-          (= c ",") (if (and (< (+ i 1) n) (= (nth cs (+ i 1)) "@"))
-                      (list :splice ",@" i (+ i 2))
-                      (list :unquote "," i (+ i 1)))
-          (= c "\"") (reader-string cs n i)
-          true (reader-atom cs n i))))))
+          (nil? kind) (reader-atom cs n i)
+          (= kind :string) (reader-string cs n i)
+          (= kind :comma) (if (and (< (+ i 1) n) (= (nth cs (+ i 1)) "@"))
+                            (list :splice ",@" i (+ i 2))
+                            (list :unquote "," i (+ i 1)))
+          true (list kind c i (+ i 1)))))))
 
 ;; A string literal starting at the opening quote. Most strings have no backslash, and those are
 ;; cut out of the text in one piece; only strings with escapes are built a character at a time.
@@ -210,11 +216,11 @@
 (def reader-wrappers
   {:quote 'quote :quasi 'quasiquote :unquote 'unquote :splice 'unquote-splicing})
 
+;; true, false and nil are read as values, every other name as a symbol.
+(def reader-literals {"true" true "false" false "nil" nil})
+
 (defn reader-symbol (text)
-  (cond (= text "true") true
-        (= text "false") false
-        (= text "nil") nil
-        true (symbol text)))
+  (if (dict-has reader-literals text) (dict-get reader-literals text) (symbol text)))
 
 ;; Read the form at position i.
 (defn reader-expr (cs n i) (reader-form (reader-token cs n i) cs n))
