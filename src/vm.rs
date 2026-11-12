@@ -72,14 +72,16 @@ pub const MAX_FRAMES: usize = 100_000;
 pub enum Op {
     // Superinstructions: two common neighbours as one, made by the assembler (`fuse_pairs`), so
     // the machine dispatches once instead of twice. Each does exactly what its two parts do.
+    // Slot and name indices are 16 bits here so an instruction stays 12 bytes: at 16 bytes every
+    // instruction got slower (docs/self-hosting/14). Bigger indices assemble unfused.
     /// `(load s)` then `(load-local i x)`: a global function, then its first argument.
-    LoadThenLocal(u32, u32, u32),
+    LoadThenLocal(u32, u16, u16),
     /// `(load-local i x)` then `(call n)`.
-    LocalThenCall(u32, u32, u32),
+    LocalThenCall(u16, u16, u32),
     /// `(const c)` then `(call n)`.
     ConstThenCall(u32, u32),
     /// `(load-local i x)` then `(const c)`.
-    LocalThenConst(u32, u32, u32),
+    LocalThenConst(u16, u16, u32),
     /// `(jump-if-false t)` then, when it doesn't jump, `(load s)`.
     JumpIfFalseElseLoad(u32, u32),
     Const(u32),
@@ -600,11 +602,11 @@ impl Vm {
                 Op::LoadThenLocal(g, i, x) => {
                     let v = load_global(&self.frames.last().unwrap().env, &proto, g)?;
                     self.stack.push(v);
-                    let v = self.local(sb, i, x, &proto)?;
+                    let v = self.local(sb, i as u32, x as u32, &proto)?;
                     self.stack.push(v);
                 }
                 Op::LocalThenConst(i, x, c) => {
-                    let v = self.local(sb, i, x, &proto)?;
+                    let v = self.local(sb, i as u32, x as u32, &proto)?;
                     self.stack.push(v);
                     self.stack.push(copy(&proto.consts[c as usize]));
                 }
@@ -617,7 +619,7 @@ impl Vm {
                     }
                 }
                 Op::LocalThenCall(i, x, n) => {
-                    let v = self.local(sb, i, x, &proto)?;
+                    let v = self.local(sb, i as u32, x as u32, &proto)?;
                     self.stack.push(v);
                     self.frames.last_mut().unwrap().pc = pc;
                     match self.call(n as usize, false)? {
@@ -1124,12 +1126,27 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 arity(3)?;
                 let g = intern(&mut p.syms, sym_of(&args[0], "load's name")?);
                 let x = intern(&mut p.syms, sym_of(&args[2], "the variable's name")?);
-                Op::LoadThenLocal(g, slot(args.get(1), p.nslots)?, x)
+                let i = slot(args.get(1), p.nslots)?;
+                match (u16::try_from(i), u16::try_from(x)) {
+                    (Ok(i16), Ok(x16)) => Op::LoadThenLocal(g, i16, x16),
+                    _ => {
+                        p.code.push(Op::Load(g));
+                        Op::LoadLocal(i, x)
+                    }
+                }
             }
             "local-then-call" => {
                 arity(3)?;
                 let x = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
-                Op::LocalThenCall(slot(args.first(), p.nslots)?, x, count_of(args.get(2), "call")?)
+                let i = slot(args.first(), p.nslots)?;
+                let n = count_of(args.get(2), "call")?;
+                match (u16::try_from(i), u16::try_from(x)) {
+                    (Ok(i16), Ok(x16)) => Op::LocalThenCall(i16, x16, n),
+                    _ => {
+                        p.code.push(Op::LoadLocal(i, x));
+                        Op::Call(n)
+                    }
+                }
             }
             "const-then-call" => {
                 arity(2)?;
@@ -1141,7 +1158,14 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 let x = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
                 let i = slot(args.first(), p.nslots)?;
                 p.consts.push(args[2].clone());
-                Op::LocalThenConst(i, x, p.consts.len() as u32 - 1)
+                let c = p.consts.len() as u32 - 1;
+                match (u16::try_from(i), u16::try_from(x)) {
+                    (Ok(i16), Ok(x16)) => Op::LocalThenConst(i16, x16, c),
+                    _ => {
+                        p.code.push(Op::LoadLocal(i, x));
+                        Op::Const(c)
+                    }
+                }
             }
             "jump-if-false-else-load" => {
                 arity(2)?;
