@@ -176,7 +176,8 @@ binary nobody can reproduce), and it is the reference for testing.
   `and`, `or` in registers: reading 35.3 ms, compiling 15.1 ms. Chapter 18: the machine's calls
   are no longer what reading costs; the reader's per-character work and allocation are. Chapter
   19: scanning builtins and a list builder, reading 35.1 → 27.6 ms. Chapter 20: the reader's
-  own costs (comment search, `str-join`, `str-chars`), reading 20.2 ms, 2.1× chapter 15. See
+  own costs (comment search, `str-join`, `str-chars`), reading 20.2 ms, 2.1× chapter 15. Chapter
+  21: compiler by builtin, atoms without pairs; loading compiled code 65 → 35 ms. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):

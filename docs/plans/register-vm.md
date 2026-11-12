@@ -100,8 +100,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
 - **Then** (tag `register-vm-8`, chapter 20): token-kind dispatch by table (no gain, kept for
   comments); `scan-back-until` for read-top's comment search; `str`/`str-join` append in place;
   `str-chars` shares ASCII characters; Fx tried again (even, reverted). Reading 27.6 → 20.2 ms.
-- **Next:** the reader's shape (a list per token, a pair per result), or word-sized values.
-  Step 4 (retiring stack code) waits until stack code is rare.
+- **Then** (tag `register-vm-9`, chapter 21): `compiler-cat` as one `append` (14.5 → 14.25
+  ms); a `box` builtin (no gain, reverted); atoms in lists read without a result pair (20.0 →
+  19.5 ms). Loading the snippet files compiled: 65 ms at chapter 15, 35 ms now.
+- **Next, decisions:** compiling into one list (a code-generation rewrite), returning multiple
+  values (a language feature, for the reader), or word-sized values. Step 4 (retiring stack
+  code) waits until stack code is rare.
 
 ## What has to stay true
 

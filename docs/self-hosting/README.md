@@ -26,6 +26,7 @@ become a book.
 | 18 | [What a call costs](18-what-a-call-costs.md) | Register calls that leave the caller's dead slots alone (a few percent), copying values inline (nothing), and the finding that reading's time is no longer in the machine's calls but in the reader's instructions per character and what it allocates |
 | 19 | [Scanning](19-scanning.md) | Two scanning builtins run the reader's per-character loops while every decision stays in EELisp, and a list builder ends three allocations per element: reading 35.1 → 27.6 ms, half the calls |
 | 20 | [The reader's own costs](20-the-readers-own-costs.md) | Fewer comparisons changed nothing; a profile by builtin found the costs: walking back over comments, `str-join` and `str-chars` allocating per character. Reading 27.6 → 20.2 ms, 2.1× faster than chapter 15 |
+| 21 | [Compiling and reading, again](21-compiling-and-reading-again.md) | The compiler profiled by builtin (one `append` instead of a `reduce`; a `box` builtin measured as no gain), atoms read without a result pair; loading compiled code 65 → 35 ms since chapter 15, and the three larger moves left |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every
