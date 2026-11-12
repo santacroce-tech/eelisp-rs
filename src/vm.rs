@@ -54,6 +54,28 @@
 //! | `(loop-slots i…)` | `loop` over slot variables: `recur` rebinds those slots |
 //! | `(interp form)` | push what the interpreter makes of `form` in the current scope — the compiler's fallback for anything it doesn't compile yet |
 //! | `(label L)` | a jump target (no instruction); `L` is a symbol or a number |
+//!
+//! **Register instructions** (docs/plans/register-vm.md). In a slot-mode proto the slots are
+//! also *registers*: an instruction names where its operands are instead of popping them. An
+//! operand is a register `r` (a number: a temporary the code has written), `(local i name)` (a
+//! variable's slot, read like `load-local`), `(cap i name)` (like `load-cap`) or `(const v)`. A
+//! destination `d` is a register, or `push` for the stack, so register and stack code mix freely.
+//!
+//! | form | effect |
+//! |---|---|
+//! | `(move d x)` | `d` ← `x` |
+//! | `(global d name)` | `d` ← the global `name` |
+//! | `(push x)` / `(pop-to r)` | push `x` / pop the top into `r` |
+//! | `(call2 d f x y)` | `d` ← `(f x y)`, `f` a global; the arithmetic fast path applies |
+//! | `(call-global d f r n)` | `d` ← `(f r … r+n-1)`, the arguments in consecutive registers |
+//! | `(tail-call-global f r n)` | the same in tail position |
+//! | `(jump-if-not x L)` | jump when `x` is false or nil |
+//! | `(return-value x)` | return `x` |
+//!
+//! A compiled callee's frame starts at the argument registers `r…`, so its parameters are already
+//! in place: nothing is copied. The caller's registers from `r` up are the callee's while it
+//! runs, so they must hold nothing the caller still needs, and are unbound after the call. An
+//! argument register must not be a slot a closure has captured.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -108,7 +130,35 @@ pub enum Op {
     LoadCap(u32, u32),
     SetCap(u32, u32),
     LoopSlots(u32),
+    // Register instructions. An operand `u32` is a register, a named local, a constant or a
+    // capture (`OPERAND_*`); a destination is a register or `STACK`. The ones with more
+    // operands than fit are followed by an `Ext` holding the rest.
+    Move(u32, u32),
+    Global(u32, u32),
+    Push(u32),
+    PopTo(u32),
+    /// `(call2 d f x y)`: d, f; then `Ext(x, y)`.
+    Call2(u32, u32),
+    /// `(call-global d f r n)`: d, f; then `Ext(r, n)`.
+    CallGlobal(u32, u32),
+    /// `(tail-call-global f r n)`: f; then `Ext(r, n)`, then a `Return` for when the call can't
+    /// replace the frame and its result lands on the stack.
+    TailCallGlobal(u32),
+    JumpIfNot(u32, u32),
+    ReturnValue(u32),
+    /// The operands of the instruction before it; never run.
+    Ext(u32, u32),
 }
+
+/// A register instruction's destination meaning "push it on the stack".
+pub const STACK: u32 = u32::MAX;
+/// An operand's kind is in its top two bits, an index in the rest.
+const OPERAND_SHIFT: u32 = 30;
+const OPERAND_INDEX: u32 = (1 << OPERAND_SHIFT) - 1;
+const OPERAND_REG: u32 = 0;
+const OPERAND_LOCAL: u32 = 1;
+const OPERAND_CONST: u32 = 2;
+const OPERAND_CAP: u32 = 3;
 
 /// A variable a closure shares with the function that made it (or with that function's own
 /// closure). `None` until it's defined.
@@ -157,6 +207,9 @@ pub struct Proto {
     pub captures: Vec<CapSource>,
     /// Slot lists for `LoopSlots`.
     pub loop_slots: Vec<Vec<u32>>,
+    /// For `(local i name)` and `(cap i name)` operands: the slot or capture, and the name's
+    /// index in `syms` (the global meant while the variable isn't bound).
+    pub named: Vec<(u32, u32)>,
     /// Per name in `syms`: where `Load` last found it as a global (see `GlobalCache`).
     globals: Vec<std::cell::Cell<GlobalCache>>,
 }
@@ -194,6 +247,20 @@ fn load_global(env: &Env, proto: &Proto, s: u32) -> Result<Value, LispError> {
         cell.set(GlobalCache { scope: Rc::as_ptr(env), layout: env::layout(), value });
     }
     Ok(v)
+}
+
+/// The arithmetic a global stands for, when the cache says where it is and it is a builtin with
+/// a fast path: read in place, without copying the value out (and dropping the copy).
+#[inline(always)]
+fn fast_global(env: &Env, proto: &Proto, s: u32) -> Option<FastOp> {
+    let c = proto.globals[s as usize].get();
+    if c.scope == Rc::as_ptr(env) && c.layout == env::layout() && unsafe { env.try_borrow_unguarded() }.is_ok() {
+        // SAFETY: as in `load_global`
+        if let Value::Builtin(b) = unsafe { &*c.value } {
+            return b.fast;
+        }
+    }
+    None
 }
 
 /// The function a proto makes when it closes over `env`.
@@ -455,11 +522,92 @@ struct Frame {
     /// Most frames have neither, so they live in the VM, not in a vector per frame.
     mark0: u32,
     handler0: u32,
+    /// Where the caller wants the result: `STACK`, or one of the caller's registers.
+    dst: u32,
 }
 
 impl Frame {
     fn new(proto: Rc<Proto>, env: Env, base: usize, slot_base: usize, upvals: Option<Rc<[Cell]>>) -> Frame {
-        Frame { proto, pc: 0, env, base, slot_base, upvals, mark0: 0, handler0: 0 }
+        Frame { proto, pc: 0, env, base, slot_base, upvals, mark0: 0, handler0: 0, dst: STACK }
+    }
+}
+
+/// A register operand's value. A local or a capture reads exactly as `load-local` / `load-cap`.
+#[inline(always)]
+fn operand(x: u32, slots: &[Slot], sb: usize, proto: &Proto, fr: &Frame) -> Result<Value, LispError> {
+    let i = (x & OPERAND_INDEX) as usize;
+    match x >> OPERAND_SHIFT {
+        OPERAND_REG => match &slots[sb + i] {
+            Slot::Val(v) => Ok(copy(v)),
+            _ => panic!("register {i} read before it was written (malformed bytecode)"),
+        },
+        OPERAND_CONST => Ok(copy(&proto.consts[i])),
+        OPERAND_LOCAL => {
+            let (j, s) = proto.named[i];
+            match &slots[sb + j as usize] {
+                Slot::Val(v) => Ok(copy(v)),
+                Slot::Cell(c) => match &*c.borrow() {
+                    Some(v) => Ok(v.clone()),
+                    None => env::get_sym(&fr.env, &proto.syms[s as usize]),
+                },
+                Slot::Unbound => env::get_sym(&fr.env, &proto.syms[s as usize]),
+            }
+        }
+        _ => {
+            let (j, s) = proto.named[i];
+            let up = fr.upvals.as_ref().expect("a capture operand in a closure with no captures");
+            match &*up[j as usize].borrow() {
+                Some(v) => Ok(copy(v)),
+                None => env::get_sym(&fr.env, &proto.syms[s as usize]),
+            }
+        }
+    }
+}
+
+/// Put a register instruction's result where it goes.
+#[inline(always)]
+fn deliver(stack: &mut Vec<Value>, slots: &mut [Slot], sb: usize, d: u32, v: Value) {
+    if d == STACK {
+        stack.push(v)
+    } else {
+        match &mut slots[sb + d as usize] {
+            Slot::Val(old) => *old = v,
+            Slot::Cell(c) => *c.borrow_mut() = Some(v),
+            s => *s = Slot::Val(v),
+        }
+    }
+}
+
+/// A frame's registers can have been cut short by a callee entered at its argument registers;
+/// when control comes back to it, they are all there again (the ones the callee used, unbound).
+#[inline(always)]
+fn restore_slots(slots: &mut Vec<Slot>, fr: &Frame) {
+    if let Some(n) = fr.proto.nslots {
+        let end = fr.slot_base + n as usize;
+        if slots.len() < end {
+            fill_to(slots, end);
+        }
+    }
+}
+
+/// Unbound slots up to `end`: `Vec::resize` is generic enough not to be inlined, and a call's
+/// few slots don't need it.
+#[inline(always)]
+fn fill_to(slots: &mut Vec<Slot>, end: usize) {
+    while slots.len() < end {
+        slots.push(Slot::Unbound);
+    }
+}
+
+/// The compiled function a register call can enter in place: slot mode, exactly `n` parameters.
+#[inline(always)]
+fn in_place(f: &Value, n: u32) -> Option<(&Function, &Rc<Proto>, usize)> {
+    match f {
+        Value::Function(func) => match &func.code {
+            Some(p) if p.rest.is_none() && p.params.len() == n as usize => p.nslots.map(|k| (&**func, p, k as usize)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -597,7 +745,7 @@ impl Vm {
                 Op::Call(n) => {
                     let fr = self.frames.last_mut().expect("vm has no frame");
                     fr.pc = pc;
-                    match self.call(n as usize, false)? {
+                    match self.call(n as usize, false, STACK)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -609,7 +757,7 @@ impl Vm {
                     // restart point must survive the call.
                     let tail = self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
                     fr.pc = pc;
-                    match self.call(n as usize, tail)? {
+                    match self.call(n as usize, tail, STACK)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -764,15 +912,143 @@ impl Vm {
                         env::set(&fr.env, &proto.syms[s as usize], v)?;
                     }
                 }
+                Op::Move(d, x) => {
+                    let fr = self.frames.last().expect("vm has no frame");
+                    let v = operand(x, &self.slots, sb, &proto, fr)?;
+                    deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                }
+                Op::Global(d, s) => {
+                    let fr = self.frames.last().expect("vm has no frame");
+                    let v = load_global(&fr.env, &proto, s)?;
+                    deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                }
+                Op::Push(x) => {
+                    let fr = self.frames.last().expect("vm has no frame");
+                    let v = operand(x, &self.slots, sb, &proto, fr)?;
+                    self.stack.push(v);
+                }
+                Op::PopTo(r) => {
+                    let v = pop(&mut self.stack);
+                    def_slot(&mut self.slots[sb + r as usize], v);
+                }
+                Op::JumpIfNot(x, t) => {
+                    let fr = self.frames.last().expect("vm has no frame");
+                    if !is_truthy(&operand(x, &self.slots, sb, &proto, fr)?) {
+                        pc = t as usize;
+                    }
+                }
+                Op::ReturnValue(x) => {
+                    let fr = self.frames.last().expect("vm has no frame");
+                    let v = operand(x, &self.slots, sb, &proto, fr)?;
+                    if let Some(done) = self.ret(v) {
+                        return Ok(done);
+                    }
+                    continue 'frame;
+                }
+                Op::Call2(d, s) => {
+                    let Op::Ext(a, b) = code[pc] else { unreachable!("call2 without its operands") };
+                    pc += 1;
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    // `(< n 2)` and the like: the builtin is read where it lives, not copied
+                    if let Some(op) = fast_global(&fr.env, &proto, s) {
+                        let x = operand(a, &self.slots, sb, &proto, fr)?;
+                        let y = operand(b, &self.slots, sb, &proto, fr)?;
+                        if let (Value::Number(x), Value::Number(y)) = (&x, &y) {
+                            deliver(&mut self.stack, &mut self.slots, sb, d, op.apply(*x, *y));
+                            continue;
+                        }
+                    }
+                    // the same order as the stack code: the function, then each argument
+                    let f = load_global(&fr.env, &proto, s)?;
+                    let x = operand(a, &self.slots, sb, &proto, fr)?;
+                    let y = operand(b, &self.slots, sb, &proto, fr)?;
+                    if let Value::Builtin(bi) = &f {
+                        let v = match (bi.fast, &x, &y) {
+                            (Some(op), Value::Number(x), Value::Number(y)) => op.apply(*x, *y),
+                            _ => (bi.func)(&[x, y], &fr.env)?,
+                        };
+                        deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                        continue;
+                    }
+                    // anything else is called the general way, from the stack
+                    fr.pc = pc;
+                    self.stack.push(f);
+                    self.stack.push(x);
+                    self.stack.push(y);
+                    match self.call(2, false, d)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
+                Op::CallGlobal(_, s) | Op::TailCallGlobal(s) => {
+                    let (tail_op, d) = match op {
+                        Op::CallGlobal(d, _) => (false, d),
+                        _ => (true, STACK),
+                    };
+                    let Op::Ext(r, n) = code[pc] else { unreachable!("call-global without its operands") };
+                    pc += 1;
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    let f = load_global(&fr.env, &proto, s)?;
+                    let at = sb + r as usize;
+                    let tail = tail_op && self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
+                    if let Some((func, callee, k)) = in_place(&f, n) {
+                        if tail {
+                            // the arguments move down to where this frame's slots start, and
+                            // the callee's frame takes this one's place
+                            for j in 0..n as usize {
+                                self.slots.swap(sb + j, at + j);
+                            }
+                            self.slots.truncate(sb + n as usize);
+                            fill_to(&mut self.slots, sb + k);
+                            self.stack.truncate(fr.base);
+                            let mut frame = Frame::new(callee.clone(), func.closure.clone(), fr.base, sb, func.upvals.clone());
+                            frame.mark0 = self.marks.len() as u32;
+                            frame.handler0 = self.handlers.len() as u32;
+                            frame.dst = fr.dst;
+                            *fr = frame;
+                            continue 'frame;
+                        }
+                        fr.pc = pc;
+                        if self.frames.len() >= MAX_FRAMES {
+                            return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
+                        }
+                        // the arguments are already the callee's first slots
+                        self.slots.truncate(at + n as usize);
+                        fill_to(&mut self.slots, at + k);
+                        let mut frame = Frame::new(callee.clone(), func.closure.clone(), self.stack.len(), at, func.upvals.clone());
+                        frame.mark0 = self.marks.len() as u32;
+                        frame.handler0 = self.handlers.len() as u32;
+                        frame.dst = d;
+                        self.frames.push(frame);
+                        continue 'frame;
+                    }
+                    // anything else is called the general way, from the stack
+                    fr.pc = pc;
+                    self.stack.push(f);
+                    for j in 0..n as usize {
+                        let v = match &self.slots[at + j] {
+                            Slot::Val(v) => copy(v),
+                            _ => panic!("register {} read before it was written (malformed bytecode)", r as usize + j),
+                        };
+                        self.stack.push(v);
+                    }
+                    match self.call(n as usize, tail, d)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
+                Op::Ext(..) => unreachable!("an instruction's operands were run as an instruction"),
             }
         }
         }
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
-    /// one when `tail`); anything else is applied here. Returns the value when a tail call
-    /// finished the entry frame.
-    fn call(&mut self, n: usize, tail: bool) -> Result<Next, LispError> {
+    /// one when `tail`); anything else is applied here. The result goes to `dst` (`STACK` or a
+    /// register of this frame). Returns the value when a tail call finished the entry frame.
+    fn call(&mut self, n: usize, tail: bool, dst: u32) -> Result<Next, LispError> {
         // The arguments are the top `n` values, the function just below them. They are passed
         // from where they lie: no vector is made for them.
         let base = self.stack.len() - n;
@@ -784,19 +1060,13 @@ impl Vm {
                     let v = op.apply(*x, *y);
                     // two numbers need no dropping; only the builtin's reference is released
                     self.stack.truncate(base - 1);
-                    return Ok(if tail { left(self.ret(v)) } else {
-                        self.stack.push(v);
-                        Next::Stay
-                    });
+                    return Ok(if tail { left(self.ret(v)) } else { self.stay(v, dst) });
                 }
             }
             let env = &self.frames.last().unwrap().env;
             let v = (b.func)(&self.stack[base..], env)?;
             self.stack.truncate(base - 1);
-            return Ok(if tail { left(self.ret(v)) } else {
-                self.stack.push(v);
-                Next::Stay
-            });
+            return Ok(if tail { left(self.ret(v)) } else { self.stay(v, dst) });
         }
         let f = self.stack[base - 1].clone();
         match &f {
@@ -804,9 +1074,9 @@ impl Vm {
                 let proto = func.code.clone().unwrap();
                 if tail {
                     // the new frame takes this one's place: its slots, then its stack
-                    let (fbase, fsb) = {
+                    let (fbase, fsb, fdst) = {
                         let fr = self.frames.last().unwrap();
-                        (fr.base, fr.slot_base)
+                        (fr.base, fr.slot_base, fr.dst)
                     };
                     // the arguments move straight from the stack into the new frame's slots
                     self.slots.truncate(fsb);
@@ -818,6 +1088,7 @@ impl Vm {
                     let mut frame = frame;
                     frame.mark0 = self.marks.len() as u32;
                     frame.handler0 = self.handlers.len() as u32;
+                    frame.dst = fdst;
                     *self.frames.last_mut().unwrap() = frame;
                 } else {
                     if self.frames.len() >= MAX_FRAMES {
@@ -827,6 +1098,7 @@ impl Vm {
                         enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), self.stack.drain(base..), base - 1, true);
                     frame.mark0 = self.marks.len() as u32;
                     frame.handler0 = self.handlers.len() as u32;
+                    frame.dst = dst;
                     self.stack.pop();
                     self.frames.push(frame);
                 }
@@ -839,8 +1111,7 @@ impl Vm {
                 if tail {
                     Ok(left(self.ret(v)))
                 } else {
-                    self.stack.push(v);
-                    Ok(Next::Stay)
+                    Ok(self.stay(v, dst))
                 }
             }
             Value::Macro(m) => Err(LispError::Runtime(format!(
@@ -849,6 +1120,14 @@ impl Vm {
             ))),
             other => Err(LispError::TypeMismatch { expected: "function".into(), got: type_name(other) }),
         }
+    }
+
+    /// A call's result, delivered in this frame: nothing else moves.
+    #[inline(always)]
+    fn stay(&mut self, v: Value, dst: u32) -> Next {
+        let sb = self.frames.last().unwrap().slot_base;
+        deliver(&mut self.stack, &mut self.slots, sb, dst, v);
+        Next::Stay
     }
 
     /// Leave the current frame with `v`. `Some` when that was the entry frame.
@@ -863,10 +1142,14 @@ impl Vm {
         if self.handlers.len() > fr.handler0 as usize {
             self.handlers.truncate(fr.handler0 as usize);
         }
-        if self.frames.is_empty() {
-            return Some(v);
+        let Some(caller) = self.frames.last() else { return Some(v) };
+        // a callee entered at the caller's argument registers: the caller's registers come back
+        restore_slots(&mut self.slots, caller);
+        if fr.dst == STACK {
+            self.stack.push(v);
+        } else {
+            def_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
         }
-        self.stack.push(v);
         None
     }
 
@@ -878,6 +1161,7 @@ impl Vm {
             if recur && self.marks.len() > fr.mark0 as usize {
                 let LispError::Recur(vals) = e else { unreachable!() };
                 let m = self.marks.last().unwrap();
+                restore_slots(&mut self.slots, fr);
                 rebind(m, &fr.proto, &mut self.slots, fr.slot_base, vals.into_iter());
                 fr.env = m.env.clone();
                 fr.pc = m.start;
@@ -887,6 +1171,7 @@ impl Vm {
             }
             if !recur && self.handlers.len() > fr.handler0 as usize {
                 let h = self.handlers.pop().unwrap();
+                restore_slots(&mut self.slots, fr);
                 fr.env = h.env;
                 fr.pc = h.catch;
                 self.marks.truncate(h.marks);
@@ -995,7 +1280,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 return Err(bad(format!("label {l} defined twice")));
             }
         } else {
-            at += 1;
+            at += width(&parts.0);
         }
     }
     let target = |v: Option<&Value>| -> Result<u32, LispError> {
@@ -1019,6 +1304,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
         nslots,
         captures,
         loop_slots: Vec::new(),
+        named: Vec::new(),
         globals: Vec::new(),
     };
     if let Some(n) = nslots {
@@ -1159,12 +1445,129 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 p.consts.push(args[0].clone());
                 Op::Interp(p.consts.len() as u32 - 1)
             }
+            "move" => {
+                arity(2)?;
+                Op::Move(dest(&args[0], p.nslots)?, operand_of(&args[1], &mut p)?)
+            }
+            "global" => {
+                arity(2)?;
+                Op::Global(dest(&args[0], p.nslots)?, intern(&mut p.syms, sym_of(&args[1], "global's name")?))
+            }
+            "push" => {
+                arity(1)?;
+                Op::Push(operand_of(&args[0], &mut p)?)
+            }
+            "pop-to" => {
+                arity(1)?;
+                Op::PopTo(reg_of(&args[0], p.nslots)?)
+            }
+            "jump-if-not" => {
+                arity(2)?;
+                Op::JumpIfNot(operand_of(&args[0], &mut p)?, target(args.get(1))?)
+            }
+            "return-value" => {
+                arity(1)?;
+                Op::ReturnValue(operand_of(&args[0], &mut p)?)
+            }
+            "call2" => {
+                arity(4)?;
+                let d = dest(&args[0], p.nslots)?;
+                let f = intern(&mut p.syms, sym_of(&args[1], "call2's function")?);
+                let (x, y) = (operand_of(&args[2], &mut p)?, operand_of(&args[3], &mut p)?);
+                p.code.push(Op::Call2(d, f));
+                Op::Ext(x, y)
+            }
+            "call-global" | "tail-call-global" => {
+                let tail = &*op == "tail-call-global";
+                arity(if tail { 3 } else { 4 })?;
+                let d = if tail { STACK } else { dest(&args[0], p.nslots)? };
+                let rest = if tail { &args[..] } else { &args[1..] };
+                let f = intern(&mut p.syms, sym_of(&rest[0], "the function")?);
+                let r = reg_of(&rest[1], p.nslots)?;
+                let n = count_of(rest.get(2), "the argument count")?;
+                if n > 0 && r + n > p.nslots.unwrap_or(0) {
+                    return Err(bad(format!("arguments in registers {r}..{} are out of range", r + n - 1)));
+                }
+                if tail {
+                    p.code.push(Op::TailCallGlobal(f));
+                    p.code.push(Op::Ext(r, n));
+                    Op::Return
+                } else {
+                    p.code.push(Op::CallGlobal(d, f));
+                    Op::Ext(r, n)
+                }
+            }
             other => return Err(bad(format!("unknown instruction {other}"))),
         };
         p.code.push(o);
     }
     p.globals = vec![std::cell::Cell::new(GlobalCache::EMPTY); p.syms.len()];
     Ok(Rc::new(p))
+}
+
+/// How many `Op`s an instruction assembles to: some carry their extra operands in an `Ext`.
+fn width(op: &str) -> u32 {
+    match op {
+        "call2" | "call-global" => 2,
+        "tail-call-global" => 3,
+        _ => 1,
+    }
+}
+
+/// A register: a slot of a slot-mode proto.
+fn reg_of(v: &Value, nslots: Option<u32>) -> Result<u32, LispError> {
+    let Some(n) = nslots else { return Err(bad("a register instruction needs a proto with :slots")) };
+    let i = count_of(Some(v), "a register")?;
+    if i < n {
+        Ok(i)
+    } else {
+        Err(bad(format!("register {i} is out of range (:slots {n})")))
+    }
+}
+
+/// A destination: a register, or `push`.
+fn dest(v: &Value, nslots: Option<u32>) -> Result<u32, LispError> {
+    match v {
+        Value::Symbol(s) if &**s == "push" => Ok(STACK),
+        _ => reg_of(v, nslots),
+    }
+}
+
+/// An operand: `r`, `(local i name)`, `(cap i name)` or `(const v)`, packed into a `u32`.
+fn operand_of(v: &Value, p: &mut Proto) -> Result<u32, LispError> {
+    let index = |i: usize| -> Result<u32, LispError> {
+        if i as u32 <= OPERAND_INDEX {
+            Ok(i as u32)
+        } else {
+            Err(bad("too many operands in one proto"))
+        }
+    };
+    if let Value::Number(_) = v {
+        return Ok(OPERAND_REG << OPERAND_SHIFT | reg_of(v, p.nslots)?);
+    }
+    let (kind, args) = instr(v).map_err(|_| bad("an operand is r, (local i name), (cap i name) or (const v)"))?;
+    match &*kind {
+        "const" if args.len() == 1 => {
+            p.consts.push(args[0].clone());
+            Ok(OPERAND_CONST << OPERAND_SHIFT | index(p.consts.len() - 1)?)
+        }
+        "local" | "cap" if args.len() == 2 => {
+            let j = if &*kind == "local" {
+                reg_of(&args[0], p.nslots)?
+            } else {
+                let i = count_of(args.first(), "a capture")?;
+                if i as usize >= p.captures.len() {
+                    return Err(bad(format!("capture {i} is out of range ({} captured)", p.captures.len())));
+                }
+                i
+            };
+            let s = intern(&mut p.syms, sym_of(&args[1], "the variable's name")?);
+            p.named.push((j, s));
+            let tag = if &*kind == "local" { OPERAND_LOCAL } else { OPERAND_CAP };
+            Ok(tag << OPERAND_SHIFT | index(p.named.len() - 1)?)
+        }
+        _ => Err(bad("an operand is r, (local i name), (cap i name) or (const v)")),
+    }
 }
 
 /// A closure's captures must name slots and captures the creating proto has.

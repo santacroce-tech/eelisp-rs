@@ -453,25 +453,74 @@ fn main() {
            (def spaces (str-chars (str-join "" (map (fn (_) " ") (range 0 300000)))))"#,
     )
     .unwrap();
+    // The same three programs as register code for the real machine (src/vm.rs), assembled
+    it.eval_str(
+        r#"(def rfib (vm-assemble '(proto :name "rfib" :params (n) :slots 4 :code (
+               (call2 1 < (local 0 n) (const 2))
+               (jump-if-not 1 more)
+               (return-value (local 0 n))
+               (label more)
+               (call2 2 - (local 0 n) (const 1))
+               (call-global 1 rfib 2 1)
+               (call2 3 - (local 0 n) (const 2))
+               (call-global 2 rfib 3 1)
+               (call2 1 + 1 2)
+               (return-value 1)))))
+           (def rsum-to (vm-assemble '(proto :params (k) :slots 4 :code (
+               (move 1 (const 0)) (move 2 (const 0))
+               (label top)
+               (call2 3 = 1 (local 0 k))
+               (jump-if-not 3 go)
+               (return-value 2)
+               (label go)
+               (call2 2 + 2 1)
+               (call2 1 + 1 (const 1))
+               (jump top)))))
+           (def rskip (vm-assemble '(proto :params (cs n i) :slots 5 :code (
+               (label top)
+               (call2 3 < (local 2 i) (local 1 n))
+               (jump-if-not 3 done)
+               (call2 4 nth (local 0 cs) (local 2 i))
+               (global 3 classes)
+               (call2 3 dict-get 3 4)
+               (call2 3 = 3 (const 0))
+               (jump-if-not 3 done)
+               (call2 2 + (local 2 i) (const 1))
+               (jump top)
+               (label done)
+               (return-value (local 2 i))))))"#,
+    )
+    .unwrap();
     let env = it.global.clone();
     let spaces = env::get(&env, "spaces").unwrap();
-    let cases: Vec<(&str, &str, Rc<Proto>, Vec<Value>)> = vec![
-        ("fib 25", "(fib 25)", fib(), vec![Value::Number(25.0)]),
-        ("loop 1M", "(sum-to 1000000)", sum_to(), vec![Value::Number(1e6)]),
+    let cases: Vec<(&str, &str, &str, Rc<Proto>, Vec<Value>)> = vec![
+        ("fib 25", "(fib 25)", "(rfib 25)", fib(), vec![Value::Number(25.0)]),
+        ("loop 1M", "(sum-to 1000000)", "(rsum-to 1000000)", sum_to(), vec![Value::Number(1e6)]),
         (
             "whitespace 300k",
             "(skip spaces 300000 0)",
+            "(rskip spaces 300000 0)",
             skip(),
             vec![spaces, Value::Number(300000.0), Value::Number(0.0)],
         ),
     ];
-    println!("{:<16} {:>12} {:>12} {:>8} {:>12} {:>8}", "", "stack VM", "registers", "", "real costs", "");
-    for (name, src, proto, args) in cases {
+    println!(
+        "{:<16} {:>10} {:>18} {:>18} {:>18}",
+        "", "stack VM", "ceiling", "real costs", "src/vm.rs registers"
+    );
+    for (name, src, rsrc, proto, args) in cases {
         let (a, va) = best(|| it.eval_str(src).unwrap());
         let (b, vb) = best(|| run(proto.clone(), args.clone(), &env).unwrap());
         let (c, vc) = best(|| run_real(proto.clone(), args.clone(), &env).unwrap());
+        let (d, vd) = best(|| it.eval_str(rsrc).unwrap());
         assert_eq!(va, vb, "{name}: the two machines disagree");
         assert_eq!(va, vc, "{name}: the stack VM and the realistic machine disagree");
-        println!("{name:<16} {a:9.1} ms {b:9.1} ms {:7.2}x {c:9.1} ms {:7.2}x", a / b, a / c);
+        assert_eq!(va, vd, "{name}: the stack and register code of the real machine disagree");
+        println!(
+            "{name:<16} {a:7.1} ms {b:7.1} ms {:5.2}x {c:7.1} ms {:5.2}x {d:7.1} ms {:5.2}x",
+            a / b,
+            a / c,
+            a / d
+        );
     }
 }
