@@ -179,12 +179,27 @@ fn substr(args: &[Value], _: &Env) -> Result<Value, LispError> {
     Ok(Value::Str(Rc::from(&s[from..to])))
 }
 
+thread_local! {
+    /// One shared string per ASCII character, made once: `str-chars` hands these out instead of
+    /// allocating a string per character (strings never change, so sharing one is invisible).
+    static ASCII_CHARS: Vec<Rc<str>> = (0u8..128).map(|b| Rc::from((b as char).to_string().as_str())).collect();
+}
+
 /// `(str-chars s)`: the characters of s, each a one-character string. A reader written in EELisp
 /// walks this list by index (`nth` on a list is constant time; `substr` on a string isn't).
 fn str_chars(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let s = as_str(args.first().unwrap_or(&Value::Null), "str-chars")?;
     let mut buf = [0u8; 4];
-    Ok(list_val(s.chars().map(|c| Value::Str(Rc::from(&*c.encode_utf8(&mut buf)))).collect()))
+    ASCII_CHARS.with(|ascii| {
+        Ok(list_val(
+            s.chars()
+                .map(|c| match ascii.get(c as usize) {
+                    Some(shared) => Value::Str(shared.clone()),
+                    None => Value::Str(Rc::from(&*c.encode_utf8(&mut buf))),
+                })
+                .collect(),
+        ))
+    })
 }
 
 /// `(symbol "name")` and `(keyword "name")`: the symbol or keyword with that name. Strings,
