@@ -85,7 +85,7 @@ fn a_new_macro_in_the_compiler_takes_two_generations_to_settle() {
         line[line.rfind(":code").unwrap()..].to_string()
     };
     assert!(
-        demo(&r.first).contains("(load compiler-twice)"),
+        demo(&r.first).contains("(global (t 0) compiler-twice)") && demo(&r.first).contains("tail-call-at"),
         "generation 1 calls it: {}",
         demo(&r.first)
     );
