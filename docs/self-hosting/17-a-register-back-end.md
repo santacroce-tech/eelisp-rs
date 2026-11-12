@@ -1,6 +1,6 @@
 # 17. A register back end
 
-*Branch: `exp/register-vm`. Tags: `register-vm-2` (where it starts), `register-vm-3`, `register-vm-4`. Tools:
+*Branch: `exp/register-vm`. Tags: `register-vm-2` (where it starts), `register-vm-3`, `register-vm-4`, `register-vm-5`. Tools:
 `scripts/ab.sh`, `examples/front_end.rs`, `examples/read_kinds.rs`, `examples/bench.rs`, and new
 ones: `examples/fib_variants.rs`, `examples/prof_compile.rs`, and `examples/count_calls.rs` with
 the `count-calls` feature.*
@@ -200,4 +200,54 @@ Each new instruction has to earn more than that.
 
 Against `register-vm-3`: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms, running code within
 0.97–1.05×.
+
+## let, if, and, or
+
+What stack code remained in the reader's loops was mostly `let` bindings (a value pushed, then
+popped into its slot by `init-local`) and `if`, `and` and `or` used as values or as tests. They
+now compile to registers.
+
+- **A register write is a new binding.** Until now a register instruction wrote *through* a slot
+  that a closure had captured, as `def-local` does. Temporaries are never captured, so that only
+  mattered for writes into variables, and the one kind of variable write the back end makes is a
+  `let` binding. A binding is new each time, as `init-local` makes it: a closure made in an
+  earlier turn of a loop keeps its own value. So every register write is now that kind of write.
+  A test makes a closure, overwrites its slot from a register, and checks the closure still sees
+  the old value.
+- **A value straight into its slot.** For each binding the slot is taken first, the value is
+  compiled with that slot as its destination, and only then is the name bound. So the name isn't
+  visible in its own value, and let* scoping is what it was.
+- **`if`, `and`, `or` as values** compute into their destination with jumps. **As tests**,
+  `(and a b)` is a chain of `jump-if-not`, and `(or a b)` jumps on to the body as soon as one
+  is true. Tests within tests nest the same way.
+
+The first version computed each value into a temporary and then rewrote the last instruction to
+point at the slot instead. That copied the instruction list once per binding (`take`, `drop`,
+`cons`), and the counter showed it: 14% more calls per form compiled, and compiling went from
+15.7 to 17.8 ms. Passing the destination down to whatever computes the value
+(`compiler-to-dest`) costs nothing extra. That was the version committed.
+
+| | before | after |
+|---|---|---|
+| read the snippet files | 37.7 ms | 35.3 ms |
+| compile (`prof_compile`) | 15.7 ms | 15.1 ms |
+| whitespace / symbols / strings, per character | 107 / 331 / 211 ns | 100 / 316 / 204 ns |
+
+Running code didn't move (0.97–1.08× on both benchmarks), as expected: this was for the reader.
+
+`recur` is still stack code. Its instruction already rebinds the loop's slots straight from the
+stack and jumps, in one dispatch. A register version would be a new instruction, and every new
+instruction has cost the others a few percent; there is little here to win that back.
+
+Where the front end stands, against the start of chapter 16 (the stack VM with the read cache):
+
+| | chapter 15 | now |
+|---|---|---|
+| read the snippet files | 43.4 ms | 35.3 ms |
+| compile them | 14.9 ms | 15.1 ms |
+| running compiled code | | 1.0–2.0× faster |
+
+Reading is still the larger cost, at roughly 100–550 ns per character against 7 for the Rust
+reader. The counts say what's left: about ten calls per character, each now a register
+instruction or an intrinsic. The remaining cost is the price of a call and of copying values.
 

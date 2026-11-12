@@ -172,7 +172,8 @@ binary nobody can reproduce), and it is the reference for testing.
   loop 1.89×. See docs/self-hosting/16-registers.md. Step 2: the compiler emits register code
   for calls and the image crossed over in one go; compiled loops and tail calls 1.9×, calls 1.35×,
   reading 7% faster, compiling 18% slower. Then intrinsics for `=` and one-argument builtins,
-  found by counting calls: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms. See
+  found by counting calls: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms; then `let`, `if`,
+  `and`, `or` in registers: reading 35.3 ms, compiling 15.1 ms. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):

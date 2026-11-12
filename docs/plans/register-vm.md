@@ -87,9 +87,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   not slower code. Intrinsics for `=`/`!=` and a `call1` with intrinsics for `head`, `length`
   and the predicates: reading 43.0 → 38.0 ms, compiling back to 16.2 ms. Cheaper boxes kept;
   a special-form table and a shared call1/call2 arm measured and reverted.
-- **Next:** `let`/`or`/`recur` in registers; the cost of a call itself (frames, slot churn on
-  register calls, `Value` clone/drop, a quarter of every profile). Step 4 (retiring stack code)
-  waits until stack code is rare.
+- **Then** (tag `register-vm-5`): `let` values computed straight into their slots, `if`/`and`/
+  `or` in registers and as jump chains in tests; a register write is a new binding (as
+  `init-local`). Reading 37.7 → 35.3 ms, compiling 15.7 → 15.1 ms. `recur` stays stack code.
+- **Next:** the cost of a call itself and of copying values (frames, slot churn on register
+  calls, `Value` clone/drop: a quarter of every profile). Step 4 (retiring stack code) waits
+  until stack code is rare.
 
 ## What has to stay true
 
