@@ -512,27 +512,36 @@ impl Vm {
         // every instruction. They change only when control moves to another frame: a call that
         // enters a compiled function, a tail call, a return. Then they are reloaded.
         'frame: loop {
-            let (proto, mut pc) = {
+            let (proto, mut pc, sb) = {
                 let fr = self.frames.last().expect("vm has no frame");
-                (fr.proto.clone(), fr.pc)
+                (fr.proto.clone(), fr.pc, fr.slot_base)
             };
             let code: &[Op] = &proto.code;
             loop {
             let op = code.get(pc).copied().unwrap_or(Op::Return);
             pc += 1;
-            let fr = self.frames.last_mut().expect("vm has no frame");
             match op {
                 Op::Const(i) => {
                     let v = copy(&proto.consts[i as usize]);
                     self.stack.push(v);
                 }
                 Op::Load(s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let v = load_global(&fr.env, &proto, s)?;
                     self.stack.push(v);
                 }
-                Op::Def(s) => env::define_sym(&fr.env, &proto.syms[s as usize], top(&self.stack)),
-                Op::DefPop(s) => env::define_sym(&fr.env, &proto.syms[s as usize], pop(&mut self.stack)),
-                Op::Set(s) => env::set(&fr.env, &proto.syms[s as usize], top(&self.stack))?,
+                Op::Def(s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    env::define_sym(&fr.env, &proto.syms[s as usize], top(&self.stack));
+                }
+                Op::DefPop(s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    env::define_sym(&fr.env, &proto.syms[s as usize], pop(&mut self.stack));
+                }
+                Op::Set(s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    env::set(&fr.env, &proto.syms[s as usize], top(&self.stack))?;
+                }
                 Op::Pop => {
                     pop(&mut self.stack);
                 }
@@ -556,17 +565,23 @@ impl Vm {
                         pop(&mut self.stack);
                     }
                 }
-                Op::PushScope => fr.env = env::child(&fr.env),
+                Op::PushScope => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    fr.env = env::child(&fr.env);
+                }
                 Op::PopScope => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let parent = fr.env.borrow().parent.clone();
                     fr.env = parent.expect("pop-scope at the root environment");
                 }
                 Op::Closure(i) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let proto = &proto.protos[i as usize];
                     let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
                     self.stack.push(close_with(proto, &fr.env, up));
                 }
                 Op::Call(n) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     fr.pc = pc;
                     match self.call(n as usize, false)? {
                         Next::Stay => {}
@@ -575,6 +590,7 @@ impl Vm {
                     }
                 }
                 Op::TailCall(n) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     // A frame inside a `try` or a `loop` keeps its frame: the handler or the
                     // restart point must survive the call.
                     let tail = self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
@@ -602,6 +618,7 @@ impl Vm {
                     self.stack.push(Value::Dict(Rc::new(d)));
                 }
                 Op::Loop(i) | Op::LoopSlots(i) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let mark = Mark {
                         start: pc,
                         env: fr.env.clone(),
@@ -612,6 +629,7 @@ impl Vm {
                     self.marks.push(mark);
                 }
                 Op::Recur(n) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let base = self.stack.len() - n as usize;
                     // The loop is this frame's own (the usual case): rebind and jump, here.
                     if self.marks.len() > fr.mark0 as usize {
@@ -632,6 +650,7 @@ impl Vm {
                     self.marks.pop();
                 }
                 Op::Try(catch) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let h = Handler { catch: catch as usize, env: fr.env.clone(), sp: self.stack.len(), marks: self.marks.len() };
                     self.handlers.push(h);
                 }
@@ -639,6 +658,7 @@ impl Vm {
                     self.handlers.pop();
                 }
                 Op::Interp(i) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let form = proto.consts[i as usize].clone();
                     let v = crate::eval::eval(form, fr.env.clone())?;
                     self.stack.push(v);
@@ -680,28 +700,30 @@ impl Vm {
                     }
                 }
                 Op::Macro(i) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let proto = &proto.protos[i as usize];
                     let up = capture(&mut self.slots, fr.slot_base, &fr.upvals, proto);
                     self.stack.push(close_macro(proto, &fr.env, up));
                 }
                 Op::LoadLocal(i, s) => {
-                    let v = match &self.slots[fr.slot_base + i as usize] {
+                    let v = match &self.slots[sb + i as usize] {
                         Slot::Val(v) => copy(v),
                         Slot::Cell(c) => match &*c.borrow() {
                             Some(v) => v.clone(),
-                            None => env::get_sym(&fr.env, &proto.syms[s as usize])?,
+                            None => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
                         },
-                        Slot::Unbound => env::get_sym(&fr.env, &proto.syms[s as usize])?,
+                        Slot::Unbound => env::get_sym(&self.frames.last().unwrap().env, &proto.syms[s as usize])?,
                     };
                     self.stack.push(v);
                 }
-                Op::DefLocal(i) => def_slot(&mut self.slots[fr.slot_base + i as usize], top(&self.stack)),
-                Op::DefLocalPop(i) => def_slot(&mut self.slots[fr.slot_base + i as usize], pop(&mut self.stack)),
-                Op::InitLocal(i) => self.slots[fr.slot_base + i as usize] = Slot::Val(pop(&mut self.stack)),
-                Op::ClearLocal(i) => self.slots[fr.slot_base + i as usize] = Slot::Unbound,
+                Op::DefLocal(i) => def_slot(&mut self.slots[sb + i as usize], top(&self.stack)),
+                Op::DefLocalPop(i) => def_slot(&mut self.slots[sb + i as usize], pop(&mut self.stack)),
+                Op::InitLocal(i) => self.slots[sb + i as usize] = Slot::Val(pop(&mut self.stack)),
+                Op::ClearLocal(i) => self.slots[sb + i as usize] = Slot::Unbound,
                 Op::SetLocal(i, s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let v = top(&self.stack);
-                    match &mut self.slots[fr.slot_base + i as usize] {
+                    match &mut self.slots[sb + i as usize] {
                         Slot::Val(old) => *old = v,
                         Slot::Cell(c) if c.borrow().is_some() => *c.borrow_mut() = Some(v),
                         // not defined in this scope yet: set! looks further out, to the global
@@ -709,6 +731,7 @@ impl Vm {
                     }
                 }
                 Op::LoadCap(i, s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let up = fr.upvals.as_ref().expect("load-cap in a closure with no captures");
                     let v = match &*up[i as usize].borrow() {
                         Some(v) => copy(v),
@@ -717,6 +740,7 @@ impl Vm {
                     self.stack.push(v);
                 }
                 Op::SetCap(i, s) => {
+                    let fr = self.frames.last_mut().expect("vm has no frame");
                     let v = top(&self.stack);
                     let up = fr.upvals.as_ref().expect("set-cap in a closure with no captures");
                     let cell = &up[i as usize];
