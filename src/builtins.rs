@@ -83,6 +83,7 @@ pub fn register(env: &Env) {
     b!("list-builder", list_builder);
     b!("scan-while", |a, _| scan(a, "scan-while", false));
     b!("scan-until", |a, _| scan(a, "scan-until", true));
+    b!("scan-back-until", scan_back_until);
     b!("length", length, None, Some(Intrinsic::Length));
     b!("append", append);
     b!("reverse", reversef);
@@ -675,6 +676,21 @@ fn scan(args: &[Value], name: &str, until: bool) -> Result<Value, LispError> {
         j += 1;
     }
     Ok(Value::Number(j.max(*i as usize) as f64))
+}
+
+/// `(scan-back-until lst i table)`: going back from position i, the position just after the
+/// nearest element in `table` before i, or 0 when there is none: where the line holding position
+/// i starts, given a table of newlines.
+fn scan_back_until(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let (Some(Value::List(l)), Some(Value::Number(i)), Some(Value::Dict(t))) = (args.first(), args.get(1), args.get(2))
+    else {
+        return Err(LispError::InvalidSyntax("scan-back-until expects (list index dict)".into()));
+    };
+    let mut j = if *i > 0.0 { (*i as usize).min(l.len()) } else { 0 };
+    while j > 0 && !dict_key(&l[j - 1]).and_then(|k| t.get(k)).is_some_and(is_truthy) {
+        j -= 1;
+    }
+    Ok(Value::Number(j as f64))
 }
 
 /// `(slice lst start end)`: the elements from start up to (not including) end, like `substr` for

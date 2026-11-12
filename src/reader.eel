@@ -322,21 +322,20 @@
 ;; A comment on the same line, right after the form, belongs to it: the `;; toast` in
 ;; `(defn ed-message (text) …)  ;; toast`. Anything but spaces and tabs in between means it's
 ;; someone else's.
+(def reader-blanks (reader-set (list " " "\t")))
+
 (defn reader-with-trailing-comment (cs n end)
-  (let (i (loop (i end)
-            (if (and (< i n) (or (= (nth cs i) " ") (= (nth cs i) "\t"))) (recur (+ i 1)) i)))
+  (let (i (scan-while cs end reader-blanks))
     (if (and (< i n) (= (nth cs i) ";")) (reader-line-end cs n i) end)))
 
 ;; The position where the line holding position i begins.
-(defn reader-line-start (cs i)
-  (loop (i i)
-    (if (and (> i 0) (!= (nth cs (- i 1)) "\n")) (recur (- i 1)) i)))
+(defn reader-line-start (cs i) (scan-back-until cs i reader-newline))
 
 ;; Is everything from `from` up to `to` whitespace?
 (defn reader-blank? (cs from to)
-  (loop (i from)
+  (loop (i (scan-while cs from reader-spaces))
     (cond (>= i to) true
-          (= (reader-class (nth cs i)) reader-space) (recur (+ i 1))
+          (= (reader-class (nth cs i)) reader-space) (recur (scan-while cs (+ i 1) reader-spaces))
           true false)))
 
 ;; The run of `;` comment lines directly above the form starting at `start`. A blank line or a line

@@ -291,6 +291,12 @@ fn scan_while_and_scan_until() {
     assert_eq!(ev(r#"(scan-until (str-chars "abc") 0 {";" true})"#), "3");
     assert_eq!(ev(r#"(scan-until (str-chars "abc") 0 {"a" nil})"#), "3");
     assert_eq!(ev(r#"(scan-until (list) 0 {})"#), "0");
+    assert_eq!(ev(r#"(scan-back-until (str-chars "ab\ncd") 4 {"\n" true})"#), "3");
+    assert_eq!(ev(r#"(scan-back-until (str-chars "ab\ncd") 3 {"\n" true})"#), "3");
+    assert_eq!(ev(r#"(scan-back-until (str-chars "abc") 2 {"\n" true})"#), "0");
+    assert_eq!(ev(r#"(scan-back-until (str-chars "abc") 9 {"x" true})"#), "0");
+    assert_eq!(ev(r#"(scan-back-until (str-chars "a;b") 9 {";" true})"#), "2");
+    assert_eq!(ev(r#"(scan-back-until (list) -1 {})"#), "0");
     let e = it.eval_str("(scan-while \"abc\" 0 {})").unwrap_err().to_string();
     assert!(e.contains("scan-while expects (list index dict)"), "{e}");
 }
