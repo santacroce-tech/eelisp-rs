@@ -60,10 +60,11 @@
 ;;         each one binds, as a dict of name → slot, and which slots a `def` made
 ;; At the top level :lex is empty, and a `def` is global.
 
-;; A mutable cell: (b) reads it, (b v) sets it.
+;; A mutable cell: (b) reads it, (b v) sets it. A box never holds nil, so a missing argument
+;; means "read": one parameter, not a rest list, which every read would build and test.
 (defn compiler-box (v)
   (let (val v)
-    (fn (. args) (if (empty? args) val (do (set! val (head args)) val)))))
+    (fn (x) (if (nil? x) val (do (set! val x) val)))))
 
 (def compiler-fx-n 0)
 

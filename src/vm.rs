@@ -256,6 +256,33 @@ fn load_global(env: &Env, proto: &Proto, s: u32) -> Result<Value, LispError> {
     Ok(v)
 }
 
+#[cfg(feature = "count-calls")]
+thread_local! {
+    static COUNTS: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+}
+
+/// With the `count-calls` feature, one more call of `name` (a frame entered or a builtin called).
+#[inline(always)]
+fn count(name: &str) {
+    #[cfg(feature = "count-calls")]
+    COUNTS.with(|c| *c.borrow_mut().entry(name.to_string()).or_insert(0) += 1);
+    #[cfg(not(feature = "count-calls"))]
+    let _ = name;
+}
+
+/// The calls counted so far on this thread, most first, and the count started again. Empty
+/// without the `count-calls` feature.
+pub fn take_counts() -> Vec<(String, u64)> {
+    #[cfg(feature = "count-calls")]
+    {
+        let mut v: Vec<(String, u64)> = COUNTS.with(|c| c.borrow_mut().drain().collect());
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    }
+    #[cfg(not(feature = "count-calls"))]
+    Vec::new()
+}
+
 /// The builtin a global holds, when the cache says where it is: read in place, without copying
 /// the value out (and dropping the copy). The reference must not outlive anything that can run
 /// code — a builtin's call may redefine globals and move them.
@@ -536,6 +563,7 @@ struct Frame {
 
 impl Frame {
     fn new(proto: Rc<Proto>, env: Env, base: usize, slot_base: usize, upvals: Option<Rc<[Cell]>>) -> Frame {
+        count(proto.name.as_deref().unwrap_or("(anonymous)"));
         Frame { proto, pc: 0, env, base, slot_base, upvals, mark0: 0, handler0: 0, dst: STACK }
     }
 }
@@ -987,6 +1015,7 @@ impl Vm {
                                 _ => None,
                             };
                             if let Some(v) = v {
+                                count(&bi.name);
                                 deliver(&mut self.stack, &mut self.slots, sb, d, v);
                                 continue;
                             }
@@ -1043,6 +1072,7 @@ impl Vm {
         let x = operand(a, &self.slots, sb, proto, fr)?;
         let y = operand(b, &self.slots, sb, proto, fr)?;
         if let Value::Builtin(bi) = &f {
+            count(&bi.name);
             let v = match (bi.fast, &x, &y) {
                 (Some(op), Value::Number(x), Value::Number(y)) => op.apply(*x, *y),
                 _ => (bi.func)(&[x, y], &fr.env)?,
@@ -1146,6 +1176,7 @@ impl Vm {
         let base = self.stack.len() - n;
         // A builtin is called where it lies, with its arguments where they lie.
         if let Value::Builtin(b) = &self.stack[base - 1] {
+            count(&b.name);
             // `(+ a b)`, `(< a b)`… on two numbers: computed here, no call through the builtin
             if let (Some(op), 2) = (b.fast, n) {
                 if let (Value::Number(x), Value::Number(y)) = (&self.stack[base], &self.stack[base + 1]) {

@@ -30,6 +30,10 @@ sqlite = ["dep:rusqlite"]
 # In a browser, read the clock from JavaScript's `Date.now()`. Off on wasm32-unknown-unknown, the
 # host sets the time with `eelisp::dates::set_now`.
 js = ["dep:js-sys"]
+# Count every frame the VM enters and every builtin it calls, by name (`vm::take_counts`): a
+# profile of an EELisp program at its own level (docs/self-hosting/08-profiling-the-compiler.md,
+# examples/count_calls.rs). Off by default; it costs a hash lookup per call.
+count-calls = []
 
 # In a browser there is no system clock to read: the time comes from JavaScript's Date.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
