@@ -999,29 +999,11 @@ impl Vm {
                         Next::Done(v) => return Ok(v),
                     }
                 }
-                Op::CallGlobal(_, s) | Op::TailCallGlobal(s) => {
-                    let (tail_op, d) = match op {
-                        Op::CallGlobal(d, _) => (false, d),
-                        _ => (true, STACK),
-                    };
-                    let Op::Ext(r, n) = code[pc] else { unreachable!("call-global without its operands") };
+                Op::CallGlobal(..) | Op::TailCallGlobal(_) | Op::CallAt(..) | Op::TailCallAt(_) => {
+                    let Op::Ext(a, b) = code[pc] else { unreachable!("a call without its operands") };
                     pc += 1;
                     self.frames.last_mut().expect("vm has no frame").pc = pc;
-                    match self.call_global(d, s, r, n, tail_op, &proto, sb)? {
-                        Next::Stay => {}
-                        Next::Switch => continue 'frame,
-                        Next::Done(v) => return Ok(v),
-                    }
-                }
-                Op::CallAt(_, r) | Op::TailCallAt(r) => {
-                    let (tail_op, d) = match op {
-                        Op::CallAt(d, _) => (false, d),
-                        _ => (true, STACK),
-                    };
-                    let Op::Ext(n, _) = code[pc] else { unreachable!("call-at without its operands") };
-                    pc += 1;
-                    self.frames.last_mut().expect("vm has no frame").pc = pc;
-                    match self.call_function_in(d, r, n, tail_op, sb)? {
+                    match self.call_op(op, a, b, &proto, sb)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -1057,15 +1039,28 @@ impl Vm {
     }
 
     /// `call-global` and `tail-call-global`: the arguments in registers `r…r+n-1`.
-    #[inline(never)]
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn call_global(&mut self, d: u32, s: u32, r: u32, n: u32, tail_op: bool, proto: &Proto, sb: usize) -> Result<Next, LispError> {
         let f = load_global(&self.frames.last().expect("vm has no frame").env, proto, s)?;
         self.call_regs(f, d, r, n, tail_op, sb)
     }
 
-    /// `call-at` and `tail-call-at`: the function in register `r`, the arguments after it.
+    /// The register calls, out of the dispatch loop: one arm there for all four keeps the loop
+    /// small (chapter 14).
     #[inline(never)]
+    fn call_op(&mut self, op: Op, a: u32, b: u32, proto: &Proto, sb: usize) -> Result<Next, LispError> {
+        match op {
+            Op::CallGlobal(d, s) => self.call_global(d, s, a, b, false, proto, sb),
+            Op::TailCallGlobal(s) => self.call_global(STACK, s, a, b, true, proto, sb),
+            Op::CallAt(d, r) => self.call_function_in(d, r, a, false, sb),
+            Op::TailCallAt(r) => self.call_function_in(STACK, r, a, true, sb),
+            _ => unreachable!(),
+        }
+    }
+
+    /// `call-at` and `tail-call-at`: the function in register `r`, the arguments after it.
+    #[inline(always)]
     fn call_function_in(&mut self, d: u32, r: u32, n: u32, tail_op: bool, sb: usize) -> Result<Next, LispError> {
         let f = match &self.slots[sb + r as usize] {
             Slot::Val(v) => copy(v),
