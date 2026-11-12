@@ -130,11 +130,58 @@ pub enum Value {
     Bytes(Rc<RefCell<Vec<u8>>>),
 }
 
+/// The hash dicts use: the multiply-and-rotate hash rustc uses for its own tables ("Fx"). The
+/// standard library's SipHash is built to resist keys chosen to collide, at several times the
+/// cost; a dict's keys here are a program's own names and short strings (the reader looks up
+/// one character at a time), and that cost was most of a lookup.
+#[derive(Default, Clone, Copy)]
+pub struct FxHasher {
+    hash: u64,
+}
+
+impl FxHasher {
+    const K: u64 = 0xf135_7aea_2e62_a9c5;
+    #[inline(always)]
+    fn add(&mut self, word: u64) {
+        self.hash = (self.hash.rotate_left(26) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            self.add(u64::from_le_bytes(c.try_into().unwrap()));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut buf = [0u8; 8];
+            buf[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(i as u64);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+}
+
+pub type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
+
 /// Insertion-ordered map — load-bearing for record/dict/form ordering (ANALYSIS §4.1).
 #[derive(Clone, Default)]
 pub struct OrderedDict {
     pub keys: Vec<Symbol>,
-    pub map: HashMap<Symbol, Value>,
+    pub map: HashMap<Symbol, Value, FxBuild>,
 }
 
 impl OrderedDict {
