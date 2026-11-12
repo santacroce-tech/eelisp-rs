@@ -205,6 +205,8 @@
 
 (defn compiler-expr (x cx tailp)
   (cond
+    ;; a variable or a constant in tail position is returned from where it is
+    (and tailp (compiler-operand x cx)) (list (list 'return-value (compiler-operand x cx)))
     (symbol? x) (compiler-load x cx)
     (list? x) (if (empty? x) (compiler-const x) (compiler-form x cx tailp))
     (dict? x) (compiler-dict x cx)
@@ -383,6 +385,8 @@
           (compiler-use-tmp cx d)
           (compiler-cat (compiler-args-to args cx d)
                         (list (list 'tail-call-global (head x) (compiler-tmp d) (length args)))))
+      (and tailp (= kind "builtin"))
+        (compiler-cat (compiler-call-into x cx d kind) (list (list 'return-value (compiler-tmp d))))
       (= kind "builtin")
         (let (a (compiler-operand (head args) cx) b (and a (compiler-operand (second args) cx)))
           (if b
