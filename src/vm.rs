@@ -223,7 +223,7 @@ thread_local! {
     /// Machines that finished a run, kept for the next one: `map` calling a compiled function
     /// once per element would otherwise allocate a stack and a frame list each time. A run that
     /// starts while another is going (a builtin calling back into compiled code) takes another.
-    static SPARE: std::cell::RefCell<Vec<Vm>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SPARE: std::cell::RefCell<Vec<Box<Vm>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn run_frame(proto: Rc<Proto>, env: Env) -> Result<Value, LispError> {
@@ -249,11 +249,15 @@ fn run_entry(
     };
     vm.frames.push(frame);
     let r = vm.run();
-    vm.stack.clear();
-    vm.frames.clear();
-    vm.marks.clear();
-    vm.handlers.clear();
-    vm.slots.clear();
+    if r.is_err() {
+        // A normal return leaves the machine empty; an error can leave anything behind.
+        vm.stack.clear();
+        vm.frames.clear();
+        vm.marks.clear();
+        vm.handlers.clear();
+        vm.slots.clear();
+    }
+    debug_assert!(vm.stack.is_empty() && vm.frames.is_empty() && vm.slots.is_empty() && vm.marks.is_empty() && vm.handlers.is_empty());
     SPARE.with(|s| {
         let mut s = s.borrow_mut();
         if s.len() < 16 {
