@@ -330,17 +330,18 @@ fn enter(
         return Frame::new(proto, env, base, slots.len(), upvals);
     };
     let sb = slots.len();
-    slots.resize(sb + n as usize, Slot::Unbound);
+    slots.reserve(n as usize);
     if as_call {
+        // The parameters go straight into their slots; only the rest start unbound.
         let mut args = args.into_iter();
-        let np = proto.params.len();
-        for k in 0..np {
-            slots[sb + k] = Slot::Val(args.next().unwrap_or(Value::Null));
+        for _ in 0..proto.params.len() {
+            slots.push(Slot::Val(args.next().unwrap_or(Value::Null)));
         }
         if proto.rest.is_some() {
-            slots[sb + np] = Slot::Val(Value::List(Rc::new(args.collect())));
+            slots.push(Slot::Val(Value::List(Rc::new(args.collect()))));
         }
     }
+    slots.resize(sb + n as usize, Slot::Unbound);
     Frame::new(proto, closure.clone(), base, sb, upvals)
 }
 
