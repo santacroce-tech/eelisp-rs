@@ -140,8 +140,9 @@ pub enum Op {
     Global(u32, u32),
     Push(u32),
     PopTo(u32),
-    /// `(call2 d f x y)`: d, f; then `Ext(x, y)`. `(call1 d f x)` is the same with `y` set to
-    /// `NO_OPERAND`, sharing its arm of the dispatch loop.
+    /// `(call1 d f x)`: d, f; then `Ext(x, 0)`.
+    Call1(u32, u32),
+    /// `(call2 d f x y)`: d, f; then `Ext(x, y)`.
     Call2(u32, u32),
     /// `(call-global d f r n)`: d (a register), f; then `Ext(r, n)`.
     CallGlobal(u32, u32),
@@ -158,9 +159,6 @@ pub enum Op {
     /// The operands of the instruction before it; never run.
     Ext(u32, u32),
 }
-
-/// `call1`'s missing second operand.
-const NO_OPERAND: u32 = u32::MAX;
 
 /// A register instruction's destination meaning "push it on the stack".
 pub const STACK: u32 = u32::MAX;
@@ -1004,6 +1002,26 @@ impl Vm {
                     }
                     continue 'frame;
                 }
+                Op::Call1(d, s) => {
+                    let Op::Ext(a, _) = code[pc] else { unreachable!("call1 without its operand") };
+                    pc += 1;
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    if let Some(bi) = peek_builtin(&fr.env, &proto, s) {
+                        if let (Some(i), Some(x)) = (bi.intrinsic, operand_ref(a, &self.slots, sb, &proto)) {
+                            if let Some(v) = i.apply1(x) {
+                                count(&bi.name);
+                                deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                                continue;
+                            }
+                        }
+                    }
+                    fr.pc = pc;
+                    match self.call1(d, s, a, &proto, sb)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
                 Op::Call2(d, s) => {
                     let Op::Ext(a, b) = code[pc] else { unreachable!("call2 without its operands") };
                     pc += 1;
@@ -1011,16 +1029,7 @@ impl Vm {
                     // `(< n 2)`, `(nth cs i)` and the like: the builtin and the operands are read
                     // where they are, not copied
                     if let Some(bi) = peek_builtin(&fr.env, &proto, s) {
-                        // `call1` is a call2 with no second operand
-                        if b == NO_OPERAND {
-                            if let (Some(i), Some(x)) = (bi.intrinsic, operand_ref(a, &self.slots, sb, &proto)) {
-                                if let Some(v) = i.apply1(x) {
-                                    count(&bi.name);
-                                    deliver(&mut self.stack, &mut self.slots, sb, d, v);
-                                    continue;
-                                }
-                            }
-                        } else if let (Some(x), Some(y)) =
+                        if let (Some(x), Some(y)) =
                             (operand_ref(a, &self.slots, sb, &proto), operand_ref(b, &self.slots, sb, &proto))
                         {
                             let v = match (bi.fast, bi.intrinsic, x, y) {
@@ -1036,8 +1045,7 @@ impl Vm {
                         }
                     }
                     fr.pc = pc;
-                    let next = if b == NO_OPERAND { self.call1(d, s, a, &proto, sb)? } else { self.call2(d, s, a, b, &proto, sb)? };
-                    match next {
+                    match self.call2(d, s, a, b, &proto, sb)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -1644,8 +1652,8 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 let d = dest(&args[0], p.nslots, tbase)?;
                 let f = intern(&mut p.syms, sym_of(&args[1], "call1's function")?);
                 let x = operand_of(&args[2], &mut p, tbase)?;
-                p.code.push(Op::Call2(d, f));
-                Op::Ext(x, NO_OPERAND)
+                p.code.push(Op::Call1(d, f));
+                Op::Ext(x, 0)
             }
             "call2" => {
                 arity(4)?;
