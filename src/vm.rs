@@ -741,13 +741,7 @@ impl Vm {
         'frame: loop {
             let (proto, mut pc, sb) = {
                 let fr = self.frames.last().expect("vm has no frame");
-                // SAFETY: the frame holds its proto (an `Rc`) for as long as it exists, and the
-                // only places a frame is replaced or removed (a tail call, `ret`, `unwind`) are
-                // followed at once by `continue 'frame` or by leaving `step`: this code is never
-                // run, nor its proto read, after its frame is gone. Borrowing saves a reference
-                // count up and down on every switch of frame (each call and each return).
-                let proto: &Proto = unsafe { &*Rc::as_ptr(&fr.proto) };
-                (proto, fr.pc, fr.slot_base)
+                (fr.proto.clone(), fr.pc, fr.slot_base)
             };
             let code: &[Op] = &proto.code;
             loop {
