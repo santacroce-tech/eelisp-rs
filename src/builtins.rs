@@ -81,7 +81,6 @@ pub fn register(env: &Env) {
     b!("nth", nth, None, Some(Intrinsic::Nth));
     b!("slice", slice);
     b!("list-builder", list_builder);
-    b!("box", boxf);
     b!("scan-while", |a, _| scan(a, "scan-while", false));
     b!("scan-until", |a, _| scan(a, "scan-until", true));
     b!("scan-back-until", scan_back_until);
@@ -685,27 +684,6 @@ fn list_builder(args: &[Value], _: &Env) -> Result<Value, LispError> {
                 items.borrow_mut().extend(args.iter().cloned());
                 Ok(Value::Null)
             }
-        }),
-        fast: None,
-        intrinsic: None,
-    })))
-}
-
-/// `(box v)`: a mutable cell holding v. `(b)` reads it; `(b x)` sets it to x and returns x. The
-/// one place a program keeps state that changes, without a closure over a variable: the compiler
-/// keeps its counters and scope tables in boxes (docs/self-hosting/21-compiling-and-reading-again.md).
-fn boxf(args: &[Value], _: &Env) -> Result<Value, LispError> {
-    let cell = Rc::new(std::cell::RefCell::new(args.first().cloned().unwrap_or(Value::Null)));
-    Ok(Value::Builtin(Rc::new(Builtin {
-        name: "box".into(),
-        arg_mode: ArgMode::Eval,
-        func: Box::new(move |args, _| match args {
-            [] => Ok(cell.borrow().clone()),
-            [x] => {
-                *cell.borrow_mut() = x.clone();
-                Ok(x.clone())
-            }
-            _ => Err(LispError::Arity { func: "box".into(), expected: "0 or 1".into(), got: args.len() }),
         }),
         fast: None,
         intrinsic: None,
