@@ -1182,8 +1182,13 @@ impl Vm {
             if self.frames.len() >= MAX_FRAMES {
                 return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
             }
-            // the arguments are already the callee's first slots
-            self.slots.truncate(at + n as usize);
+            // the arguments are already the callee's first slots; its other slots start unbound.
+            // What lies beyond them is the caller's, dead while the call runs (and every
+            // register write is a new binding), so it is left as it is.
+            let have = self.slots.len().min(at + k);
+            for slot in &mut self.slots[at + n as usize..have] {
+                *slot = Slot::Unbound;
+            }
             fill_to(&mut self.slots, at + k);
             let mut frame = Frame::new(callee.clone(), func.closure.clone(), self.stack.len(), at, func.upvals.clone());
             frame.mark0 = self.marks.len() as u32;
@@ -1310,7 +1315,6 @@ impl Vm {
     fn ret(&mut self, v: Value) -> Option<Value> {
         let fr = self.frames.pop().unwrap();
         self.stack.truncate(fr.base);
-        self.slots.truncate(fr.slot_base);
         // normally already gone (EndLoop, EndTry); this keeps the stacks right whatever happened
         if self.marks.len() > fr.mark0 as usize {
             self.marks.truncate(fr.mark0 as usize);
@@ -1318,12 +1322,18 @@ impl Vm {
         if self.handlers.len() > fr.handler0 as usize {
             self.handlers.truncate(fr.handler0 as usize);
         }
-        let Some(caller) = self.frames.last() else { return Some(v) };
+        let Some(caller) = self.frames.last() else {
+            self.slots.truncate(fr.slot_base);
+            return Some(v);
+        };
         if fr.dst == STACK {
+            self.slots.truncate(fr.slot_base);
             self.stack.push(v);
         } else {
-            // a register call: the callee may have been entered at the caller's argument
-            // registers, which come back before the result goes into one of them
+            // a register call: a callee entered at the caller's argument registers shares the
+            // caller's region; only what lies beyond that region goes
+            let end = caller.slot_base + caller.proto.nslots.unwrap_or(0) as usize;
+            self.slots.truncate(fr.slot_base.max(end));
             restore_slots(&mut self.slots, caller);
             init_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
         }
