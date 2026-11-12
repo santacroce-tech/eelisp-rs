@@ -24,6 +24,7 @@ become a book.
 | 16 | [Registers](16-registers.md) | Register instructions in the VM, mixing with stack code: calls and loops 1.2–1.8× faster on hand-written code, the reader's loop not at all, and a dispatch loop that slowed stack code until it was made smaller again; then intrinsics for `nth` and `dict-get`, and the reader's loop 1.89× |
 | 17 | [A register back end](17-a-register-back-end.md) | The compiler emits register code for calls, and the crossing is ordinary; calls not worth registers, a slot that costs more than it saves, a function that isn't defined while it is compiled (`call-at`), and running code up to 1.9× faster; then counting calls to find the reader's and compiler's costs, intrinsics for `=` and one-argument builtins, reading 12% faster and compiling back where it was; `let`, `if`, `and`, `or` in registers |
 | 18 | [What a call costs](18-what-a-call-costs.md) | Register calls that leave the caller's dead slots alone (a few percent), copying values inline (nothing), and the finding that reading's time is no longer in the machine's calls but in the reader's instructions per character and what it allocates |
+| 19 | [Scanning](19-scanning.md) | Two scanning builtins run the reader's per-character loops while every decision stays in EELisp, and a list builder ends three allocations per element: reading 35.1 → 27.6 ms, half the calls |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every

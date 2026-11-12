@@ -94,8 +94,11 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   alone (`fib` 1.06×, calls 1.03×, kept); inline copies of common values (no gain, reverted).
   Reading's time is now the reader's instructions per character (40% dispatch) and what it
   allocates (22%), not the machine's calls.
-- **Next, a decision:** scanning primitives for the reader, a list-building primitive, or
-  word-sized values (chapter 18). Step 4 (retiring stack code) waits until stack code is rare.
+- **Decided: scanning primitives, then a list builder** (tag `register-vm-7`, chapter 19).
+  `scan-while`/`scan-until` run the reader's runs in one call each; `list-builder` grows lists
+  in place. Reading 35.1 → 27.6 ms. Word-sized values wait.
+- **Next:** the reader's per-token cost (token-kind dispatch, token lists, text), in EELisp.
+  Step 4 (retiring stack code) waits until stack code is rare.
 
 ## What has to stay true
 

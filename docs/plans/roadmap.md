@@ -174,7 +174,8 @@ binary nobody can reproduce), and it is the reference for testing.
   reading 7% faster, compiling 18% slower. Then intrinsics for `=` and one-argument builtins,
   found by counting calls: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms; then `let`, `if`,
   `and`, `or` in registers: reading 35.3 ms, compiling 15.1 ms. Chapter 18: the machine's calls
-  are no longer what reading costs; the reader's per-character work and allocation are. See
+  are no longer what reading costs; the reader's per-character work and allocation are. Chapter
+  19: scanning builtins and a list builder, reading 35.1 → 27.6 ms. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
