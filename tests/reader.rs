@@ -294,3 +294,24 @@ fn scan_while_and_scan_until() {
     let e = it.eval_str("(scan-while \"abc\" 0 {})").unwrap_err().to_string();
     assert!(e.contains("scan-while expects (list index dict)"), "{e}");
 }
+
+/// The builder the reader makes its lists with: in place while building, and the list it gives
+/// back never changes afterwards.
+#[test]
+fn a_list_builder_grows_in_place_and_hands_back_a_list_that_stays() {
+    let it = Interpreter::new();
+    let ev = |src: &str| print_value(&it.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e}")), false);
+    assert_eq!(ev("(let (b (list-builder)) (b))"), "()");
+    assert_eq!(ev("(let (b (list-builder 1 2)) (b 3) (b 4 5) (b))"), "(1 2 3 4 5)");
+    assert_eq!(ev("(let (b (list-builder)) (b 1))"), "nil");
+    // the list handed back stays as it was; the builder starts again empty
+    assert_eq!(ev("(let (b (list-builder 1) first (b)) (b 2) (list first (b)))"), "((1) (2))");
+    // a thousand elements, the reader's case
+    assert_eq!(ev("(let (b (list-builder)) (for-each i (range 0 1000) (b i)) (length (b)))"), "1000");
+    let c = Interpreter::new();
+    c.set_compiled(true).unwrap();
+    assert_eq!(
+        print_value(&c.eval_str("(let (b (list-builder 1 2)) (b 3) (b))").unwrap(), false),
+        "(1 2 3)"
+    );
+}

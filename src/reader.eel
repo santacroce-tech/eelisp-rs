@@ -238,26 +238,20 @@
 
 ;; ── growing a list ─────────────────────────────────────────────────────
 ;; Lists are vectors, so `(append acc (list x))` copies acc and a list built one element at a time
-;; costs n²/2 copies. A builder is (chunks chunk): elements go into a short chunk, a full chunk
-;; joins the list of chunks, and `reader-built` joins them all once, in one `append`.
+;; costs n²/2 copies. The reader builds with `list-builder`, which grows a vector in place and
+;; hands back a list that never changes after. Each builder is used by one loop, one element
+;; after another, so `reader-add` can return the same builder it was given.
 
-(def reader-chunk 32)
+(defn reader-builder () (list-builder))
 
-(defn reader-builder () (list (list) (list)))
+(defn reader-add (b x) (b x) b)
 
-(defn reader-add (b x)
-  (let (chunk (nth b 1))
-    (if (< (length chunk) reader-chunk)
-      (list (head b) (append chunk (list x)))
-      (list (append (head b) (list chunk)) (list x)))))
-
-(defn reader-built (b)
-  (apply append (append (head b) (list (nth b 1)))))
+(defn reader-built (b) (b))
 
 ;; The elements of a list up to its closer, added to acc. `[a b]` starts acc with `list`, so it
 ;; reads as (list a b).
 (defn reader-seq (cs n i close acc)
-  (loop (i i b (list (list) acc))
+  (loop (i i b (apply list-builder acc))
     (let (tok (reader-token cs n i))
       (cond
         (= (head tok) :eof) (reader-fail cs n (nth tok 3) "unclosed list")

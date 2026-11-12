@@ -80,6 +80,7 @@ pub fn register(env: &Env) {
     b!("tail", cdr);
     b!("nth", nth, None, Some(Intrinsic::Nth));
     b!("slice", slice);
+    b!("list-builder", list_builder);
     b!("scan-while", |a, _| scan(a, "scan-while", false));
     b!("scan-until", |a, _| scan(a, "scan-until", true));
     b!("length", length, None, Some(Intrinsic::Length));
@@ -631,6 +632,30 @@ fn nth(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let i = as_num(&args[1])? as usize;
     Ok(l.get(i).cloned().unwrap_or(Value::Null))
 }
+/// `(list-builder a …)`: a builder for a list, starting with the elements given. `(b x …)` adds
+/// to it, in place, and returns nil; `(b)` returns the list made so far and starts the builder
+/// again, empty. EELisp lists never change, so building one an element at a time copies it each
+/// time; a builder grows its own vector instead, and the list it hands back is never changed
+/// after. The EELisp reader builds every list it reads with one
+/// (docs/self-hosting/19-scanning.md).
+fn list_builder(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let items = Rc::new(std::cell::RefCell::new(args.to_vec()));
+    Ok(Value::Builtin(Rc::new(Builtin {
+        name: "list-builder".into(),
+        arg_mode: ArgMode::Eval,
+        func: Box::new(move |args, _| {
+            if args.is_empty() {
+                Ok(Value::List(Rc::new(std::mem::take(&mut *items.borrow_mut()))))
+            } else {
+                items.borrow_mut().extend(args.iter().cloned());
+                Ok(Value::Null)
+            }
+        }),
+        fast: None,
+        intrinsic: None,
+    })))
+}
+
 /// `(scan-while lst i table)` / `(scan-until lst i table)`: from position i, the first position
 /// whose element is not in `table` (while) or is (until); the list's length if there is none.
 /// An element is in the table when the dict has it as a key with a value other than nil or
