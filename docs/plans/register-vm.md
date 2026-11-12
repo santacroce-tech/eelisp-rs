@@ -113,9 +113,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
 - **Then** (tag `register-vm-12`, chapter 24): redefinable arithmetic costs 1–6% at most (left
   as it is); `recur` pops into slots and keeps the environment, local operands hold their slot:
   calls 1.15×, loops 1.14×. The loop's gap to the prototype is 1.8×, `fib`'s 2×.
-- **Next:** frames that borrow instead of own (a reference taken and given back per call for the
-  function, its body, environment and cells). Returning multiple values (a language feature) is
-  still open. Step 4 waits until stack code is rare.
+- **Then** (tag `register-vm-13`, chapter 24): borrowing a frame's code measured as no gain
+  (reference counts are cheap; frames that borrow dropped as an idea); `jump-if-not` reads its
+  test in place, register overwrites skip needless drops: `fib` 1.14×, loops 1.17×. The gap to
+  the prototype: 1.4–1.7×, mostly work the real machine must do.
+- **Next:** the VM has no single large cost left. Open: returning multiple values (a language
+  feature); making compiled mode the default (the known differences, merging). Step 4 waits.
 
 ## What has to stay true
 

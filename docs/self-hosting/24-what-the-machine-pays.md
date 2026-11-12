@@ -1,6 +1,6 @@
 # 24. What the machine pays
 
-*Branch: `exp/register-vm`. Tags: `register-vm-11` (where it starts), `register-vm-12`. Tools:
+*Branch: `exp/register-vm`. Tags: `register-vm-11` (where it starts), `register-vm-12`, `register-vm-13`. Tools:
 `scripts/ab.sh`, `examples/prof_one.rs`, Instruments' Time Profiler (`xctrace`) with `atos`, and
 `examples/nanbox_proto.rs` as the yardstick.*
 
@@ -72,3 +72,50 @@ environment and to its captured cells, and gives them all back on return. Switch
 loop to another frame takes and drops one more. The prototype's frames are three numbers.
 Making frames borrow instead of own is the next structural change. It has to be careful: a tail
 call replaces the frame whose code is still running, and that code must not be freed under it.
+
+## Calls: borrowing measured, and three costs found by line
+
+Frames that borrow were tried in the smallest form first. Every switch of frame took a reference
+to the frame's compiled code and dropped it at the next switch, though the frame holds one for as
+long as it exists. Borrowing it instead, which is safe because a frame is replaced or removed only
+just before control leaves its code (the reasoning is in the commit), measured 0.96–1.02×.
+Reference counts here aren't atomic, and a count up and down costs next to nothing. That was
+reverted, unsafe code being worth keeping only for a gain, and it says that frames borrowing their
+function, environment and cells, three more such pairs per call, would gain a few percent at
+most. The idea is dropped.
+
+So `fib` was profiled by source line too. Its top line wasn't a call at all:
+
+| `fib 27`, by line | samples |
+|---|---|
+| `jump-if-not`, reading its test | 1,487 (17%) |
+| dropping values | 967 |
+| entering a callee in place | 838 |
+| `ret`, cutting the slots back | 481 |
+
+**`jump-if-not`** read its test through `operand`, which copies the value out of its register (32
+bytes) and drops the copy after testing it. Part of that line's cost is the branch itself, hard to
+predict in `fib`. But it can read the test where it is, as `call2` reads its operands. `fib` 1.13×,
+`loop 1M` 1.12×, calls 1.08×.
+
+**Overwriting a register** calls `Value`'s drop for the old value, an out-of-line function, even
+when the old value is a number, a boolean or nil, which own nothing. Those are now overwritten
+without the call. Tail calls 1.08×, the loop 1.06×, the rest even.
+
+**`ret`'s truncate** drops each slot it removes. Checking first that none of them owns anything,
+and then shortening the vector without dropping, measured 0.97–1.01×: the check costs what the
+drops did. Reverted.
+
+| `scripts/ab.sh` against `register-vm-12` | |
+|---|---|
+| `fib 25` | 1.14× |
+| tail calls 300k | 1.13× |
+| loop 1M | 1.17× |
+| calls 300k | 1.05× |
+| closures, map/filter | 0.97–1.03× |
+
+Against the prototype of chapter 23, the real machine is now 1.4 to 1.7 times slower, from 2 at the
+start of this chapter. What's left is mostly what the real machine has to do: unbound slots that
+mean a global, cells, marks and handlers, errors with their kinds, globals that can be redefined.
+Each costs a little, and none showed up as a single line worth a change of its own.
+

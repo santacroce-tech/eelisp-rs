@@ -181,7 +181,8 @@ binary nobody can reproduce), and it is the reference for testing.
   the compiler builds code in one list, compiling 14.5 → 12.5 ms; loading 33 ms. Chapter 23:
   word-sized values prototyped, mixed (0.88–1.4×), set aside; the machine's own structure costs
   twice what a minimal machine does. Chapter 24: profiled by source line; `recur` and local
-  operands cheaper, calls and loops 1.14–1.15×. See
+  operands cheaper, calls and loops 1.14–1.15×; `jump-if-not` in place, `fib` 1.14× more; the
+  machine is now 1.4–1.7× a minimal one. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
