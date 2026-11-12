@@ -67,6 +67,8 @@ pub fn register(env: &Env) {
     b!("str-starts-with", str_starts_with);
     b!("str-ends-with", str_ends_with);
     b!("str-chars", str_chars);
+    b!("str-codes", str_codes);
+    b!("str-from-codes", str_from_codes);
     // lists
     b!("list", listf);
     b!("cons", cons);
@@ -177,6 +179,36 @@ fn str_chars(args: &[Value], _: &Env) -> Result<Value, LispError> {
     let s = as_str(args.first().unwrap_or(&Value::Null), "str-chars")?;
     let mut buf = [0u8; 4];
     Ok(list_val(s.chars().map(|c| Value::Str(Rc::from(&*c.encode_utf8(&mut buf)))).collect()))
+}
+
+/// `(str-codes s)`: the Unicode code points of s, as numbers. What the EELisp reader scans: a
+/// number is copied and compared without touching memory, a one-character string is not.
+fn str_codes(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let s = as_str(args.first().unwrap_or(&Value::Null), "str-codes")?;
+    Ok(list_val(s.chars().map(|c| Value::Number(c as u32 as f64)).collect()))
+}
+
+/// `(str-from-codes codes [start [end]])`: the string of those code points, from start up to end
+/// (0-based, end-exclusive, like `slice`).
+fn str_from_codes(args: &[Value], _: &Env) -> Result<Value, LispError> {
+    let codes = as_list(args.first().unwrap_or(&Value::Null))?;
+    let at = |k: usize, default: usize| -> Result<usize, LispError> {
+        match args.get(k) {
+            None | Some(Value::Null) => Ok(default),
+            Some(v) => Ok((as_num(v)?.max(0.0) as usize).min(codes.len())),
+        }
+    };
+    let start = at(1, 0)?;
+    let end = at(2, codes.len())?.max(start);
+    let mut out = String::with_capacity(end - start);
+    for v in &codes[start..end] {
+        let n = as_num(v)?;
+        match char::from_u32(n as u32).filter(|_| n >= 0.0 && n.fract() == 0.0) {
+            Some(c) => out.push(c),
+            None => return Err(LispError::Runtime(format!("str-from-codes: {} is not a character code", n))),
+        }
+    }
+    Ok(Value::Str(out.into()))
 }
 
 /// `(symbol "name")` and `(keyword "name")`: the symbol or keyword with that name. Strings,

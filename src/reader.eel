@@ -14,9 +14,13 @@
 ;;
 ;; where kind is one of :open :close :quote :quasi :unquote :splice :str :num :kw :sym :eof.
 ;;
-;; From the host it needs only `str-chars` (a string's characters, so position i is one `nth`),
-;; `symbol` and `keyword` (to make those values from their names) and `->number` (decimal
-;; numbers, read exactly as Rust reads them).
+;; From the host it needs only `str-codes` and `str-from-codes` (a string's characters as
+;; numbers, so position i is one `nth`, and back), `symbol` and `keyword` (to make those values
+;; from their names) and `->number` (decimal numbers, read exactly as Rust reads them).
+;;
+;; Characters are scanned as code points, numbers, not as one-character strings. A number is
+;; copied and compared without touching memory; a string has to be allocated, counted and compared
+;; byte by byte. That made reading about twice as fast (chapter 15).
 ;;
 ;; Names starting with `reader-` are its internals.
 
@@ -43,18 +47,41 @@
          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&*+-./:<=>?@\\^_|~"
          reader-word)))
 
-(defn reader-class (c)
-  (let (class (dict-get reader-classes c))
-    (cond class class
-          (= (str-trim c) "") reader-space
-          true reader-word)))
 
 ;; The characters from position `from` up to `to`, as a string.
-(defn reader-text (cs from to) (str-join "" (slice cs from to)))
+(defn reader-text (cs from to) (str-from-codes cs from to))
 
-;; Characters that are a token on their own.
+;; A table with an entry for each ASCII code, 0 to 127, made by asking `f` about its character.
+(defn reader-ascii (f) (map (fn (code) (f (str-from-codes (list code)))) (range 0 128)))
+
+;; The entry for code c in such a table, or nil past ASCII.
+(defn reader-at (table c) (if (< c 128) (nth table c) nil))
+
+(def reader-class-table (reader-ascii (fn (c) (dict-get reader-classes c))))
+
+(defn reader-class (c)
+  (let (class (reader-at reader-class-table c))
+    (cond class class
+          (= (str-trim (str-from-codes (list c))) "") reader-space
+          true reader-word)))
+
+;; Characters that are a token on their own, and each ASCII character as a string, made once:
+;; the value of a punctuation token is that shared string.
 (def reader-punct
-  {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close "'" :quote "`" :quasi})
+  (reader-ascii (fn (c) (dict-get {"(" :open "[" :open "{" :open ")" :close "]" :close "}" :close
+                                   "'" :quote "`" :quasi} c))))
+(def reader-char-text (reader-ascii (fn (c) c)))
+
+;; The codes the lexer and parser look for.
+(def reader-nl 10)
+(def reader-tab 9)
+(def reader-blank 32)
+(def reader-quote-mark 34)    ; "
+(def reader-comma 44)
+(def reader-colon 58)
+(def reader-semicolon 59)
+(def reader-at-sign 64)
+(def reader-backslash 92)
 
 ;; What a backslash in a string stands for. Any other escaped character is kept with its
 ;; backslash: "\d" is the two characters \ and d.
@@ -75,7 +102,7 @@
 
 (defn reader-line-end (cs n i)
   (loop (i i)
-    (if (and (< i n) (!= (nth cs i) "\n")) (recur (+ i 1)) i)))
+    (if (and (< i n) (!= (nth cs i) reader-nl)) (recur (+ i 1)) i)))
 
 ;; The token at position i (after any whitespace and comments).
 (defn reader-token (cs n i)
@@ -83,13 +110,13 @@
     (if (>= i n)
       (list :eof nil i i)
       (let (c (nth cs i)
-            kind (dict-get reader-punct c))
+            kind (reader-at reader-punct c))
         (cond
-          kind (list kind c i (+ i 1))
-          (= c ",") (if (and (< (+ i 1) n) (= (nth cs (+ i 1)) "@"))
-                      (list :splice ",@" i (+ i 2))
-                      (list :unquote "," i (+ i 1)))
-          (= c "\"") (reader-string cs n i)
+          kind (list kind (nth reader-char-text c) i (+ i 1))
+          (= c reader-comma) (if (and (< (+ i 1) n) (= (nth cs (+ i 1)) reader-at-sign))
+                               (list :splice ",@" i (+ i 2))
+                               (list :unquote "," i (+ i 1)))
+          (= c reader-quote-mark) (reader-string cs n i)
           true (reader-atom cs n i))))))
 
 ;; A string literal starting at the opening quote. Most strings have no backslash, and those are
@@ -100,11 +127,11 @@
       (error "unterminated string" :parse)
       (let (c (nth cs i))
         (cond
-          (= c "\"")
+          (= c reader-quote-mark)
             (list :str
                   (if plain (reader-text cs (+ start 1) i) (reader-unescape cs (+ start 1) i))
                   start (+ i 1))
-          (and (= c "\\") (< (+ i 1) n)) (recur (+ i 2) false)
+          (and (= c reader-backslash) (< (+ i 1) n)) (recur (+ i 2) false)
           true (recur (+ i 1) plain))))))
 
 ;; The text of a string between its quotes, with its escapes replaced.
@@ -112,11 +139,10 @@
   (loop (i from run from b (reader-builder))
     (cond
       (>= i to) (str-join "" (reader-built (reader-add b (reader-text cs run to))))
-      (and (= (nth cs i) "\\") (< (+ i 1) to))
-        (let (e (nth cs (+ i 1))
-              meant (dict-get reader-escapes e)
+      (and (= (nth cs i) reader-backslash) (< (+ i 1) to))
+        (let (meant (dict-get reader-escapes (reader-text cs (+ i 1) (+ i 2)))
               b (reader-add b (reader-text cs run i)))
-          (recur (+ i 2) (+ i 2) (reader-add b (if meant meant (str "\\" e)))))
+          (recur (+ i 2) (+ i 2) (reader-add b (if meant meant (reader-text cs i (+ i 2))))))
       true (recur (+ i 1) run b))))
 
 ;; An atom runs to the next delimiter. Then it's classified, in this order: `:name` is a keyword,
@@ -126,9 +152,9 @@
               (if (and (< i n) (= (reader-class (nth cs i)) reader-word)) (recur (+ i 1)) i))
         text (reader-text cs start end)
         c (nth cs start))
-    (if (= c ":")
+    (if (= c reader-colon)
       (list :kw (substr text 1) start end)
-      (let (num (if (dict-has reader-number-starts c) (reader-number text) nil))
+      (let (num (if (reader-at reader-number-starts c) (reader-number text) nil))
         (if (nil? num)
           (list :sym text start end)
           (list :num num start end))))))
@@ -139,7 +165,9 @@
 
 ;; Only an atom starting with one of these can be a number (a digit, a sign, a dot, inf or nan),
 ;; so most symbols never reach the number parsers.
-(def reader-number-starts (reader-set (str-chars "0123456789+-.iInN")))
+(def reader-number-starts
+  (let (starts (reader-set (str-chars "0123456789+-.iInN")))
+    (reader-ascii (fn (c) (dict-has starts c)))))
 
 ;; Could Rust's number parser accept it? It takes an optional sign, then digits or a dot, or one of
 ;; inf, infinity and nan in any case. Only those atoms are handed to `->number`, so a symbol like
@@ -289,12 +317,12 @@
 
 ;; Every top-level form, in order.
 (defn read-all (src)
-  (let (cs (str-chars src))
+  (let (cs (str-codes src))
     (map head (reader-spans cs (length cs)))))
 
 ;; Every top-level form as (form source comments).
 (defn read-top (src)
-  (let (cs (str-chars src)
+  (let (cs (str-codes src)
         n (length cs))
     (map (fn (span)
            (let (start (nth span 1)
@@ -309,13 +337,13 @@
 ;; someone else's.
 (defn reader-with-trailing-comment (cs n end)
   (let (i (loop (i end)
-            (if (and (< i n) (or (= (nth cs i) " ") (= (nth cs i) "\t"))) (recur (+ i 1)) i)))
-    (if (and (< i n) (= (nth cs i) ";")) (reader-line-end cs n i) end)))
+            (if (and (< i n) (or (= (nth cs i) reader-blank) (= (nth cs i) reader-tab))) (recur (+ i 1)) i)))
+    (if (and (< i n) (= (nth cs i) reader-semicolon)) (reader-line-end cs n i) end)))
 
 ;; The position where the line holding position i begins.
 (defn reader-line-start (cs i)
   (loop (i i)
-    (if (and (> i 0) (!= (nth cs (- i 1)) "\n")) (recur (- i 1)) i)))
+    (if (and (> i 0) (!= (nth cs (- i 1)) reader-nl)) (recur (- i 1)) i)))
 
 ;; Is everything from `from` up to `to` whitespace?
 (defn reader-blank? (cs from to)

@@ -615,6 +615,8 @@ pub static CORE: &[Entry] = &[
          "(str-replace \"a-b-c\" \"-\" \"+\")   → \"a+b+c\""),
     doc!("substr", "(substr s start end) → string", "A slice by character index: 0-based, end-exclusive.", "(substr \"hello\" 1 3)   → \"el\""),
     doc!("str-chars", "(str-chars s) → list", "The characters of s, each a one-character string.", "(str-chars \"héllo\")   → (\"h\" \"é\" \"l\" \"l\" \"o\")"),
+    doc!("str-codes", "(str-codes s) → list", "The Unicode code points of s, as numbers.", "(str-codes \"aé\")   → (97 233)"),
+    doc!("str-from-codes", "(str-from-codes codes [start [end]]) → string", "The string made of those code points; with start and end, only the codes from start up to end (0-based, end-exclusive, like `slice`).", "(str-from-codes '(104 105))   → \"hi\""),
     doc!("str-starts-with", "(str-starts-with s prefix) → bool", "Does s begin with prefix?", "(str-starts-with \"hello\" \"he\")   → true"),
     doc!("str-ends-with", "(str-ends-with s suffix) → bool", "Does s end with suffix?", "(str-ends-with \"hello\" \"lo\")   → true"),
     // ── lists ────────────────────────────────────────────────────────
