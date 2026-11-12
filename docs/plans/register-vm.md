@@ -117,8 +117,11 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   (reference counts are cheap; frames that borrow dropped as an idea); `jump-if-not` reads its
   test in place, register overwrites skip needless drops: `fib` 1.14×, loops 1.17×. The gap to
   the prototype: 1.4–1.7×, mostly work the real machine must do.
-- **Next:** the VM has no single large cost left. Open: returning multiple values (a language
-  feature); making compiled mode the default (the known differences, merging). Step 4 waits.
+- **Next:** the VM has no single large cost left. Returning multiple values was considered for
+  the reader and **dropped** (decided 2026-11-13): it isn't core Lisp (Common Lisp and Scheme have
+  it, Clojure and Emacs Lisp don't), EELisp doesn't need it, and reading is already 2.2× faster
+  than at chapter 15. Open: making compiled mode the default (the known differences, merging).
+  Step 4 waits until stack code is rare.
 
 ## What has to stay true
 
