@@ -67,7 +67,7 @@
 //! | `(global d name)` | `d` ← the global `name` |
 //! | `(push x)` / `(pop-to r)` | push `x` / pop the top into `r` |
 //! | `(call2 d f x y)` | `d` ← `(f x y)`, `f` a global; the arithmetic fast path applies |
-//! | `(call-global d f r n)` | `d` ← `(f r … r+n-1)`, the arguments in consecutive registers |
+//! | `(call-global d f r n)` | `d` ← `(f r … r+n-1)`, the arguments in consecutive registers; `d` is a register |
 //! | `(tail-call-global f r n)` | the same in tail position |
 //! | `(jump-if-not x L)` | jump when `x` is false or nil |
 //! | `(return-value x)` | return `x` |
@@ -139,7 +139,7 @@ pub enum Op {
     PopTo(u32),
     /// `(call2 d f x y)`: d, f; then `Ext(x, y)`.
     Call2(u32, u32),
-    /// `(call-global d f r n)`: d, f; then `Ext(r, n)`.
+    /// `(call-global d f r n)`: d (a register), f; then `Ext(r, n)`.
     CallGlobal(u32, u32),
     /// `(tail-call-global f r n)`: f; then `Ext(r, n)`, then a `Return` for when the call can't
     /// replace the frame and its result lands on the stack.
@@ -745,7 +745,7 @@ impl Vm {
                 Op::Call(n) => {
                     let fr = self.frames.last_mut().expect("vm has no frame");
                     fr.pc = pc;
-                    match self.call(n as usize, false, STACK)? {
+                    match self.call(n as usize, false)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -757,7 +757,7 @@ impl Vm {
                     // restart point must survive the call.
                     let tail = self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
                     fr.pc = pc;
-                    match self.call(n as usize, tail, STACK)? {
+                    match self.call(n as usize, tail)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -975,7 +975,7 @@ impl Vm {
                     self.stack.push(f);
                     self.stack.push(x);
                     self.stack.push(y);
-                    match self.call(2, false, d)? {
+                    match self.call_to(2, false, d)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -992,7 +992,10 @@ impl Vm {
                     let f = load_global(&fr.env, &proto, s)?;
                     let at = sb + r as usize;
                     let tail = tail_op && self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
-                    if let Some((func, callee, k)) = in_place(&f, n) {
+                    // entered in place only when the result goes to a register: a frame entered at
+                    // the argument registers must give them back on return (`ret`)
+                    let place = if tail || d != STACK { in_place(&f, n) } else { None };
+                    if let Some((func, callee, k)) = place {
                         if tail {
                             // the arguments move down to where this frame's slots start, and
                             // the callee's frame takes this one's place
@@ -1033,7 +1036,7 @@ impl Vm {
                         };
                         self.stack.push(v);
                     }
-                    match self.call(n as usize, tail, d)? {
+                    match self.call_to(n as usize, tail, d)? {
                         Next::Stay => {}
                         Next::Switch => continue 'frame,
                         Next::Done(v) => return Ok(v),
@@ -1046,9 +1049,21 @@ impl Vm {
     }
 
     /// Call the function below `n` arguments. A compiled function gets a frame (replacing this
-    /// one when `tail`); anything else is applied here. The result goes to `dst` (`STACK` or a
-    /// register of this frame). Returns the value when a tail call finished the entry frame.
-    fn call(&mut self, n: usize, tail: bool, dst: u32) -> Result<Next, LispError> {
+    /// one when `tail`); anything else is applied here. Returns the value when a tail call
+    /// finished the entry frame.
+    fn call(&mut self, n: usize, tail: bool) -> Result<Next, LispError> {
+        self.call_at(n, tail, STACK)
+    }
+
+    /// `call` from register code, the result going to `dst` (`STACK` or a register of this
+    /// frame). Kept apart so that the stack code's calls compile as they did.
+    #[inline(never)]
+    fn call_to(&mut self, n: usize, tail: bool, dst: u32) -> Result<Next, LispError> {
+        self.call_at(n, tail, dst)
+    }
+
+    #[inline(always)]
+    fn call_at(&mut self, n: usize, tail: bool, dst: u32) -> Result<Next, LispError> {
         // The arguments are the top `n` values, the function just below them. They are passed
         // from where they lie: no vector is made for them.
         let base = self.stack.len() - n;
@@ -1125,8 +1140,12 @@ impl Vm {
     /// A call's result, delivered in this frame: nothing else moves.
     #[inline(always)]
     fn stay(&mut self, v: Value, dst: u32) -> Next {
-        let sb = self.frames.last().unwrap().slot_base;
-        deliver(&mut self.stack, &mut self.slots, sb, dst, v);
+        if dst == STACK {
+            self.stack.push(v);
+        } else {
+            let sb = self.frames.last().unwrap().slot_base;
+            deliver(&mut self.stack, &mut self.slots, sb, dst, v);
+        }
         Next::Stay
     }
 
@@ -1143,11 +1162,12 @@ impl Vm {
             self.handlers.truncate(fr.handler0 as usize);
         }
         let Some(caller) = self.frames.last() else { return Some(v) };
-        // a callee entered at the caller's argument registers: the caller's registers come back
-        restore_slots(&mut self.slots, caller);
         if fr.dst == STACK {
             self.stack.push(v);
         } else {
+            // a register call: the callee may have been entered at the caller's argument
+            // registers, which come back before the result goes into one of them
+            restore_slots(&mut self.slots, caller);
             def_slot(&mut self.slots[caller.slot_base + fr.dst as usize], v);
         }
         None
@@ -1480,7 +1500,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
             "call-global" | "tail-call-global" => {
                 let tail = &*op == "tail-call-global";
                 arity(if tail { 3 } else { 4 })?;
-                let d = if tail { STACK } else { dest(&args[0], p.nslots)? };
+                let d = if tail { STACK } else { reg_of(&args[0], p.nslots)? };
                 let rest = if tail { &args[..] } else { &args[1..] };
                 let f = intern(&mut p.syms, sym_of(&rest[0], "the function")?);
                 let r = reg_of(&rest[1], p.nslots)?;
