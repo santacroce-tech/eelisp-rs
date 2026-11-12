@@ -200,6 +200,21 @@ fn fuzz(count: usize) -> Vec<String> {
         .collect()
 }
 
+/// Lists, vectors, top-level forms and escaped strings of sizes around the reader's chunk of 32
+/// (`reader-add` in src/reader.eel), where a list being built moves into a new chunk.
+fn sizes() -> Vec<(String, String)> {
+    let mut out = vec![];
+    for k in [0, 1, 31, 32, 33, 63, 64, 65, 100, 1000] {
+        let items: Vec<String> = (0..k).map(|i| i.to_string()).collect();
+        out.push((format!("a list of {k}"), format!("({})", items.join(" "))));
+        out.push((format!("a vector of {k}"), format!("[{}]", items.join(" "))));
+        out.push((format!("{k} top-level forms"), items.join("\n")));
+        let escaped: String = (0..k).map(|i| format!("a{i}\\n\\\"\\q")).collect();
+        out.push((format!("a string with {k} escapes"), format!("\"{escaped}\"")));
+    }
+    out
+}
+
 fn run(setup: Setup) {
     let it = engine(setup);
     for (i, src) in EDGES.iter().enumerate() {
@@ -207,6 +222,9 @@ fn run(setup: Setup) {
     }
     for (i, src) in fuzz(1500).iter().enumerate() {
         agree(&it, setup, &format!("fuzz case {i}"), src);
+    }
+    for (what, src) in sizes() {
+        agree(&it, setup, &what, &src);
     }
     let files = corpus();
     assert!(

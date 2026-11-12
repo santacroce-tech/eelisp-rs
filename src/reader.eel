@@ -109,15 +109,15 @@
 
 ;; The text of a string between its quotes, with its escapes replaced.
 (defn reader-unescape (cs from to)
-  (loop (i from acc "")
-    (if (>= i to)
-      acc
-      (let (c (nth cs i))
-        (if (and (= c "\\") (< (+ i 1) to))
-          (let (e (nth cs (+ i 1))
-                meant (dict-get reader-escapes e))
-            (recur (+ i 2) (str acc (if meant meant (str "\\" e)))))
-          (recur (+ i 1) (str acc c)))))))
+  (loop (i from run from b (reader-builder))
+    (cond
+      (>= i to) (str-join "" (reader-built (reader-add b (reader-text cs run to))))
+      (and (= (nth cs i) "\\") (< (+ i 1) to))
+        (let (e (nth cs (+ i 1))
+              meant (dict-get reader-escapes e)
+              b (reader-add b (reader-text cs run i)))
+          (recur (+ i 2) (+ i 2) (reader-add b (if meant meant (str "\\" e)))))
+      true (recur (+ i 1) run b))))
 
 ;; An atom runs to the next delimiter. Then it's classified, in this order: `:name` is a keyword,
 ;; anything that reads as a number is one, and the rest are symbols.
@@ -221,16 +221,34 @@
       (= kind :close) (reader-fail cs n next "unexpected closing delimiter")
       true (reader-fail cs n next "unexpected EOF"))))
 
+;; ── growing a list ─────────────────────────────────────────────────────
+;; Lists are vectors, so `(append acc (list x))` copies acc and a list built one element at a time
+;; costs n²/2 copies. A builder is (chunks chunk): elements go into a short chunk, a full chunk
+;; joins the list of chunks, and `reader-built` joins them all once, in one `append`.
+
+(def reader-chunk 32)
+
+(defn reader-builder () (list (list) (list)))
+
+(defn reader-add (b x)
+  (let (chunk (nth b 1))
+    (if (< (length chunk) reader-chunk)
+      (list (head b) (append chunk (list x)))
+      (list (append (head b) (list chunk)) (list x)))))
+
+(defn reader-built (b)
+  (apply append (append (head b) (list (nth b 1)))))
+
 ;; The elements of a list up to its closer, added to acc. `[a b]` starts acc with `list`, so it
 ;; reads as (list a b).
 (defn reader-seq (cs n i close acc)
-  (loop (i i acc acc)
+  (loop (i i b (list (list) acc))
     (let (tok (reader-token cs n i))
       (cond
         (= (head tok) :eof) (reader-fail cs n (nth tok 3) "unclosed list")
-        (and (= (head tok) :close) (= (nth tok 1) close)) (list acc (nth tok 3))
+        (and (= (head tok) :close) (= (nth tok 1) close)) (list (reader-built b) (nth tok 3))
         true (let (r (reader-form tok cs n))
-               (recur (nth r 1) (append acc (list (head r)))))))))
+               (recur (nth r 1) (reader-add b (head r))))))))
 
 ;; `{:k v "k2" v2}`: keys are keywords or strings, and both become the dict's string keys.
 (defn reader-dict (cs n i)
@@ -261,13 +279,13 @@
 ;; top level is skipped, as in the Rust reader, so one unbalanced paren doesn't lose the rest of a
 ;; file.
 (defn reader-spans (cs n)
-  (loop (i 0 out (list))
+  (loop (i 0 b (reader-builder))
     (let (tok (reader-token cs n i))
       (cond
-        (= (head tok) :eof) out
-        (= (head tok) :close) (recur (nth tok 3) out)
+        (= (head tok) :eof) (reader-built b)
+        (= (head tok) :close) (recur (nth tok 3) b)
         true (let (r (reader-form tok cs n))
-               (recur (nth r 1) (append out (list (list (head r) (nth tok 2) (nth r 1))))))))))
+               (recur (nth r 1) (reader-add b (list (head r) (nth tok 2) (nth r 1)))))))))
 
 ;; Every top-level form, in order.
 (defn read-all (src)
