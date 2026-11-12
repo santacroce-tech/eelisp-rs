@@ -43,11 +43,14 @@
          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&*+-./:<=>?@\\^_|~"
          reader-word)))
 
-(defn reader-class (c)
-  (let (class (dict-get reader-classes c))
-    (cond class class
-          (= (str-trim c) "") reader-space
-          true reader-word)))
+(defn reader-class-other (c)
+  (if (= (str-trim c) "") reader-space reader-word))
+
+;; A macro, not a function: it runs for every character read, and written out in place it saves
+;; a call each time.
+(defmacro reader-class (c)
+  `(let (reader-c ,c)
+     (or (dict-get reader-classes reader-c) (reader-class-other reader-c))))
 
 ;; The characters from position `from` up to `to`, as a string.
 (defn reader-text (cs from to) (str-join "" (slice cs from to)))
