@@ -82,8 +82,14 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   after the variables; `if`/`cond` test registers. The committed image built it directly:
   generations 2 and 3 identical, the interpreter's image the same. Compiled code: loops and
   tail calls 1.9×, calls 1.35×, `fib` 1.34×; reading 7% faster; compiling 18% slower.
-- **Next:** profile the compiler (its own cost now), then `let`/`or`/`recur` in registers, then
-  more intrinsics. Step 4 (retiring stack code) waits until stack code is rare.
+- **Then** (tag `register-vm-4`): a `count-calls` feature and `examples/count_calls.rs`
+  profile EELisp at its own level. The compiler's extra cost was extra work (10% more calls),
+  not slower code. Intrinsics for `=`/`!=` and a `call1` with intrinsics for `head`, `length`
+  and the predicates: reading 43.0 → 38.0 ms, compiling back to 16.2 ms. Cheaper boxes kept;
+  a special-form table and a shared call1/call2 arm measured and reverted.
+- **Next:** `let`/`or`/`recur` in registers; the cost of a call itself (frames, slot churn on
+  register calls, `Value` clone/drop, a quarter of every profile). Step 4 (retiring stack code)
+  waits until stack code is rare.
 
 ## What has to stay true
 

@@ -1,6 +1,6 @@
 # 17. A register back end
 
-*Branch: `exp/register-vm`. Tags: `register-vm-2` (where it starts), `register-vm-3`. Tools:
+*Branch: `exp/register-vm`. Tags: `register-vm-2` (where it starts), `register-vm-3`, `register-vm-4`. Tools:
 `scripts/ab.sh`, `examples/front_end.rs`, `examples/read_kinds.rs`, `examples/bench.rs`, and new
 ones: `examples/fib_variants.rs`, `examples/prof_compile.rs`, and `examples/count_calls.rs` with
 the `count-calls` feature.*
@@ -164,4 +164,40 @@ roughly 50 ns, and it makes 2,300 of them per form. What would change that is th
 and of copying values: `Value::clone` and dropping values are a quarter of every profile in this
 chapter. Or the compiler could do less, for instance by asking what a name means once per name
 rather than once per use.
+
+## Back to the reader, with counts
+
+The same counter, on reading: 1.14 million calls for the snippet files, about ten per character.
+A fifth of them were `=` (236,000). With two numbers it takes the arithmetic fast path, but the
+reader also compares characters as strings, and the compiler compares symbols. Those were
+general builtin calls. `=` is value equality, which can't fail, so as an intrinsic in `call2` it
+covers every case. `!=` came with it.
+
+| | before | `=`, `!=` | `call1` |
+|---|---|---|---|
+| read the snippet files | 42.6 ms | 38.3 ms | 37.7 ms |
+| compile them | 17.7 ms | 17.1 ms | 16.1 ms |
+| strings, per character | 260 ns | 217 ns | 211 ns |
+| symbols, per character | 368 ns | 347 ns | 331 ns |
+
+The next counts down were one-argument builtins: `head` (67,000 in reading), `length`, and in the
+compiler `nil?`, `empty?`, `not`, `symbol?`, `list?`. A new instruction, `(call1 d f x)`, reads
+its operand in place and runs these seven inside it. Anything else, or a value of a kind they
+don't cover (`head` of a string), goes to the builtin and fails as it does. That brought
+compiling back to where it was before the register back end (15.6 ms then, 16.1 ms now), with
+reading 12% faster than then.
+
+Each intrinsic has a test that runs it against its builtin on every kind of value, comparing
+results and errors.
+
+**Layout, a third time.** `call1`'s arm in the dispatch loop cost the call benchmark 3–5%, a
+benchmark that hardly uses it. Sharing `call2`'s arm instead (a `call2` with no second operand)
+moved the cost: 0.94× on `loop 1M`, whose additions now pay the extra check, and about even
+elsewhere. Neither version was clearly better, so the clearer one stays. The pattern of this
+chapter and of chapter 14 is now plain: in a dispatch loop this size, adding an instruction
+costs other instructions a few percent, by an amount no one can predict and only an A/B shows.
+Each new instruction has to earn more than that.
+
+Against `register-vm-3`: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms, running code within
+0.97–1.05×.
 

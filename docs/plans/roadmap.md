@@ -171,7 +171,9 @@ binary nobody can reproduce), and it is the reference for testing.
   two, run inside `call2` with borrowed operands: `fib` 1.57×, the loop 2.66×, the whitespace
   loop 1.89×. See docs/self-hosting/16-registers.md. Step 2: the compiler emits register code
   for calls and the image crossed over in one go; compiled loops and tail calls 1.9×, calls 1.35×,
-  reading 7% faster, compiling 18% slower. See docs/self-hosting/17-a-register-back-end.md.
+  reading 7% faster, compiling 18% slower. Then intrinsics for `=` and one-argument builtins,
+  found by counting calls: reading 43.0 → 38.0 ms, compiling 18.4 → 16.2 ms. See
+  docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
