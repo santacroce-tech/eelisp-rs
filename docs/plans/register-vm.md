@@ -1,0 +1,62 @@
+# A register machine for EELisp
+
+*Branch `exp/register-vm`, tag `register-vm-base`. Prototype: `examples/regvm_proto.rs`.*
+
+## Why
+
+Chapter 15 found that compiled mode runs faster than the interpreter everywhere, but reading
+code in costs 100–700 ns per character, because the reader is EELisp and every instruction it
+runs has a price. Small changes to the reader gave 5–15%. What would change that price is
+the machine.
+
+A stack machine spends most of its instructions moving values: `(< n 2)` is four instructions
+(load `<`, push `n`, push `2`, call). In a register machine, instructions name where their
+operands are, so that's one: `(call2 r1 < r0 #2)`. A compiled function's arguments are left in
+the registers its frame starts at, so a call copies nothing into a new frame. Lua made this move
+in version 5 for the same reasons.
+
+## What the prototype says
+
+Hand-written register code, run with the same global cache, the same builtins and the same fast
+path for arithmetic as the real VM:
+
+| | stack VM | registers | |
+|---|---|---|---|
+| `fib 25` | 17.3 ms | 9.4 ms | 1.84× |
+| a loop of 1M | 47.3 ms | 22.2 ms | 2.13× |
+| the reader's whitespace loop | 28.6 ms | 19.8 ms | 1.44× |
+
+It leaves out what the real machine must do: slots that aren't bound yet (whose name then means
+the global), slots captured by closures (cells), `loop` marks and `try` handlers, `def` into a
+named scope, closures, macros, errors. Some of that will show in the numbers. The prototype gives
+a ceiling and a direction, not a result.
+
+## Steps
+
+Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`,
+`examples/front_end.rs` and `examples/read_kinds.rs`, and written up in chapter 16.
+
+1. **The machine, beside the old one.** New instructions in `src/vm.rs` (or a new `src/rvm.rs`),
+   assembled from EELisp data like the current ones: `move`, `const`, `global`, `call` (callee
+   and arguments in consecutive registers), `call2` with register-or-constant operands and the
+   fast path, `tail-call`, `jump`, `jump-if-not`, `return`, plus the slot, cell, closure, `def`,
+   `loop`/`recur`, `try` and `dict` instructions the current set needs. Both machines run
+   side by side; a proto says which code it carries.
+2. **A back end in the compiler.** `src/compiler.eel` already resolves every local to a slot.
+   Registers are those slots plus temporaries allocated like a stack: the temporaries for a
+   call's arguments sit just above the live ones, so the callee's frame starts there. The
+   differential test (517 snippets, four setups) is the referee, as it was for the first back end.
+3. **The crossing.** The committed image runs on the stack machine and compiles the new source,
+   which emits register code (generation 1, stack code that writes register code). That compiler
+   compiles itself (generation 2, register code), and once more (3). 2 and 3 must match, and the
+   interpreter must make the same image. That is chapter 10's procedure, used for the purpose it
+   was built for.
+4. **Retire the stack machine**, once nothing loads stack code: the old instructions and their
+   assembler go, and the image is register code only.
+
+## What has to stay true
+
+- Every program gives the same result as the interpreter (the five known differences aside).
+- `(source f)`, error messages and error kinds are unchanged.
+- `vm-assemble` / `vm-run` still take bytecode as EELisp data that can be read and printed.
+- The image is a fixed point after the crossing.

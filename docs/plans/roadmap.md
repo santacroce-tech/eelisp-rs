@@ -162,6 +162,11 @@ binary nobody can reproduce), and it is the reference for testing.
   reloading the snippets 60 → 16 ms, a repeated `(+ 1 2)` 18 → 5.4 µs. A faster VM is the real
   fix, next. See docs/self-hosting/15-the-way-in.md.
 
+- **A register machine (branch `exp/register-vm`), started.** A hand-written prototype with the
+  real global cache, builtins and fast path: `fib` 1.84×, a loop 2.13×, the reader's whitespace
+  loop 1.44× over the stack VM. Plan, steps and the bootstrap crossing:
+  [register-vm.md](register-vm.md).
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before
