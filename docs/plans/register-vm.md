@@ -106,8 +106,13 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
 - **Then** (tag `register-vm-10`, chapter 22): the compiler builds each function's code in one
   list-builder (`out`), so no instruction is copied by the forms around it: compiling 14.5 →
   12.5 ms, the same code out. Loading the snippet files compiled: 33 ms (65 at chapter 15).
-- **Next, decisions:** returning multiple values (a language feature, for the reader), or
-  word-sized values. Step 4 (retiring stack code) waits until stack code is rare.
+- **Then** (tag `register-vm-11`, chapter 23): word-sized values prototyped
+  (`examples/nanbox_proto.rs`): 1.07–1.14× on calls, 0.88× on arithmetic, 1.35–1.40× where values
+  are copied. Mixed, set aside. The same prototype with today's 32-byte values runs twice as fast
+  as `src/vm.rs`: the machine's own structure is the larger cost.
+- **Next:** measure what the real machine pays that the prototype doesn't, starting with
+  redefinable arithmetic (the global check on every `+`, `<`, `=`). Returning multiple values (a
+  language feature) is still open. Step 4 waits until stack code is rare.
 
 ## What has to stay true
 
