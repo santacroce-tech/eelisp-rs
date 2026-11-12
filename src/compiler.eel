@@ -27,8 +27,8 @@
   (set! compiler-label-n (+ compiler-label-n 1))
   compiler-label-n)
 
-;; Concatenate any number of instruction lists.
-(defn compiler-cat (. parts) (reduce append (list) parts))
+;; Concatenate any number of instruction lists, in one copy.
+(defn compiler-cat (. parts) (apply append parts))
 
 ;; Is x one of the symbols in names?
 (defn compiler-member? (x names) (some? (fn (n) (= n x)) names))
