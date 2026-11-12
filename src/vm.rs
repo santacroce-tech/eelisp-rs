@@ -514,12 +514,7 @@ impl Vm {
         'frame: loop {
             let (proto, mut pc, sb) = {
                 let fr = self.frames.last().expect("vm has no frame");
-                // SAFETY: the frame owns this `Rc<Proto>` and outlives every use of `proto` below:
-                // the only operations that drop or replace the frame (a call entering a function,
-                // a tail call, a return) are followed at once by `continue 'frame`, which reloads
-                // it, or by leaving `step`.
-                let proto: &Proto = unsafe { &*Rc::as_ptr(&fr.proto) };
-                (proto, fr.pc, fr.slot_base)
+                (fr.proto.clone(), fr.pc, fr.slot_base)
             };
             let code: &[Op] = &proto.code;
             loop {
