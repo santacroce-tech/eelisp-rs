@@ -223,6 +223,8 @@ thread_local! {
     /// Machines that finished a run, kept for the next one: `map` calling a compiled function
     /// once per element would otherwise allocate a stack and a frame list each time. A run that
     /// starts while another is going (a builtin calling back into compiled code) takes another.
+    /// Boxed, so that taking a machine out and putting it back moves a pointer, not 120 bytes.
+    #[allow(clippy::vec_box)]
     static SPARE: std::cell::RefCell<Vec<Box<Vm>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 

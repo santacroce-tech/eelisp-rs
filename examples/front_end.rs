@@ -46,12 +46,12 @@ fn main() {
     for (name, src) in &texts {
         let n = if src.len() > 1000 { 5 } else { 2000 };
         let s = Value::Str(src.as_str().into());
-        let forms = it.call("read-top", &[s.clone()]).unwrap().unwrap();
+        let forms = it.call("read-top", std::slice::from_ref(&s)).unwrap().unwrap();
         let Value::List(forms) = forms else { panic!() };
         let forms: Vec<Value> = forms.iter().map(|f| match f { Value::List(t) => t[0].clone(), _ => panic!() }).collect();
-        let read = per(n, || { it.call("read-top", &[s.clone()]).unwrap().unwrap(); });
-        let protos: Vec<Value> = forms.iter().map(|f| it.call("compile", &[f.clone()]).unwrap().unwrap()).collect();
-        let comp = per(n, || { for f in &forms { it.call("compile", &[f.clone()]).unwrap().unwrap(); } });
+        let read = per(n, || { it.call("read-top", std::slice::from_ref(&s)).unwrap().unwrap(); });
+        let protos: Vec<Value> = forms.iter().map(|f| it.call("compile", std::slice::from_ref(f)).unwrap().unwrap()).collect();
+        let comp = per(n, || { for f in &forms { it.call("compile", std::slice::from_ref(f)).unwrap().unwrap(); } });
         let asm = per(n, || { for p in &protos { eelisp::vm::assemble(p).unwrap(); } });
         let eval = if src.len() > 1000 { f64::NAN } else { per(n, || { it.eval_str(src).unwrap(); }) };
         let run = eval - read - comp - asm;

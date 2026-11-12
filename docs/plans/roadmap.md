@@ -152,6 +152,15 @@ binary nobody can reproduce), and it is the reference for testing.
   word-sized values, a register machine, or map/filter calling back into the running VM. See
   docs/self-hosting/14-reshaping-the-vm.md.
 
+- **The way in (branch `exp/compiled-default`, on top of `exp/vm-redesign`).** Builtins call
+  compiled functions with borrowed arguments, into reused machines: `map/filter` 1.44×. The reader
+  builds lists and escaped strings in chunks: linear (4,000 forms 168 → 64 ms). `reader-class` is a
+  macro. Dropped after measuring: scanning code points instead of one-character strings. Running
+  compiled code beats the interpreter everywhere (1.1–2.1×). Getting code in doesn't: loading
+  eeditor's snippets takes 65 ms against 1.4 ms, 43 ms of it reading at 100–700 ns per character.
+  Open decision: a faster VM, the Rust reader in the engine for now, or a read cache. See
+  docs/self-hosting/15-the-way-in.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before

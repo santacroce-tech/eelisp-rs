@@ -17,5 +17,5 @@ fn main() {
     let it = Interpreter::new();
     it.set_compiled(true).unwrap();
     let s = Value::Str(all.as_str().into());
-    for _ in 0..n { it.call("read-top", &[s.clone()]).unwrap().unwrap(); }
+    for _ in 0..n { it.call("read-top", std::slice::from_ref(&s)).unwrap().unwrap(); }
 }

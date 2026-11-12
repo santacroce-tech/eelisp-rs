@@ -17,9 +17,9 @@ fn main() {
     for (name, src, tokens) in kinds {
         let s = Value::Str(src.as_str().into());
         for f in ["read-all", "read-top"] {
-            it.call(f, &[s.clone()]).unwrap().unwrap();
+            it.call(f, std::slice::from_ref(&s)).unwrap().unwrap();
             let t = Instant::now();
-            for _ in 0..5 { it.call(f, &[s.clone()]).unwrap().unwrap(); }
+            for _ in 0..5 { it.call(f, std::slice::from_ref(&s)).unwrap().unwrap(); }
             let us = t.elapsed().as_secs_f64() * 1e6 / 5.0;
             let per_tok = if tokens > 0 { format!("{:7.2} µs/token", us / tokens as f64) } else { String::new() };
             println!("{name:<14} {f:<9} {:7.1} ns/char {per_tok}", us * 1000.0 / src.chars().count() as f64);
