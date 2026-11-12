@@ -294,8 +294,9 @@ pub fn take_counts() -> Vec<(String, u64)> {
 #[inline(always)]
 fn peek_builtin<'a>(env: &Env, proto: &Proto, s: u32) -> Option<&'a Builtin> {
     let c = proto.globals[s as usize].get();
-    if c.scope == Rc::as_ptr(env) && c.layout == env::layout() && unsafe { env.try_borrow_unguarded() }.is_ok() {
-        // SAFETY: as in `load_global`
+    // MEASUREMENT ONLY: trusts any filled cache entry, unchecked (unsafe if globals move)
+    let _ = env;
+    if !c.value.is_null() {
         if let Value::Builtin(b) = unsafe { &*c.value } {
             return Some(&**b);
         }
