@@ -55,7 +55,7 @@ pub fn register(env: &Env) {
     b!(">", gtf, Some(FastOp::Gt));
     b!("<=", lef, Some(FastOp::Le));
     b!(">=", gef, Some(FastOp::Ge));
-    b!("not", notf);
+    b!("not", notf, None, Some(Intrinsic::Not));
     // strings
     b!("str", strf);
     b!("str-len", str_len);
@@ -75,19 +75,19 @@ pub fn register(env: &Env) {
     b!("list", listf);
     b!("cons", cons);
     b!("car", car);
-    b!("head", car);
+    b!("head", car, None, Some(Intrinsic::Head));
     b!("cdr", cdr);
     b!("tail", cdr);
     b!("nth", nth, None, Some(Intrinsic::Nth));
     b!("slice", slice);
-    b!("length", length);
+    b!("length", length, None, Some(Intrinsic::Length));
     b!("append", append);
     b!("reverse", reversef);
     b!("range", rangef);
     b!("map", mapf);
     b!("filter", filterf);
     b!("reduce", reducef);
-    b!("empty?", emptyf);
+    b!("empty?", emptyf, None, Some(Intrinsic::Empty));
     b!("zip", zipf);
     b!("sort-by", sort_by);
     // dicts
@@ -103,9 +103,9 @@ pub fn register(env: &Env) {
     b!("number?", is_number);
     b!("string?", is_string);
     b!("bool?", is_bool);
-    b!("list?", is_list);
-    b!("nil?", is_nil);
-    b!("symbol?", is_symbol);
+    b!("list?", is_list, None, Some(Intrinsic::IsList));
+    b!("nil?", is_nil, None, Some(Intrinsic::IsNil));
+    b!("symbol?", is_symbol, None, Some(Intrinsic::IsSymbol));
     b!("keyword?", is_keyword);
     b!("dict?", is_dict);
     b!("fn?", is_fn);

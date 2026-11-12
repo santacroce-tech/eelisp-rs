@@ -377,3 +377,27 @@ fn equality_inside_the_instruction_means_what_the_builtins_mean() {
         assert_eq!(s(&it, &format!("(rne {a} {b})")), s(&i, &format!("(!= {a} {b})")), "(!= {a} {b})");
     }
 }
+
+#[test]
+fn one_argument_intrinsics_mean_what_the_builtins_mean() {
+    let it = Interpreter::new();
+    let i = Interpreter::new();
+    let values = [
+        "(list 1 2)", "(list)", r#""héllo""#, r#""""#, "{:a 1}", "{}", "nil", "false", "true", "0", "'x", ":k",
+    ];
+    for f in ["head", "length", "empty?", "nil?", "list?", "symbol?", "not"] {
+        def(&it, "r", &format!("(proto :params (a) :slots 2 :code ((call1 1 {f} (local 0 a)) (return-value 1)))"));
+        for v in values {
+            let (call, builtin) = (format!("(r {v})"), format!("({f} {v})"));
+            match (it.eval_str(&call), i.eval_str(&builtin)) {
+                (Ok(a), Ok(b)) => assert_eq!(print_value(&a, false), print_value(&b, false), "{builtin}"),
+                (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{builtin}"),
+                (a, b) => panic!("{builtin}: {:?} against {:?}", a.map(|v| print_value(&v, false)), b.map(|v| print_value(&v, false))),
+            }
+        }
+    }
+    // to the stack, and a function that isn't a builtin
+    it.eval_str("(defn twice (x) (* 2 x))").unwrap();
+    def(&it, "g", "(proto :params (a) :slots 1 :code ((call1 push twice (local 0 a)) (return)))");
+    assert_eq!(s(&it, "(g 21)"), "42");
+}

@@ -214,9 +214,41 @@ pub enum Intrinsic {
     /// the reader compares characters, and symbols are compared everywhere.
     Eq,
     Ne,
+    // one argument (`call1`)
+    Head,
+    Length,
+    Empty,
+    IsNil,
+    IsList,
+    IsSymbol,
+    Not,
 }
 
 impl Intrinsic {
+    /// The result for one argument, exactly as the builtin computes it, or `None` (the builtin
+    /// then runs, and fails as it does).
+    #[inline(always)]
+    pub fn apply1(self, a: &Value) -> Option<Value> {
+        Some(match (self, a) {
+            (Intrinsic::Head, Value::List(l)) => l.first().cloned().unwrap_or(Value::Null),
+            (Intrinsic::Length, Value::List(l)) => Value::Number(l.len() as f64),
+            (Intrinsic::Length, Value::Str(s)) => Value::Number(s.chars().count() as f64),
+            (Intrinsic::Length, Value::Dict(d)) => Value::Number(d.keys.len() as f64),
+            (Intrinsic::Empty, a) => Value::Bool(match a {
+                Value::List(l) => l.is_empty(),
+                Value::Str(s) => s.is_empty(),
+                Value::Dict(d) => d.keys.is_empty(),
+                Value::Null => true,
+                _ => false,
+            }),
+            (Intrinsic::IsNil, a) => Value::Bool(matches!(a, Value::Null)),
+            (Intrinsic::IsList, a) => Value::Bool(matches!(a, Value::List(_))),
+            (Intrinsic::IsSymbol, a) => Value::Bool(matches!(a, Value::Symbol(_))),
+            (Intrinsic::Not, a) => Value::Bool(!is_truthy(a)),
+            _ => return None,
+        })
+    }
+
     /// The result for two arguments, exactly as the builtin computes it, or `None` when the
     /// arguments aren't the kinds covered here (the builtin then runs, and fails as it does).
     #[inline(always)]

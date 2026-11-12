@@ -353,19 +353,25 @@
     (list)
     (compiler-cat (compiler-to-reg (head args) cx d) (compiler-args-to (tail args) cx (+ d 1)))))
 
-;; Is this call worth registers? A builtin of two arguments is a call2, whose operands are read
-;; where they are (the arithmetic and the intrinsics run inside it). A function is entered at its
-;; argument registers. Any other builtin call is cheaper as stack code: the builtin takes its
-;; arguments from the stack anyway.
+;; Is this call worth registers? A builtin of one or two arguments is a call1 or call2, whose
+;; operands are read where they are (the arithmetic and the intrinsics run inside it). A
+;; function is entered at its argument registers. Any other builtin call is cheaper as stack
+;; code: the builtin takes its arguments from the stack anyway.
 (defn compiler-reg-call? (kind x)
-  (or (= kind "function") (and (= kind "builtin") (= (length x) 3))))
+  (or (= kind "function") (and (= kind "builtin") (or (= (length x) 3) (= (length x) 2)))))
 
 ;; A call of a global, its result into temporary d (see compiler-reg-call?). A first operand
 ;; that is a variable is copied before a second one that must be computed, in case computing it
 ;; changes the variable; reading a global changes nothing.
 (defn compiler-call-into (x cx d kind)
   (let (f (head x) args (tail x))
-    (if (= kind "builtin")
+    (cond
+      (and (= kind "builtin") (empty? (tail args)))
+        (let (a (compiler-operand (head args) cx)
+              a-code (if a (list) (compiler-to-reg (head args) cx d)))
+          (compiler-use-tmp cx d)
+          (compiler-cat a-code (list (list 'call1 (compiler-tmp d) f (if a a (compiler-tmp d))))))
+      (= kind "builtin")
       (let (a (compiler-operand (head args) cx)
             b (compiler-operand (second args) cx)
             a-now (and a (or b (= (head a) 'const) (symbol? (second args))))
@@ -376,6 +382,7 @@
                       (list (list 'call2 (compiler-tmp d) f
                                   (if a-now a (compiler-tmp d))
                                   (if b b (compiler-tmp (+ d 1)))))))
+      true
       (do
         (compiler-use-tmp cx d)
         (compiler-cat (compiler-args-to args cx d)
@@ -390,8 +397,10 @@
           (compiler-use-tmp cx d)
           (compiler-cat (compiler-args-to args cx d)
                         (list (list 'tail-call-global (head x) (compiler-tmp d) (length args)))))
+      (and (= kind "builtin") (empty? (tail args)) (compiler-operand (head args) cx))
+        (list (list 'call1 'push (head x) (compiler-operand (head args) cx)))
       (= kind "builtin")
-        (let (a (compiler-operand (head args) cx) b (and a (compiler-operand (second args) cx)))
+        (let (a (compiler-operand (head args) cx) b (and a (not (empty? (tail args))) (compiler-operand (second args) cx)))
           (if b
             (list (list 'call2 'push (head x) a b))
             (compiler-cat (compiler-call-into x cx d kind) (list (list 'push (compiler-tmp d))))))

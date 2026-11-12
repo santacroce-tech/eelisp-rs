@@ -66,6 +66,7 @@
 //! | `(move d x)` | `d` ← `x` |
 //! | `(global d name)` | `d` ← the global `name` |
 //! | `(push x)` / `(pop-to r)` | push `x` / pop the top into `r` |
+//! | `(call1 d f x)` | `d` ← `(f x)`, `f` a global; `head`, `length`, `nil?`… run inside it |
 //! | `(call2 d f x y)` | `d` ← `(f x y)`, `f` a global; the arithmetic fast path applies |
 //! | `(call-global d f r n)` | `d` ← `(f r … r+n-1)`, the arguments in consecutive registers; `d` is a register |
 //! | `(tail-call-global f r n)` | the same in tail position |
@@ -139,6 +140,8 @@ pub enum Op {
     Global(u32, u32),
     Push(u32),
     PopTo(u32),
+    /// `(call1 d f x)`: d, f; then `Ext(x, 0)`.
+    Call1(u32, u32),
     /// `(call2 d f x y)`: d, f; then `Ext(x, y)`.
     Call2(u32, u32),
     /// `(call-global d f r n)`: d (a register), f; then `Ext(r, n)`.
@@ -999,6 +1002,26 @@ impl Vm {
                     }
                     continue 'frame;
                 }
+                Op::Call1(d, s) => {
+                    let Op::Ext(a, _) = code[pc] else { unreachable!("call1 without its operand") };
+                    pc += 1;
+                    let fr = self.frames.last_mut().expect("vm has no frame");
+                    if let Some(bi) = peek_builtin(&fr.env, &proto, s) {
+                        if let (Some(i), Some(x)) = (bi.intrinsic, operand_ref(a, &self.slots, sb, &proto)) {
+                            if let Some(v) = i.apply1(x) {
+                                count(&bi.name);
+                                deliver(&mut self.stack, &mut self.slots, sb, d, v);
+                                continue;
+                            }
+                        }
+                    }
+                    fr.pc = pc;
+                    match self.call1(d, s, a, &proto, sb)? {
+                        Next::Stay => {}
+                        Next::Switch => continue 'frame,
+                        Next::Done(v) => return Ok(v),
+                    }
+                }
                 Op::Call2(d, s) => {
                     let Op::Ext(a, b) = code[pc] else { unreachable!("call2 without its operands") };
                     pc += 1;
@@ -1060,6 +1083,24 @@ impl Vm {
             }
         }
         }
+    }
+
+    /// `call1` when the intrinsic didn't apply: the builtin called with its argument, or anything
+    /// else called the general way.
+    #[inline(never)]
+    fn call1(&mut self, d: u32, s: u32, a: u32, proto: &Proto, sb: usize) -> Result<Next, LispError> {
+        let fr = self.frames.last().expect("vm has no frame");
+        let f = load_global(&fr.env, proto, s)?;
+        let x = operand(a, &self.slots, sb, proto, fr)?;
+        if let Value::Builtin(bi) = &f {
+            count(&bi.name);
+            let v = (bi.func)(std::slice::from_ref(&x), &fr.env)?;
+            deliver(&mut self.stack, &mut self.slots, sb, d, v);
+            return Ok(Next::Stay);
+        }
+        self.stack.push(f);
+        self.stack.push(x);
+        self.call_to(1, false, d)
     }
 
     /// `call2` when the fast path didn't apply: a builtin called with its two arguments, or
@@ -1606,6 +1647,14 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
                 arity(1)?;
                 Op::ReturnValue(operand_of(&args[0], &mut p, tbase)?)
             }
+            "call1" => {
+                arity(3)?;
+                let d = dest(&args[0], p.nslots, tbase)?;
+                let f = intern(&mut p.syms, sym_of(&args[1], "call1's function")?);
+                let x = operand_of(&args[2], &mut p, tbase)?;
+                p.code.push(Op::Call1(d, f));
+                Op::Ext(x, 0)
+            }
             "call2" => {
                 arity(4)?;
                 let d = dest(&args[0], p.nslots, tbase)?;
@@ -1664,7 +1713,7 @@ pub fn assemble(form: &Value) -> Result<Rc<Proto>, LispError> {
 /// How many `Op`s an instruction assembles to: some carry their extra operands in an `Ext`.
 fn width(op: &str) -> u32 {
     match op {
-        "call2" | "call-global" | "call-at" => 2,
+        "call1" | "call2" | "call-global" | "call-at" => 2,
         "tail-call-global" | "tail-call-at" => 3,
         _ => 1,
     }
