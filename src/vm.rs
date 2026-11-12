@@ -251,6 +251,8 @@ fn run_entry(
     let r = vm.run();
     vm.stack.clear();
     vm.frames.clear();
+    vm.marks.clear();
+    vm.handlers.clear();
     vm.slots.clear();
     SPARE.with(|s| {
         let mut s = s.borrow_mut();
@@ -419,13 +421,15 @@ struct Frame {
     /// Where this frame's slots start in `Vm::slots`.
     slot_base: usize,
     upvals: Option<Rc<[Cell]>>,
-    marks: Vec<Mark>,
-    handlers: Vec<Handler>,
+    /// Where this frame's loop marks and `try` handlers start in `Vm::marks` and `Vm::handlers`.
+    /// Most frames have neither, so they live in the VM, not in a vector per frame.
+    mark0: u32,
+    handler0: u32,
 }
 
 impl Frame {
     fn new(proto: Rc<Proto>, env: Env, base: usize, slot_base: usize, upvals: Option<Rc<[Cell]>>) -> Frame {
-        Frame { proto, pc: 0, env, base, slot_base, upvals, marks: Vec::new(), handlers: Vec::new() }
+        Frame { proto, pc: 0, env, base, slot_base, upvals, mark0: 0, handler0: 0 }
     }
 }
 
@@ -435,6 +439,9 @@ struct Vm {
     frames: Vec<Frame>,
     /// Every frame's local slots, end to end.
     slots: Vec<Slot>,
+    /// Every frame's active loops and `try` handlers, end to end.
+    marks: Vec<Mark>,
+    handlers: Vec<Handler>,
 }
 
 /// `recur`'s new values into a loop's variables.
@@ -540,7 +547,7 @@ impl Vm {
                 Op::TailCall(n) => {
                     // A frame inside a `try` or a `loop` keeps its frame: the handler or the
                     // restart point must survive the call.
-                    let tail = fr.handlers.is_empty() && fr.marks.is_empty();
+                    let tail = self.handlers.len() == fr.handler0 as usize && self.marks.len() == fr.mark0 as usize;
                     if let Some(v) = self.call(n as usize, tail)? {
                         return Ok(v);
                     }
@@ -565,20 +572,21 @@ impl Vm {
                         start: fr.pc,
                         env: fr.env.clone(),
                         sp: self.stack.len(),
-                        handlers: fr.handlers.len(),
+                        handlers: self.handlers.len(),
                         rebind: if matches!(op, Op::Loop(_)) { Rebind::Names(i) } else { Rebind::Slots(i) },
                     };
-                    fr.marks.push(mark);
+                    self.marks.push(mark);
                 }
                 Op::Recur(n) => {
                     let base = self.stack.len() - n as usize;
                     // The loop is this frame's own (the usual case): rebind and jump, here.
-                    if let Some(m) = fr.marks.last() {
+                    if self.marks.len() > fr.mark0 as usize {
+                        let m = self.marks.last().unwrap();
                         rebind(m, &fr.proto, &mut self.slots, fr.slot_base, self.stack.drain(base..));
                         let (start, sp, handlers, menv) = (m.start, m.sp, m.handlers, m.env.clone());
                         fr.env = menv;
                         fr.pc = start;
-                        fr.handlers.truncate(handlers);
+                        self.handlers.truncate(handlers);
                         self.stack.truncate(sp);
                         continue;
                     }
@@ -587,14 +595,14 @@ impl Vm {
                     return Err(LispError::Recur(vals));
                 }
                 Op::EndLoop => {
-                    fr.marks.pop();
+                    self.marks.pop();
                 }
                 Op::Try(catch) => {
-                    let h = Handler { catch: catch as usize, env: fr.env.clone(), sp: self.stack.len(), marks: fr.marks.len() };
-                    fr.handlers.push(h);
+                    let h = Handler { catch: catch as usize, env: fr.env.clone(), sp: self.stack.len(), marks: self.marks.len() };
+                    self.handlers.push(h);
                 }
                 Op::EndTry => {
-                    fr.handlers.pop();
+                    self.handlers.pop();
                 }
                 Op::Interp(i) => {
                     let form = fr.proto.consts[i as usize].clone();
@@ -732,13 +740,20 @@ impl Vm {
                     let frame =
                         enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), self.stack.drain(base..), fbase, true);
                     self.stack.truncate(fbase);
+                    // a tail call happens only with no marks or handlers active in this frame, so
+                    // the new frame's start where this one's did
+                    let mut frame = frame;
+                    frame.mark0 = self.marks.len() as u32;
+                    frame.handler0 = self.handlers.len() as u32;
                     *self.frames.last_mut().unwrap() = frame;
                 } else {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(LispError::Runtime(format!("stack overflow: more than {MAX_FRAMES} nested calls")));
                     }
-                    let frame =
+                    let mut frame =
                         enter(&mut self.slots, proto, &func.closure, func.upvals.clone(), self.stack.drain(base..), base - 1, true);
+                    frame.mark0 = self.marks.len() as u32;
+                    frame.handler0 = self.handlers.len() as u32;
                     self.stack.pop();
                     self.frames.push(frame);
                 }
@@ -768,6 +783,13 @@ impl Vm {
         let fr = self.frames.pop().unwrap();
         self.stack.truncate(fr.base);
         self.slots.truncate(fr.slot_base);
+        // normally already gone (EndLoop, EndTry); this keeps the stacks right whatever happened
+        if self.marks.len() > fr.mark0 as usize {
+            self.marks.truncate(fr.mark0 as usize);
+        }
+        if self.handlers.len() > fr.handler0 as usize {
+            self.handlers.truncate(fr.handler0 as usize);
+        }
         if self.frames.is_empty() {
             return Some(v);
         }
@@ -780,21 +802,21 @@ impl Vm {
     fn unwind(&mut self, e: LispError) -> Result<(), LispError> {
         let recur = matches!(e, LispError::Recur(_));
         while let Some(fr) = self.frames.last_mut() {
-            if recur && !fr.marks.is_empty() {
+            if recur && self.marks.len() > fr.mark0 as usize {
                 let LispError::Recur(vals) = e else { unreachable!() };
-                let m = fr.marks.last().unwrap();
+                let m = self.marks.last().unwrap();
                 rebind(m, &fr.proto, &mut self.slots, fr.slot_base, vals.into_iter());
                 fr.env = m.env.clone();
                 fr.pc = m.start;
-                fr.handlers.truncate(m.handlers);
+                self.handlers.truncate(m.handlers);
                 self.stack.truncate(m.sp);
                 return Ok(());
             }
-            if !recur && !fr.handlers.is_empty() {
-                let h = fr.handlers.pop().unwrap();
+            if !recur && self.handlers.len() > fr.handler0 as usize {
+                let h = self.handlers.pop().unwrap();
                 fr.env = h.env;
                 fr.pc = h.catch;
-                fr.marks.truncate(h.marks);
+                self.marks.truncate(h.marks);
                 self.stack.truncate(h.sp);
                 self.stack.push(error_dict(&e));
                 return Ok(());
@@ -802,6 +824,8 @@ impl Vm {
             let fr = self.frames.pop().unwrap();
             self.stack.truncate(fr.base);
             self.slots.truncate(fr.slot_base);
+            self.marks.truncate(fr.mark0 as usize);
+            self.handlers.truncate(fr.handler0 as usize);
         }
         Err(e)
     }
