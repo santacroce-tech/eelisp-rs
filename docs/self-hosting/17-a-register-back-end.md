@@ -1,8 +1,9 @@
 # 17. A register back end
 
 *Branch: `exp/register-vm`. Tags: `register-vm-2` (where it starts), `register-vm-3`. Tools:
-`scripts/ab.sh`, `examples/front_end.rs`, `examples/read_kinds.rs`, `examples/bench.rs`, and a
-new one, `examples/fib_variants.rs`.*
+`scripts/ab.sh`, `examples/front_end.rs`, `examples/read_kinds.rs`, `examples/bench.rs`, and new
+ones: `examples/fib_variants.rs`, `examples/prof_compile.rs`, and `examples/count_calls.rs` with
+the `count-calls` feature.*
 
 Chapter 16 gave the machine register instructions and showed, with code written by hand, what
 they could do. This chapter is the compiler learning to write that code itself. It's also step 3
@@ -123,3 +124,44 @@ So the front end, the cost chapter 15 found, is not yet where it needs to be. Wh
   learn, one at a time, with the differential test as referee.
 - **More intrinsics.** The reader's loops call `length`, `str-sub`, `=` on strings and `append`,
   which are still general calls.
+
+## The compiler's own cost
+
+Chapter 8 profiled the compiler by counting its calls, with a counter that was thrown away
+afterwards. It's now a cargo feature, `count-calls`, off by default. It counts every frame the VM
+enters and every builtin it calls, by name, and `examples/count_calls.rs` prints the counts for
+reading and for compiling a directory of files. The same counter was put into the commit from
+before this chapter to compare like with like:
+
+| compiling eeditor's snippets | calls per form | time (`prof_compile`) |
+|---|---|---|
+| before the register back end | 2,134 | 15.5 ms |
+| after | 2,355 | 17.5 ms |
+
+Ten percent more calls, twelve percent more time. Sampling both at the machine level gave the
+same picture: the call machinery takes about the same share in each, and everything else grew in
+proportion. The register back end doesn't make the compiler run slower; it makes it *do more*.
+For every call it compiles, the compiler now works out what the head means, which operands can be
+read in place, and which temporary each value goes to. And the compiler's own code is mostly
+calls to builtins on lists and dicts, the kind registers don't speed up.
+
+The counts show where its calls go. `list` and `dict-get` are a tenth each: instructions are
+built as lists, and contexts are dicts. Then come `head`, `=`, `symbol?` and `empty?`, and 23,000
+calls of anonymous functions. Two changes were tried:
+
+- **Boxes.** A context's mutable counters are boxes, closures over a variable. A box was
+  `(fn (. args) (if (empty? args) val …))`, so every read built a list for the rest parameter
+  and called `empty?`. A box never holds nil, so it is now `(fn (x) (if (nil? x) val …))`.
+  Compiling went from 18.4 to 17.7 ms, about 4%. Kept.
+- **Special forms through a table.** `compiler-special` compared the form's name with each
+  special form in turn (`(= h 'quote)`, `(= h 'if)`…), and on symbols every `=` is a general
+  builtin call. A dict of handlers made that one lookup and one call: `=` calls fell from 29,700
+  to 24,200, and compiling went from 17.7 to 17.9 ms. No gain; committed with its numbers and
+  reverted.
+
+So the compiler is like the builtin-heavy snippets: no single call is expensive, each costs
+roughly 50 ns, and it makes 2,300 of them per form. What would change that is the cost of a call
+and of copying values: `Value::clone` and dropping values are a quarter of every profile in this
+chapter. Or the compiler could do less, for instance by asking what a name means once per name
+rather than once per use.
+
