@@ -110,9 +110,12 @@ Each step is a commit (or several) on this branch, measured with `scripts/ab.sh`
   (`examples/nanbox_proto.rs`): 1.07–1.14× on calls, 0.88× on arithmetic, 1.35–1.40× where values
   are copied. Mixed, set aside. The same prototype with today's 32-byte values runs twice as fast
   as `src/vm.rs`: the machine's own structure is the larger cost.
-- **Next:** measure what the real machine pays that the prototype doesn't, starting with
-  redefinable arithmetic (the global check on every `+`, `<`, `=`). Returning multiple values (a
-  language feature) is still open. Step 4 waits until stack code is rare.
+- **Then** (tag `register-vm-12`, chapter 24): redefinable arithmetic costs 1–6% at most (left
+  as it is); `recur` pops into slots and keeps the environment, local operands hold their slot:
+  calls 1.15×, loops 1.14×. The loop's gap to the prototype is 1.8×, `fib`'s 2×.
+- **Next:** frames that borrow instead of own (a reference taken and given back per call for the
+  function, its body, environment and cells). Returning multiple values (a language feature) is
+  still open. Step 4 waits until stack code is rare.
 
 ## What has to stay true
 

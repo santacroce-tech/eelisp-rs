@@ -29,6 +29,7 @@ become a book.
 | 21 | [Compiling and reading, again](21-compiling-and-reading-again.md) | The compiler profiled by builtin (one `append` instead of a `reduce`; a `box` builtin measured as no gain), atoms read without a result pair; loading compiled code 65 → 35 ms since chapter 15, and the three larger moves left |
 | 22 | [Compiling into one list](22-compiling-into-one-list.md) | Every compiling function adds to one list instead of returning one for its caller to copy; the same code comes out, 14% faster; loading compiled code half what it cost in chapter 15 |
 | 23 | [Word-sized values](23-word-sized-values.md) | A NaN-boxing prototype, generic over its value type: 1.4× where values are copied, 0.88× on pure arithmetic, so it's set aside; and the same machine with today's values runs twice as fast as the real one |
+| 24 | [What the machine pays](24-what-the-machine-pays.md) | Redefinable arithmetic bounded at 1–6%; a profile by source line inside the dispatch loop; `recur` and local operands made cheaper inside their instructions: calls and loops 1.14–1.15× |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every

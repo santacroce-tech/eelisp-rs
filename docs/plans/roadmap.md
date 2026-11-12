@@ -180,7 +180,8 @@ binary nobody can reproduce), and it is the reference for testing.
   21: compiler by builtin, atoms without pairs; loading compiled code 65 → 35 ms. Chapter 22:
   the compiler builds code in one list, compiling 14.5 → 12.5 ms; loading 33 ms. Chapter 23:
   word-sized values prototyped, mixed (0.88–1.4×), set aside; the machine's own structure costs
-  twice what a minimal machine does. See
+  twice what a minimal machine does. Chapter 24: profiled by source line; `recur` and local
+  operands cheaper, calls and loops 1.14–1.15×. See
   docs/self-hosting/17-a-register-back-end.md.
 
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
