@@ -19,6 +19,7 @@ become a book.
 | 11 | [The engine reads in EELisp](11-the-engine-reads-in-eelisp.md) | Compiled mode reads every form with the EELisp reader: source text and comments for `(source f)`, parse errors of the right kind, and what reading costs |
 | 12 | [Sharing strings](12-sharing-strings.md) | Strings that share their text and interned keywords: 1.2–1.5× on text-heavy code in both engines, and why making `Value` smaller first made it slower |
 | 13 | [A cheaper call](13-a-cheaper-call.md) | Arithmetic computed inline, globals read from where they live; measuring changes smaller than the noise of code layout; compiled loops 1.35× faster |
+| 14 | [Reshaping the VM](14-reshaping-the-vm.md) | Four experiments on the VM's shape, each a commit on `exp/vm-redesign`: lighter frames and local dispatch state kept (about 1.1×), superinstructions measured as no gain, and a mistake in the record corrected |
 
 The plan these chapters follow is [docs/plans/roadmap.md](../plans/roadmap.md). The code is in
 `src/vm.rs`, `src/compiler.eel`, `src/reader.eel` and `src/boot.rs`; the tests that back every

@@ -143,6 +143,15 @@ binary nobody can reproduce), and it is the reference for testing.
   builds top-level form lists with `append` (quadratic for files with thousands of forms). See
   docs/self-hosting/13-a-cheaper-call.md.
 
+- **Reshaping the VM (branch `exp/vm-redesign`).** Experiments as commits, tagged
+  `vm-redesign-base`, `-1`, `-2`; measured with `examples/calls.rs` and `scripts/ab.sh`. Kept:
+  frames without their own mark/handler vectors, dispatch with code/pc/slot base in locals.
+  Dropped after measuring: superinstructions (no net gain), borrowing the proto, moving the
+  function off the stack. Compiled: `loop` 1.13×, `let-heavy` 1.09×, `fib` 1.07×, snippets
+  1.00–1.10×; `lists` (map/filter calling small functions) 0.94×. Next big steps would be
+  word-sized values, a register machine, or map/filter calling back into the running VM. See
+  docs/self-hosting/14-reshaping-the-vm.md.
+
 Known differences from the interpreter (deliberate for now, each with a test to write when fixed):
 
 1. Calling something that isn't a function: the interpreter reports "expected function" before
