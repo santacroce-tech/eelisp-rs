@@ -58,9 +58,9 @@ impl Parser {
             Token::Quasi => Ok(wrap("quasiquote", self.parse_expr()?)),
             Token::Unquote => Ok(wrap("unquote", self.parse_expr()?)),
             Token::UnquoteSplice => Ok(wrap("unquote-splicing", self.parse_expr()?)),
-            Token::Str(s) => Ok(Value::Str(s)),
+            Token::Str(s) => Ok(Value::Str(s.into())),
             Token::Num(nu) => Ok(Value::Number(nu)),
-            Token::Kw(k) => Ok(Value::Keyword(k)),
+            Token::Kw(k) => Ok(Value::Keyword(k.into())),
             Token::Sym(s) => Ok(match s.as_str() {
                 "true" => Value::Bool(true),
                 "false" => Value::Bool(false),

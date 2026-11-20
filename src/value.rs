@@ -95,13 +95,21 @@ impl fmt::Debug for Sym {
     }
 }
 
+// 32 bytes, not the 24 the fields need: the VM indexes its stack and slots by value, and a
+// power-of-two size makes that a shift. Measured: number loops ran ~9% slower at 24 bytes
+// (docs/self-hosting/12-sharing-strings.md).
 #[derive(Clone)]
+#[repr(align(16))]
 pub enum Value {
     Symbol(Sym),
-    Str(String),
+    /// Text. Shared, not owned: copying a string value is a reference-count bump, whatever its
+    /// length. Strings are immutable in EELisp, so nothing ever needs its own copy.
+    Str(Rc<str>),
     Number(f64),
     Bool(bool),
-    Keyword(Symbol),
+    /// Interned, like symbols: copying one is a reference-count bump, comparing two is a pointer
+    /// comparison.
+    Keyword(Sym),
     Null,
     List(Rc<Vec<Value>>),
     Dict(Rc<OrderedDict>),
@@ -153,6 +161,11 @@ pub struct Function {
     pub rest: Option<Sym>,
     pub body: Vec<Value>,
     pub closure: Env,
+    /// Set when the function was compiled: its bytecode, run by the VM (`crate::vm`). `body`
+    /// still holds the source forms, for printing and `(source f)`.
+    pub code: Option<Rc<crate::vm::Proto>>,
+    /// A compiled closure's captured variables, shared with the function that made it.
+    pub upvals: Option<Rc<[crate::vm::Cell]>>,
 }
 
 pub struct Macro {
@@ -161,6 +174,9 @@ pub struct Macro {
     pub rest: Option<Sym>, // fixed vs Swift: macros DO carry a rest param
     pub body: Vec<Value>,
     pub closure: Env,
+    /// Set when the macro was compiled: its expander's bytecode (`crate::vm`).
+    pub code: Option<Rc<crate::vm::Proto>>,
+    pub upvals: Option<Rc<[crate::vm::Cell]>>,
 }
 
 /// How a builtin's arguments are evaluated before the call.
@@ -178,6 +194,42 @@ pub struct Builtin {
     pub arg_mode: ArgMode,
     // Boxed closure (not a fn pointer) so builtins can capture state — e.g. the database handle.
     pub func: Box<BuiltinFn>,
+    /// Set only on the language's own arithmetic and comparisons. The VM computes these directly
+    /// when called with two numbers, without the call through `func`. It's the builtin value that
+    /// carries it, so a program that redefines `+` gets its own `+`, with no fast path.
+    pub fast: Option<FastOp>,
+}
+
+/// The operations the VM computes inline (see `Builtin::fast`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastOp {
+    Add,
+    Sub,
+    Mul,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
+}
+
+impl FastOp {
+    /// The result for two numbers, exactly as the builtin computes it.
+    #[inline(always)]
+    pub fn apply(self, a: f64, b: f64) -> Value {
+        match self {
+            FastOp::Add => Value::Number(a + b),
+            FastOp::Sub => Value::Number(a - b),
+            FastOp::Mul => Value::Number(a * b),
+            FastOp::Lt => Value::Bool(a < b),
+            FastOp::Gt => Value::Bool(a > b),
+            FastOp::Le => Value::Bool(a <= b),
+            FastOp::Ge => Value::Bool(a >= b),
+            FastOp::Eq => Value::Bool(a == b),
+            FastOp::Ne => Value::Bool(a != b),
+        }
+    }
 }
 
 /// What a builtin runs: its evaluated (or raw, per `arg_mode`) arguments and the caller's

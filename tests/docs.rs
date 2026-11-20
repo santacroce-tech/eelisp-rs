@@ -254,8 +254,7 @@ fn the_manual_and_the_environment_agree() {
     let registered: Vec<String> = it
         .global
         .borrow()
-        .vars
-        .iter()
+        .bindings()
         .filter(|(_, v)| matches!(v, Value::Builtin(_)))
         .map(|(k, _)| k.to_string())
         .collect();

@@ -12,11 +12,11 @@ use crate::value::*;
 pub fn to_json(v: &Value) -> J {
     match v {
         Value::Number(n) => json!(n),
-        Value::Str(s) => json!(s),
+        Value::Str(s) => json!(**s),
         Value::Bool(b) => json!(b),
         Value::Null => J::Null,
         Value::Symbol(s) => json!({ "$sym": &**s }),
-        Value::Keyword(k) => json!({ "$kw": k }),
+        Value::Keyword(k) => json!({ "$kw": **k }),
         Value::List(l) => J::Array(l.iter().map(to_json).collect()),
         Value::Dict(d) => json!({ "$dict": ordered_pairs(d) }),
         Value::Table(t) => json!({ "$table": table_json(t) }),
@@ -110,7 +110,7 @@ pub fn from_tagged_json(j: &J) -> Value {
                 return Value::Symbol(s.into());
             }
             if let Some(k) = m.get("$kw").and_then(|v| v.as_str()) {
-                return Value::Keyword(k.to_string());
+                return Value::Keyword(k.to_string().into());
             }
             if let Some(pairs) = m.get("$dict").and_then(|v| v.as_array()) {
                 let mut d = OrderedDict::default();
@@ -134,7 +134,7 @@ pub fn from_json(j: &J) -> Value {
         J::Null => Value::Null,
         J::Bool(b) => Value::Bool(*b),
         J::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
-        J::String(s) => Value::Str(s.clone()),
+        J::String(s) => Value::Str(s.clone().into()),
         J::Array(a) => Value::List(std::rc::Rc::new(a.iter().map(from_json).collect())),
         J::Object(m) => {
             let mut d = OrderedDict::default();

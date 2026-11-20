@@ -37,7 +37,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>) {
             out.borrow_mut().emit(&joined(args));
             Ok(Value::Null)
         };
-        env::define(env, "print", Value::Builtin(Rc::new(Builtin { name: "print".into(), arg_mode: ArgMode::Eval, func: Box::new(f) })));
+        env::define(env, "print", Value::Builtin(Rc::new(Builtin { name: "print".into(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })));
     }
     {
         let out = out.clone();
@@ -47,6 +47,6 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>) {
             out.borrow_mut().emit(&line);
             Ok(Value::Null)
         };
-        env::define(env, "println", Value::Builtin(Rc::new(Builtin { name: "println".into(), arg_mode: ArgMode::Eval, func: Box::new(f) })));
+        env::define(env, "println", Value::Builtin(Rc::new(Builtin { name: "println".into(), arg_mode: ArgMode::Eval, func: Box::new(f), fast: None })));
     }
 }

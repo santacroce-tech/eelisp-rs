@@ -23,7 +23,7 @@ fn defb(
     env::define(
         env,
         name,
-        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: mode, func: Box::new(f) })),
+        Value::Builtin(Rc::new(Builtin { name: name.to_string(), arg_mode: mode, func: Box::new(f), fast: None })),
     );
 }
 
@@ -36,10 +36,10 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
         };
         let unit = match args.get(1) {
             Some(Value::Symbol(k)) => k.to_string(),
-            Some(Value::Keyword(k)) => k.clone(),
+            Some(Value::Keyword(k)) => k.to_string(),
             _ => "days".into(),
         };
-        Ok(Value::Str(format!("every:{}:{}", n, unit)))
+        Ok(Value::Str(format!("every:{}:{}", n, unit).into()))
     });
 
     // ── items ──
@@ -95,19 +95,19 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
         Some(Value::Item(it)) => {
             let mut d = OrderedDict::default();
             d.insert("id".into(), Value::Number(it.id as f64));
-            d.insert("text".into(), Value::Str(it.text.clone()));
+            d.insert("text".into(), Value::Str(it.text.clone().into()));
             for k in &it.properties.keys {
                 if let Some(v) = it.properties.get(k) {
                     d.insert(k.clone(), v.clone());
                 }
             }
-            d.insert("notes".into(), Value::Str(it.notes.clone()));
+            d.insert("notes".into(), Value::Str(it.notes.clone().into()));
             d.insert(
                 "categories".into(),
-                Value::List(Rc::new(it.categories.iter().map(|c| Value::Str(c.clone())).collect())),
+                Value::List(Rc::new(it.categories.iter().map(|c| Value::Str(c.clone().into())).collect())),
             );
-            d.insert("created".into(), Value::Str(it.created.clone()));
-            d.insert("modified".into(), Value::Str(it.modified.clone()));
+            d.insert("created".into(), Value::Str(it.created.clone().into()));
+            d.insert("modified".into(), Value::Str(it.modified.clone().into()));
             Ok(Value::Dict(Rc::new(d)))
         }
         Some(v @ Value::Dict(_)) => Ok(v.clone()),
@@ -178,7 +178,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                 .ok_or_else(|| LispError::InvalidSyntax("from-template needs a name".into()))?;
             // (from-template name "text" :when …) — the text is the item's; :text says the same.
             let (text, rest) = match args.get(1) {
-                Some(Value::Str(t)) => (Some(t.clone()), &args[2..]),
+                Some(Value::Str(t)) => (Some(t.to_string()), &args[2..]),
                 _ => (None, &args[1.min(args.len())..]),
             };
             let overrides = collect_kw_pairs(rest);
@@ -344,7 +344,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             let mut names: Vec<&String> = r.inactive.keys().collect();
             names.sort();
             lines.extend(names.into_iter().cloned());
-            Ok(Value::Str(lines.join("\n")))
+            Ok(Value::Str(lines.join("\n").into()))
         });
     }
     {
@@ -355,7 +355,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             let name = agenda::agenda_name_from_path(&path);
             let mut r = reg.borrow_mut();
             if r.active_name == name {
-                return Ok(Value::Str(format!("Already using agenda: {}", name)));
+                return Ok(Value::Str(format!("Already using agenda: {}", name).into()));
             }
             let target = match r.inactive.remove(&name) {
                 Some(existing) => existing,
@@ -368,7 +368,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
             let old = std::mem::replace(&mut *db.borrow_mut(), target);
             let old_name = std::mem::replace(&mut r.active_name, name.clone());
             r.inactive.insert(old_name, old);
-            Ok(Value::Str(format!("Opened agenda: {}", name)))
+            Ok(Value::Str(format!("Opened agenda: {}", name).into()))
         });
     }
     {
@@ -379,14 +379,14 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                 .ok_or_else(|| LispError::InvalidSyntax("use-agenda needs a name".into()))?;
             let mut r = reg.borrow_mut();
             if r.active_name == name {
-                return Ok(Value::Str(format!("Already using agenda: {}", name)));
+                return Ok(Value::Str(format!("Already using agenda: {}", name).into()));
             }
             match r.inactive.remove(&name) {
                 Some(target) => {
                     let old = std::mem::replace(&mut *db.borrow_mut(), target);
                     let old_name = std::mem::replace(&mut r.active_name, name.clone());
                     r.inactive.insert(old_name, old);
-                    Ok(Value::Str(format!("Switched to agenda: {}", name)))
+                    Ok(Value::Str(format!("Switched to agenda: {}", name).into()))
                 }
                 None => {
                     let mut avail: Vec<&String> = r.inactive.keys().collect();
@@ -420,12 +420,12 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                         let target = r.inactive.remove(&nn).unwrap();
                         let _closed = std::mem::replace(&mut *db.borrow_mut(), target); // dropped
                         r.active_name = nn;
-                        Ok(Value::Str(format!("Closed agenda: {}", name)))
+                        Ok(Value::Str(format!("Closed agenda: {}", name).into()))
                     }
                     None => Err(LispError::Runtime("cannot close the only open agenda".into())),
                 }
             } else if r.inactive.remove(&name).is_some() {
-                Ok(Value::Str(format!("Closed agenda: {}", name)))
+                Ok(Value::Str(format!("Closed agenda: {}", name).into()))
             } else {
                 Err(LispError::Runtime(format!("Agenda not found: {}", name)))
             }
@@ -452,7 +452,7 @@ pub fn register(env: &Env, db: Db, reg: Reg) {
                 std::fs::create_dir_all(dir).map_err(|e| LispError::Runtime(format!("{}: {}", dir.display(), e)))?;
             }
             std::fs::write(&path, json).map_err(|e| LispError::Runtime(format!("{path}: {e}")))?;
-            Ok(Value::Str(format!("Exported agenda '{}' to {}", name, path)))
+            Ok(Value::Str(format!("Exported agenda '{}' to {}", name, path).into()))
         });
     }
     {
@@ -484,7 +484,7 @@ fn assign_action(cat: &str) -> Value {
     Value::List(Rc::new(vec![
         Value::Symbol("assign".into()),
         Value::Symbol("id".into()),
-        Value::Str(cat.to_string()),
+        Value::Str(cat.into()),
     ]))
 }
 
@@ -494,7 +494,7 @@ fn kw_all<'a>(args: &'a [Value], key: &str) -> Vec<&'a Value> {
     let mut i = 0;
     while i + 1 < args.len() {
         if let Value::Keyword(k) = &args[i] {
-            if k == key {
+            if **k == *key {
                 out.push(&args[i + 1]);
             }
         }
@@ -508,7 +508,7 @@ fn kw<'a>(args: &'a [Value], key: &str) -> Option<&'a Value> {
     let mut i = 0;
     while i + 1 < args.len() {
         if let Value::Keyword(k) = &args[i] {
-            if k == key {
+            if **k == *key {
                 return Some(&args[i + 1]);
             }
         }
@@ -522,7 +522,7 @@ fn collect_kw_pairs(args: &[Value]) -> Vec<(String, Value)> {
     let mut i = 0;
     while i + 1 < args.len() {
         if let Value::Keyword(k) = &args[i] {
-            out.push((k.clone(), args[i + 1].clone()));
+            out.push((k.to_string(), args[i + 1].clone()));
             i += 2;
         } else {
             i += 1;
@@ -533,14 +533,14 @@ fn collect_kw_pairs(args: &[Value]) -> Vec<(String, Value)> {
 
 fn as_text(v: &Value) -> Option<String> {
     match v {
-        Value::Str(s) => Some(s.clone()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
 
 fn str_val(v: &Value) -> Option<String> {
     match v {
-        Value::Str(s) => Some(s.clone()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
@@ -548,7 +548,7 @@ fn str_val(v: &Value) -> Option<String> {
 fn sym_or_str(v: &Value) -> Option<String> {
     match v {
         Value::Symbol(s) => Some(s.to_string()),
-        Value::Str(s) => Some(s.clone()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
@@ -563,15 +563,15 @@ fn int_val(v: &Value) -> Option<i64> {
 fn recur_val(v: &Value) -> Option<String> {
     match v {
         Value::Symbol(k) => Some(k.to_string()),
-        Value::Keyword(k) => Some(k.clone()),
-        Value::Str(s) => Some(s.clone()),
+        Value::Keyword(k) => Some(k.to_string()),
+        Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
 
 fn str_arg(v: Option<&Value>, who: &str) -> Result<String, LispError> {
     match v {
-        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(Value::Str(s)) => Ok(s.to_string()),
         _ => Err(LispError::InvalidSyntax(format!("{} expects a string", who))),
     }
 }

@@ -22,6 +22,11 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all --verbose
+      # The same tests with every engine compiling its forms and running them on the VM.
+      - name: Test, compiled mode
+        run: cargo test --all
+        env:
+          EELISP_COMPILED: "1"
       - name: Release build
         run: cargo build --release --bin eelisp
 
@@ -39,6 +44,10 @@ jobs:
         run: cargo clippy --all-targets --no-default-features -- -D warnings
       - name: Test (no SQLite, no network)
         run: cargo test --no-default-features
+      - name: Test (no SQLite, no network), compiled mode
+        run: cargo test --no-default-features
+        env:
+          EELISP_COMPILED: "1"
       - name: Build with SQLite but no network
         run: cargo build --no-default-features --features sqlite
       - name: Build for a bare WebAssembly host

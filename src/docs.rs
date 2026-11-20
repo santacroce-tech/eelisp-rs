@@ -152,6 +152,10 @@ fn visible_bindings(env: &Env) -> BTreeMap<String, Value> {
         let parent = {
             let s = scope.borrow();
             for (k, v) in s.bindings() {
+                // the compiler's and reader's internals (compiled mode) aren't the program's functions
+                if k.starts_with("compiler-") || k.starts_with("reader-") {
+                    continue;
+                }
                 out.entry(k.to_string()).or_insert_with(|| v.clone());
             }
             s.parent.clone()
@@ -166,7 +170,8 @@ fn filter_text(v: Option<&Value>) -> Option<String> {
     let s: &str = match v {
         None | Some(Value::Null) => return None,
         Some(Value::Symbol(s)) => s,
-        Some(Value::Str(s)) | Some(Value::Keyword(s)) => s,
+        Some(Value::Str(s)) => s,
+        Some(Value::Keyword(s)) => s,
         Some(other) => return Some(print_value(other, false).to_lowercase()),
     };
     let t = s.trim();
@@ -182,11 +187,12 @@ fn filter_text(v: Option<&Value>) -> Option<String> {
 fn name_arg(v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::Symbol(s)) => Some(s.to_string()),
-        Some(Value::Str(s)) | Some(Value::Keyword(s)) => Some(s.clone()),
+        Some(Value::Str(s)) => Some(s.to_string()),
+        Some(Value::Keyword(s)) => Some(s.to_string()),
         Some(Value::List(l)) => match (l.first(), l.get(1)) {
             // (quote x) — what 'x reads as
             (Some(Value::Symbol(q)), Some(Value::Symbol(s))) if &**q == "quote" => Some(s.to_string()),
-            (Some(Value::Symbol(q)), Some(Value::Str(s))) if &**q == "quote" => Some(s.clone()),
+            (Some(Value::Symbol(q)), Some(Value::Str(s))) if &**q == "quote" => Some(s.to_string()),
             _ => None,
         },
         _ => None,
@@ -407,10 +413,10 @@ fn summary_of(name: &str, kind: &str, index: &SourceIndex) -> String {
 
 fn row_dict(r: &Row, index: &SourceIndex) -> Value {
     let mut d = OrderedDict::default();
-    d.insert("name".into(), Value::Str(r.name.clone()));
-    d.insert("kind".into(), Value::Str(r.kind.to_string()));
-    d.insert("sig".into(), Value::Str(r.sig.clone()));
-    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index)));
+    d.insert("name".into(), Value::Str(r.name.clone().into()));
+    d.insert("kind".into(), Value::Str(r.kind.into()));
+    d.insert("sig".into(), Value::Str(r.sig.clone().into()));
+    d.insert("summary".into(), Value::Str(summary_of(&r.name, r.kind, index).into()));
     Value::Dict(Rc::new(d))
 }
 
@@ -435,6 +441,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "function-list".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -444,14 +451,15 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
             // Evaluated, unlike `source`: a program hands it a name it holds in a variable.
             let name = match args.first() {
                 Some(Value::Symbol(s)) => s.to_string(),
-                Some(Value::Str(s)) | Some(Value::Keyword(s)) => s.clone(),
+                Some(Value::Str(s)) => s.to_string(),
+                Some(Value::Keyword(s)) => s.to_string(),
                 _ => {
                     return Err(LispError::InvalidSyntax(
                         "source-text expects a name, e.g. (source-text \"map\")".into(),
                     ))
                 }
             };
-            Ok(Value::Str(render_source(&name, env, &index.borrow())?))
+            Ok(Value::Str((render_source(&name, env, &index.borrow())?).into()))
         };
         env::define(
             env,
@@ -460,6 +468,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "source-text".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -478,6 +487,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 name: "functions".into(),
                 arg_mode: ArgMode::Eval,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -500,6 +510,7 @@ pub fn register(env: &Env, out: Rc<RefCell<OutputState>>, index: Rc<RefCell<Sour
                 // The name is passed unevaluated, so `(source map)` reads as well as `(source 'map)`.
                 arg_mode: ArgMode::TableFirst,
                 func: Box::new(f),
+                fast: None,
             })),
         );
     }
@@ -603,6 +614,7 @@ pub static CORE: &[Entry] = &[
     doc!("str-replace", "(str-replace s target repl) → string", "Replaces every occurrence of target.",
          "(str-replace \"a-b-c\" \"-\" \"+\")   → \"a+b+c\""),
     doc!("substr", "(substr s start end) → string", "A slice by character index: 0-based, end-exclusive.", "(substr \"hello\" 1 3)   → \"el\""),
+    doc!("str-chars", "(str-chars s) → list", "The characters of s, each a one-character string.", "(str-chars \"héllo\")   → (\"h\" \"é\" \"l\" \"l\" \"o\")"),
     doc!("str-starts-with", "(str-starts-with s prefix) → bool", "Does s begin with prefix?", "(str-starts-with \"hello\" \"he\")   → true"),
     doc!("str-ends-with", "(str-ends-with s suffix) → bool", "Does s end with suffix?", "(str-ends-with \"hello\" \"lo\")   → true"),
     // ── lists ────────────────────────────────────────────────────────
@@ -611,6 +623,7 @@ pub static CORE: &[Entry] = &[
     doc!("head", "(head lst)", "The first element, or nil when the list is empty.", "(head '(1 2 3))   → 1"),
     doc!("car", "(car lst)", "The Lisp spelling of head — the same function.", "(car '(1 2 3))   → 1"),
     doc!("tail", "(tail lst) → list", "Everything after the first element.", "(tail '(1 2 3))   → (2 3)"),
+    doc!("slice", "(slice lst start end) → list", "The elements from start up to end, 0-based and end-exclusive, like `substr` for strings. Without end, to the end of the list.", "(slice '(a b c d) 1 3)   → (b c)"),
     doc!("cdr", "(cdr lst) → list", "The Lisp spelling of tail — the same function.", "(cdr '(1 2 3))   → (2 3)"),
     doc!("nth", "(nth lst i)", "The element at index i, 0-based; nil past the end.", "(nth '(1 2 3) 1)   → 2"),
     doc!("length", "(length lst) → number", "How many elements the list has.", "(length '(1 2 3))   → 3"),
@@ -646,6 +659,9 @@ pub static CORE: &[Entry] = &[
     doc!("nil?", "(nil? x) → bool", "Is it nil?", "(nil? nil)   → true"),
     doc!("symbol?", "(symbol? x) → bool", "Is it a symbol?", "(symbol? 'a)   → true"),
     doc!("keyword?", "(keyword? x) → bool", "Is it a keyword?", "(keyword? :a)   → true"),
+    doc!("dict?", "(dict? x) → bool", "Is it a dict?", "(dict? {:a 1})   → true"),
+    doc!("symbol", "(symbol name) → symbol", "The symbol with that name; name is a string, symbol or keyword.", "(symbol \"total\")   → total"),
+    doc!("keyword", "(keyword name) → keyword", "The keyword with that name; name is a string, symbol or keyword.", "(keyword \"total\")   → :total"),
     doc!("fn?", "(fn? x) → bool", "Is it callable — a function or a builtin?", "(fn? map)   → true"),
     doc!("->string", "(->string x) → string", "Coerces to a string.", "(->string 42)   → \"42\""),
     doc!("->number", "(->number x) → number", "Coerces to a number; nil when it doesn't read as one.", "(->number \"42\")   → 42"),
@@ -664,9 +680,17 @@ pub static CORE: &[Entry] = &[
     doc!("print", "(print x …) → nil", "Prints its arguments with no trailing newline. Captured by the host, not written to a terminal.",
          "(print \"a\" \"b\")"),
     doc!("println", "(println x …) → nil", "Prints its arguments and a newline.", "(println \"total:\" 42)"),
-    doc!("eval", "(eval form)", "Evaluates a value as code — the other half of `parse`.", "(eval (parse \"(+ 1 2)\"))   → 3"),
+    doc!("eval", "(eval form)", "Evaluates a value as code — the other half of `parse` — at the top level: it sees global definitions, not the caller's local variables.", "(eval (parse \"(+ 1 2)\"))   → 3"),
     doc!("apply", "(apply f args)", "Calls f with a list of arguments.", "(apply + '(1 2 3))   → 6"),
-    doc!("error", "(error message)", "Stops with an error carrying the message — one that `try` can catch.",
+    doc!("vm-assemble", "(vm-assemble '(proto :params (…) :code (…))) → function", "Turns bytecode, written as a list of instructions, into a function that runs on the virtual machine. It is what the compiler emits; see src/vm.rs for the instructions.",
+         "((vm-assemble '(proto :params (a b) :code ((load +) (load a) (load b) (tail-call 2)))) 2 3)   → 5"),
+    doc!("vm-run", "(vm-run '(proto :code (…)))", "Assembles bytecode and runs it at once, at the top level: its definitions land in the global scope. How compiled top-level forms run.",
+         "(vm-run '(proto :code ((const 42) (def answer))))   → 42"),
+    doc!("vm-global-kind", "(vm-global-kind 'name) → string", "What a global name means to the compiler: \"macro\", \"table-first\" or \"raw\" for a builtin whose arguments aren't all evaluated, nil for anything else.",
+         "(vm-global-kind 'when)   → \"macro\""),
+    doc!("vm-macroexpand", "(vm-macroexpand form)", "Expands a call to a global macro once; any other form comes back unchanged.",
+         "(vm-macroexpand '(when ok (go)))   → (if ok (do (go)) nil)"),
+    doc!("error", "(error message kind)", "Stops with an error carrying the message — one that `try` can catch. The kind is optional: `:parse` or `:syntax` make it that kind of error, as the engine's reader and forms report them; otherwise it's a runtime error.",
          "(try (error \"no price\") (catch e (dict-get e :message)))   → \"no price\""),
     doc!("csv-parse", "(csv-parse text sep) → list", "Reads CSV into rows of text: quotes, doubled quotes, separators and line breaks inside quotes. The separator is \",\" unless given — \"\\t\" for TSV.",
          "(csv-parse \"a,b\\n1,\\\"x, y\\\"\")   → ((\"a\" \"b\") (\"1\" \"x, y\"))"),

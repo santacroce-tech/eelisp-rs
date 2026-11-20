@@ -100,16 +100,16 @@ pub fn read_input(input: &str) -> Input {
         return Input::Formula(parse_formula(body));
     }
     if let Some(text) = input.strip_prefix('\'') {
-        return Input::Literal(Value::Str(text.to_string()), None);
+        return Input::Literal(Value::Str(text.into()), None);
     }
     if reads_as_date(input.trim()) {
         let mut fmt = Map::new();
         fmt.insert("date".into(), J::from("iso"));
-        return Input::Literal(Value::Str(input.trim().to_string()), Some(fmt));
+        return Input::Literal(Value::Str(input.trim().into()), Some(fmt));
     }
     match read_number(input.trim()) {
         Some((n, dress)) if n.is_finite() => Input::Literal(Value::Number(n), dress.format()),
-        _ => Input::Literal(Value::Str(input.to_string()), None),
+        _ => Input::Literal(Value::Str(input.into()), None),
     }
 }
 
@@ -318,7 +318,7 @@ pub fn storable(v: Value) -> Result<Value, String> {
             }
             Value::Dict(Rc::new(out))
         }
-        other => Value::Str(print_value(&other, false)),
+        other => Value::Str(print_value(&other, false).into()),
     })
 }
 
@@ -1052,12 +1052,12 @@ impl Sheet {
             Some(c) => vec![
                 n(at.row),
                 n(at.col),
-                Value::Str(c.input.clone()),
+                Value::Str(c.input.clone().into()),
                 c.value.clone(),
-                c.error.clone().map(Value::Str).unwrap_or(Value::Null),
+                c.error.clone().map(|s| Value::Str(s.into())).unwrap_or(Value::Null),
                 c.fmt.clone().map(|m| from_json(&J::Object(m))).unwrap_or(Value::Null),
             ],
-            None => vec![n(at.row), n(at.col), Value::Str(String::new()), Value::Null, Value::Null, Value::Null],
+            None => vec![n(at.row), n(at.col), Value::Str((String::new()).into()), Value::Null, Value::Null, Value::Null],
         };
         Value::List(Rc::new(items))
     }
@@ -1067,7 +1067,7 @@ impl Sheet {
         let mut at: Vec<CellRef> = self.cells.keys().copied().collect();
         at.sort();
         let mut d = OrderedDict::default();
-        d.insert("path".into(), Value::Str(self.path.display().to_string()));
+        d.insert("path".into(), Value::Str(self.path.display().to_string().into()));
         d.insert("version".into(), Value::Number(self.version as f64));
         d.insert("cells".into(), Value::List(Rc::new(at.into_iter().map(|c| self.row_value(c)).collect())));
         let sizes = |m: &BTreeMap<u32, f64>| {

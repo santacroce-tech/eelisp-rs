@@ -41,7 +41,7 @@ fn a_host_calls_the_handlers_a_script_defines() {
     )
     .unwrap();
     let hello = it.call("on-join", &[Value::Number(7.0), Value::Str("Ada".into())]);
-    assert!(matches!(hello, Some(Ok(Value::Str(s))) if s == "Hello Ada"));
+    assert!(matches!(hello, Some(Ok(Value::Str(s))) if s == "Hello Ada".into()));
     // Handlers keep state between calls.
     it.call("on-join", &[Value::Number(8.0), Value::Str("Bo".into())]);
     assert_eq!(it.eval_str("(length joined)").unwrap().to_string(), "2");

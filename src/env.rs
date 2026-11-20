@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::value::{LispError, Sym, Value};
 
@@ -59,7 +60,9 @@ pub type Vars = HashMap<Sym, Value, BuildHasherDefault<FxHasher>>;
 /// call: those live in `local`, a short vector searched front to back, which costs no hashing
 /// and allocates nothing until the first binding.
 pub struct Scope {
-    pub vars: Vars,
+    /// The global scope's bindings. Private: the VM caches where a global's value lives in this
+    /// map (see `layout`), which holds only as long as every insertion goes through `bind`.
+    vars: Vars,
     pub local: Vec<(Sym, Value)>,
     pub parent: Option<Env>,
 }
@@ -83,7 +86,14 @@ impl Scope {
 
     fn bind(&mut self, name: Sym, val: Value) {
         if self.parent.is_none() {
-            self.vars.insert(name, val);
+            // an existing name is updated where it lies; only a new name moves the map's entries
+            match self.vars.get_mut(&name) {
+                Some(slot) => *slot = val,
+                None => {
+                    self.vars.insert(name, val);
+                    LAYOUT.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         } else if let Some(slot) = self.lookup_mut(&name) {
             *slot = val;
         } else {
@@ -99,7 +109,31 @@ impl Scope {
 
 pub type Env = Rc<RefCell<Scope>>;
 
+/// Bumped whenever a global scope is made or gains a name: the two things that can move where a
+/// global's value lives (a hash map moves its entries only when it grows). Changing a global's
+/// value doesn't move it, so `set!` and redefining a function leave this alone. The VM's cache of
+/// global lookups is valid while this hasn't changed (`vm.rs`, `Op::Load`).
+static LAYOUT: AtomicU64 = AtomicU64::new(0);
+
+/// The current layout of the global scopes (see `LAYOUT`).
+#[inline(always)]
+pub fn layout() -> u64 {
+    LAYOUT.load(Ordering::Relaxed)
+}
+
+/// Where `name`'s value lives in `env`, if `env` is a global scope that binds it: what the VM
+/// caches. Valid while `layout()` returns the same number.
+pub fn global_slot(env: &Env, name: &Sym) -> Option<*const Value> {
+    let scope = env.try_borrow().ok()?;
+    if scope.parent.is_some() {
+        return None;
+    }
+    scope.vars.get(name).map(|v| v as *const Value)
+}
+
 pub fn root() -> Env {
+    // a new global scope may sit where a dropped one did: caches pointing into that one must go
+    LAYOUT.fetch_add(1, Ordering::Relaxed);
     Rc::new(RefCell::new(Scope { vars: Vars::default(), local: Vec::new(), parent: None }))
 }
 
