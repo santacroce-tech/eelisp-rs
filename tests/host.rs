@@ -226,6 +226,39 @@ fn granted_folders_are_read_by_name() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A link inside the workspace can point outside it: the path is fine as text, but what it reads
+/// is not in the workspace. `read-note`, `dir-list` and `file-info` refuse it, `notes` leaves it out.
+#[test]
+#[cfg(unix)]
+fn a_link_does_not_lead_out_of_the_workspace() {
+    use std::os::unix::fs::symlink;
+    let base = std::env::temp_dir().join(format!("eelisp-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (ws, out) = (base.join("ws"), base.join("outside"));
+    std::fs::create_dir_all(ws.join("notes")).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(ws.join("notes/real.md"), "mine").unwrap();
+    std::fs::write(out.join("secret.md"), "TOPSECRET").unwrap();
+    symlink(out.join("secret.md"), ws.join("link.md")).unwrap();
+    symlink(&out, ws.join("away")).unwrap();
+    symlink(ws.join("notes/real.md"), ws.join("alias.md")).unwrap();
+
+    let it = Interpreter::new();
+    let root = ws.display().to_string();
+    it.editor.borrow_mut().current_dir = Some(Box::new(move || root.clone()));
+
+    for bad in ["(read-note \"link.md\")", "(read-note \"away/secret.md\")", "(dir-list \"away\")", "(file-info \"link.md\")"] {
+        let e = it.eval_str(bad).unwrap_err().to_string();
+        assert!(e.contains("outside the workspace"), "{bad}: {e}");
+    }
+    assert_eq!(s(&it, "(notes)"), "(alias.md notes/real.md)", "a link to a file outside is not a note here");
+    // a link that stays inside reads as the file it points at
+    assert_eq!(s(&it, "(read-note \"alias.md\")"), "mine");
+    // the folder still shows its links; only following one out is refused
+    assert_eq!(s(&it, "(map (fn (e) (dict-get e :name)) (dir-list))"), "(away notes alias.md link.md)");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn editor_mutation_callback() {
     let it = Interpreter::new();

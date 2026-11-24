@@ -80,13 +80,30 @@ fn inside(root: &Path, rel: &str) -> Result<PathBuf, LispError> {
     Ok(root.join(rel))
 }
 
+/// `inside` reads the path as text; a symlink can still point anywhere. Where the path really
+/// ends up must be under the base too. A path that isn't on disk has nowhere to end up.
+fn stays_under(base: &Path, full: &Path) -> bool {
+    match (std::fs::canonicalize(full), std::fs::canonicalize(base)) {
+        (Ok(real), Ok(real_base)) => real.starts_with(real_base),
+        _ => true,
+    }
+}
+
+fn kept(base: &Path, full: PathBuf, rel: &str) -> Result<PathBuf, LispError> {
+    if stays_under(base, &full) {
+        Ok(full)
+    } else {
+        Err(fail(format!("{rel}: a link that leads outside the workspace")))
+    }
+}
+
 /// Where a script's path points: the workspace, or a granted folder for a path that starts
 /// `~name/`. Gives the base folder, the prefix paths under it are written with ("" or "~name"),
 /// and the file itself — never outside the base.
 fn locate(host: &Host, rel: &str) -> Result<(PathBuf, String, PathBuf), LispError> {
     let Some(named) = rel.strip_prefix('~') else {
         let base = root(host);
-        let full = inside(&base, rel)?;
+        let full = kept(&base, inside(&base, rel)?, rel)?;
         return Ok((base, String::new(), full));
     };
     let (name, rest) = named.split_once('/').unwrap_or((named, ""));
@@ -95,7 +112,7 @@ fn locate(host: &Host, rel: &str) -> Result<(PathBuf, String, PathBuf), LispErro
         return Err(fail(format!("~{name}: no folder by that name — add it in EEditor first")));
     };
     let base = PathBuf::from(path);
-    let full = inside(&base, rest)?;
+    let full = kept(&base, inside(&base, rest)?, rel)?;
     Ok((base, format!("~{name}"), full))
 }
 
@@ -104,8 +121,8 @@ fn is_note(p: &Path) -> bool {
 }
 
 /// Every note under `dir`, as paths relative to `root` with `/` separators. Hidden entries
-/// (`.eeditor`, `.git`) are skipped, symlinked folders aren't followed (no loops), unreadable
-/// folders are passed over.
+/// (`.eeditor`, `.git`) are skipped, symlinked folders aren't followed (no loops), a link to a
+/// file outside `root` isn't listed (`read-note` would refuse it), unreadable folders are passed over.
 fn walk(root: &Path, prefix: &str, dir: &Path, out: &mut Vec<String>, seen: &mut usize) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
@@ -121,7 +138,7 @@ fn walk(root: &Path, prefix: &str, dir: &Path, out: &mut Vec<String>, seen: &mut
         let path = e.path();
         if kind.is_dir() {
             walk(root, prefix, &path, out, seen);
-        } else if is_note(&path) && path.starts_with(root) {
+        } else if is_note(&path) && path.starts_with(root) && (!kind.is_symlink() || stays_under(root, &path)) {
             out.push(rel_path(root, prefix, &path));
         }
     }
