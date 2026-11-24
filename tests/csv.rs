@@ -17,6 +17,9 @@ fn quotes_separators_and_line_breaks() {
     assert_eq!(ev(&it, r#"(csv-parse "a\r\nb\r\n")"#), r#"(("a") ("b"))"#, "CRLF, and no row for the last newline");
     assert_eq!(ev(&it, r#"(csv-parse "a,,c")"#), r#"(("a" "" "c"))"#);
     assert_eq!(ev(&it, r#"(csv-parse "")"#), "()");
+    assert_eq!(ev(&it, r#"(csv-parse "\"\"")"#), r#"((""))"#, "a quoted empty cell is a row");
+    assert_eq!(ev(&it, r#"(csv-parse "a\n\"\"")"#), r#"(("a") (""))"#, "also as the last line");
+    assert_eq!(ev(&it, r#"(csv-parse "a\n\"\"\n")"#), r#"(("a") (""))"#);
     assert_eq!(ev(&it, "(csv-parse \"a\\tb\" \"\\t\")"), r#"(("a" "b"))"#, "TSV");
 }
 
@@ -42,6 +45,11 @@ fn stringify_quotes_what_needs_it_and_reads_back() {
         ev(&it, r#"(= (csv-parse (csv-stringify '(("x, y" "two\nlines" "q\"q")))) '(("x, y" "two\nlines" "q\"q")))"#),
         "true",
         "round trip"
+    );
+    assert_eq!(
+        ev(&it, r#"(= (csv-parse (csv-stringify '(("a") ("") (nil)))) '(("a") ("") ("")))"#),
+        "true",
+        "a row of one empty cell is written as \"\" and reads back"
     );
 }
 

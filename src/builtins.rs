@@ -838,6 +838,8 @@ pub fn parse_delimited(text: &str, sep: char) -> Vec<Vec<String>> {
     let mut row: Vec<String> = Vec::new();
     let mut cell = String::new();
     let mut quoted = false;
+    // A cell written as "" is empty but was written: it still makes a row at the end of the text.
+    let mut written = false;
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -853,20 +855,23 @@ pub fn parse_delimited(text: &str, sep: char) -> Vec<Vec<String>> {
             }
         } else if c == '"' && cell.is_empty() {
             quoted = true;
+            written = true;
         } else if c == sep {
             row.push(std::mem::take(&mut cell));
+            written = false;
         } else if c == '\n' || c == '\r' {
             if c == '\r' && chars.get(i + 1) == Some(&'\n') {
                 i += 1;
             }
             row.push(std::mem::take(&mut cell));
             rows.push(std::mem::take(&mut row));
+            written = false;
         } else {
             cell.push(c);
         }
         i += 1;
     }
-    if !cell.is_empty() || !row.is_empty() {
+    if !cell.is_empty() || !row.is_empty() || written {
         row.push(cell);
         rows.push(row);
     }
@@ -950,6 +955,8 @@ fn csv_stringify(args: &[Value], _: &Env) -> Result<Value, LispError> {
             Value::List(cells) => cells.iter().map(cell).collect::<Vec<_>>().join(&sep.to_string()),
             one => cell(one),
         })
+        // a row of one empty cell would be an empty line, which reads back as no row
+        .map(|line| if line.is_empty() { "\"\"".to_string() } else { line })
         .collect();
     Ok(Value::Str(lines.join("\n")))
 }
