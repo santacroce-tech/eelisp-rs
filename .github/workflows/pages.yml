@@ -1,0 +1,40 @@
+# The website, eelisp.app: site/ as it is on main, published by GitHub Pages.
+#
+# Runs when main changes anything under site/ (or by hand, from the Actions tab). site/ is plain
+# HTML, so there is nothing to build: the folder is copied without its README (it says how the site
+# is made, which the public needn't read) and handed to Pages. The custom domain is set in the repo's
+# Settings → Pages, not by a CNAME file, which a workflow-published site ignores.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a newer push doesn't cancel one that is already going out.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage site/
+        run: rsync -a --exclude README.md --exclude .DS_Store site/ _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

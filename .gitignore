@@ -2,7 +2,7 @@
 **/*.rs.bk
 .DS_Store
 
-# where the site deploys to — the server, its user and key — kept local (scripts/deploy-site.sh)
+# the old server deploy's settings (the site is on GitHub Pages now) — never commit a leftover copy
 .deploy.env
 
 # graphify knowledge-graph output (generated locally)

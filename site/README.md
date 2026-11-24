@@ -51,12 +51,14 @@ grep -oE '\(def(n|macro)? +[a-z][a-z0-9!?*<>=/-]*' src/prelude.rs    # prelude
 
 ## Deploying
 
-```bash
-scripts/deploy-site.sh --dry-run   # what would change
-scripts/deploy-site.sh             # deploy
-```
+There is no deploy step: **merging to `main` publishes the site.** `.github/workflows/pages.yml`
+runs on every push to `main` that touches `site/`, copies the folder (leaving this README out) and
+hands it to GitHub Pages, which serves it at eelisp.app. Watch it in the repo's Actions tab, or run
+it by hand there (*Pages → Run workflow*). Only `main` goes live, so a branch open for review never
+reaches the site by accident.
 
-It mirrors `site/` onto the server (`rsync --delete`), leaving this README off it. Where it goes — the
-server, the user, the key, the folder — is in `.deploy.env` at the repo root, which git ignores: copy
-`.deploy.env.example` and fill it in. It deploys **`main` only**, clean and the same as GitHub's, because
-the deploy copies the working tree: a branch checked out for review must never go live by accident.
+The domain is set in the repo's **Settings → Pages** (custom domain `eelisp.app`, *Enforce HTTPS*
+on). The DNS at the registrar points at GitHub: `A` records for `185.199.108.153`, `.109.153`,
+`.110.153` and `.111.153`, `AAAA` records for `2606:50c0:8000::153` through `8003::153`, and `www` as a
+`CNAME` to `santacroce-tech.github.io`. A workflow-published site ignores a `CNAME` file, so there
+isn't one.
